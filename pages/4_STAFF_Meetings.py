@@ -355,6 +355,95 @@ supabase_ops = create_client(SUPABASE_URL_OPERATIONAL, SUPABASE_SERVICE_KEY_OPER
 
 GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
 
+# ── Supabase Storage attachment helpers ────────────────────────────────────────
+# Attachments previously only saved file *metadata* (name/size/type) — nothing
+# was ever uploaded anywhere, so "Add All Files" looked like it worked but
+# there was never a file to open afterwards. These helpers actually upload the
+# bytes to Supabase Storage (in the MEETINGS project, alongside the meeting
+# records) and hand back a storage path to save with the metadata, plus a
+# signed URL for opening/downloading.
+MEETING_ATTACHMENTS_BUCKET = "meeting-attachments"
+PD_ATTACHMENTS_BUCKET = "pd-attachments"
+
+
+def _ensure_bucket(bucket_name: str):
+    """Create the storage bucket if it doesn't exist yet. Safe to call any
+    time — quietly no-ops if it's already there (or gets created between the
+    check and the call)."""
+    try:
+        supabase.storage.create_bucket(bucket_name, options={"public": False})
+    except Exception:
+        pass
+
+
+def _upload_attachment(bucket_name: str, folder: str, file) -> dict:
+    """Upload one Streamlit UploadedFile to Supabase Storage.
+    Returns {"path": ...} on success or {"error": ...} on failure."""
+    safe_name = re.sub(r'[^A-Za-z0-9._-]', '_', file.name)
+    path = f"{folder}/{int(time.time() * 1000)}_{safe_name}"
+    file_bytes = file.getvalue()
+    content_type = file.type or "application/octet-stream"
+    try:
+        supabase.storage.from_(bucket_name).upload(
+            path, file_bytes, {"content-type": content_type}
+        )
+        return {"path": path}
+    except Exception:
+        # Most likely cause of a first-ever upload failing: the bucket
+        # doesn't exist yet. Create it and retry once before giving up.
+        try:
+            _ensure_bucket(bucket_name)
+            supabase.storage.from_(bucket_name).upload(
+                path, file_bytes, {"content-type": content_type}
+            )
+            return {"path": path}
+        except Exception as e2:
+            return {"error": str(e2)}
+
+
+def _attachment_signed_url(bucket_name: str, path: str, expires_in: int = 3600):
+    """Return a temporary signed URL to open/download a stored attachment, or
+    None if it can't be generated (e.g. the file is missing from storage)."""
+    if not path:
+        return None
+    try:
+        result = supabase.storage.from_(bucket_name).create_signed_url(path, expires_in)
+        # Different supabase-py versions use different key casing.
+        return result.get('signedURL') or result.get('signedUrl') or result.get('signed_url')
+    except Exception:
+        return None
+
+
+def _delete_attachment(bucket_name: str, path: str):
+    """Best-effort delete of the stored file when an attachment is removed
+    from a meeting. Never raises — a storage hiccup shouldn't block removing
+    the metadata row."""
+    if not path:
+        return
+    try:
+        supabase.storage.from_(bucket_name).remove([path])
+    except Exception:
+        pass
+
+
+def _render_attachment_link(att: dict, bucket_name: str):
+    """Render one attachment's name/description plus an Open link when the
+    file was actually uploaded to storage. Attachments saved before this fix
+    only ever had metadata (no 'path'), so those are flagged as needing a
+    re-upload rather than shown as a dead link."""
+    name = att.get('name') or att.get('filename') or 'Unnamed file'
+    desc = att.get('description') or ''
+    label = f"📎 **{name}**" + (f" — {desc}" if desc else "")
+    path = att.get('path')
+    if path:
+        url = _attachment_signed_url(bucket_name, path)
+        if url:
+            st.markdown(f"{label}  \n[🔗 Open / Download]({url})")
+        else:
+            st.markdown(f"{label}  \n:orange[File couldn't be opened right now — it may have been removed from storage.]")
+    else:
+        st.markdown(f"{label}  \n:gray[Added before file upload was enabled — no file stored. Delete and re-upload to attach it.]")
+
 # ── Term normalisation ─────────────────────────────────────────────────────────
 # Staff Meetings stores term as "T2"; Staff Bulletin stores it as "Term 2".
 # These helpers keep the two tools in sync.
@@ -458,295 +547,6 @@ STANDING_AGENDA_ITEMS = [
     "Finance"
 ]
 
-# ── Staff roster ──────────────────────────────────────────────────────────────
-# EDIT THIS LIST to match the current CLC-LBU staff list — add/remove/rename
-# names here and every clickable attendance/agenda picker below updates
-# automatically. Anyone not on this list can still be added via the "Other"
-# field next to each picker.
-STAFF_MEMBERS = [
-    "Candice Cooper",
-    "Susan Furga",
-    "Annette Balestrin",
-    "Ben Selga",
-    "Ben Sutton",
-    "Brenton",
-    "Caitie",
-    "Cheryl",
-    "Jacqui",
-    "Naomi",
-    "Tom",
-    "Vinnie",
-]
-
-
-def _split_names(text: str, roster) -> tuple[list, str]:
-    """Split a stored comma/newline-separated names string into (names found
-    in roster, remaining text). Used to seed the click-to-select pickers from
-    older free-text Attendees/Apologies data without losing anything."""
-    if not text:
-        return [], ""
-    raw = [n.strip() for n in re.split(r'[,\n]', text) if n.strip()]
-    matched = [n for n in roster if n in raw]
-    other = [n for n in raw if n not in roster]
-    return matched, ", ".join(other)
-
-
-def _attendance_picker(present_label: str, absent_label: str, default_present: str,
-                        default_absent: str, key_prefix: str, roster=STAFF_MEMBERS) -> tuple[str, str]:
-    """Click-to-select staff attendance for a Present/Absent pair (used for
-    both the meeting attendance and the PD attendance). Returns
-    (present_text, absent_text) as the same comma-separated string format
-    the rest of the tool already stores, so nothing downstream needs to
-    change."""
-    present_matched, present_other = _split_names(default_present, roster)
-    absent_matched, absent_other = _split_names(default_absent, roster)
-
-    col_p, col_a = st.columns(2)
-    with col_p:
-        st.caption(f"Click to select — {present_label}")
-        present_selected = st.multiselect(
-            present_label, options=roster, default=present_matched,
-            key=f"{key_prefix}_present_ms", label_visibility="collapsed"
-        )
-        other_present = st.text_input(
-            f"Other {present_label.lower()} (not on the list)", value=present_other,
-            key=f"{key_prefix}_present_other", placeholder="Type any other name(s), comma separated"
-        )
-    with col_a:
-        st.caption(f"Click to select — {absent_label}")
-        absent_selected = st.multiselect(
-            absent_label, options=roster, default=absent_matched,
-            key=f"{key_prefix}_absent_ms", label_visibility="collapsed"
-        )
-        other_absent = st.text_input(
-            f"Other {absent_label.lower()} (not on the list)", value=absent_other,
-            key=f"{key_prefix}_absent_other", placeholder="Type any other name(s), comma separated"
-        )
-
-    overlap = set(present_selected) & set(absent_selected)
-    if overlap:
-        st.warning(f"⚠️ Listed as both {present_label.lower()} and {absent_label.lower()}: "
-                   f"{', '.join(sorted(overlap))} — remove from one list.")
-
-    present_final = ", ".join(present_selected + ([other_present.strip()] if other_present.strip() else []))
-    absent_final = ", ".join(absent_selected + ([other_absent.strip()] if other_absent.strip() else []))
-    return present_final, absent_final
-
-
-def _normalise_agenda_entry(entry) -> dict:
-    """Return {"item": ..., "staff": ...} regardless of whether `entry` is
-    already a dict (new format) or an older plain string — including the
-    "📌 text — submitted by Name" strings the Load Staff Submissions button
-    used to produce, so nothing already saved is lost or garbled."""
-    if isinstance(entry, dict):
-        return {"item": entry.get("item", ""), "staff": entry.get("staff", "") or "Unknown"}
-    text = str(entry)
-    m = re.match(r'^(?:📌\s*)?(.*?)\s*—\s*submitted by\s*(.+)$', text)
-    if m:
-        return {"item": m.group(1).strip(), "staff": m.group(2).strip()}
-    return {"item": text.strip(), "staff": "Unknown"}
-
-
-# ── PD attachment storage ───────────────────────────────────────────────────
-# Uploaded PD files are stored in this Supabase Storage bucket so they can
-# actually be opened later (from Staff View or the edit form) — a bucket
-# with this exact name needs to exist in the MEETINGS Supabase project
-# (Storage → New bucket → Public) for uploads to succeed. If it doesn't
-# exist yet, uploads fall back to metadata-only (same as before) and warn.
-PD_ATTACHMENTS_BUCKET = "pd-attachments"
-
-
-def _upload_pd_attachment(file, scope: str):
-    """Upload one PD attachment's bytes to Supabase Storage. Returns
-    (public_url, storage_path), or (None, None) if the upload failed (e.g.
-    the bucket doesn't exist yet) — callers fall back to storing just the
-    file's metadata in that case. On failure, stashes the real error in
-    session_state (shown at the top of the page) instead of failing silently,
-    since a generic bucket-missing warning wasn't enough to diagnose this."""
-    try:
-        safe_name = re.sub(r'[^A-Za-z0-9._-]+', '_', file.name)
-        path = f"{scope}/{int(time.time())}_{safe_name}"
-        supabase.storage.from_(PD_ATTACHMENTS_BUCKET).upload(
-            path, file.getvalue(), {"content-type": file.type or "application/octet-stream"}
-        )
-        url_result = supabase.storage.from_(PD_ATTACHMENTS_BUCKET).get_public_url(path)
-        # supabase-py has returned either a plain string or a dict across
-        # versions — handle both so this doesn't silently break on upgrade.
-        if isinstance(url_result, str):
-            url = url_result
-        else:
-            url = url_result.get('publicURL') or url_result.get('publicUrl')
-        return url, path
-    except Exception as e:
-        st.session_state['_last_persist_error'] = (
-            f"Uploading '{file.name}' to Storage bucket '{PD_ATTACHMENTS_BUCKET}' failed: {e}"
-        )
-        return None, None
-
-
-def _render_staff_view(meeting: dict):
-    """Read-only, front-facing summary of a saved meeting for general staff —
-    no edit boxes, no Save/Delete, no AI/transcript tooling. Shows: meeting
-    details, attendance, Acknowledgement of Country (openable either way),
-    the week's icebreaker, standing agenda items with their notes, the
-    additional agenda items, and the PD component with openable attachments."""
-    st.markdown("---")
-    st.subheader(
-        f"📅 {meeting.get('meeting_date', '')} · {normalise_term_long(meeting.get('term', ''))} · "
-        f"Week {meeting.get('week_number', '')}"
-    )
-    if meeting.get('minute_taker'):
-        st.caption(f"Minute Taker: {meeting['minute_taker']}")
-
-    st.markdown("---")
-    st.markdown("### 👥 Attendance")
-    col_p, col_a = st.columns(2)
-    with col_p:
-        st.markdown("**Present**")
-        st.write(meeting.get('attendees', '') or "—")
-    with col_a:
-        st.markdown("**Apologies**")
-        st.write(meeting.get('apologies', '') or "—")
-
-    st.markdown("---")
-    st.markdown("### 🪃 Acknowledgement of Country")
-    _video_url = os.environ.get("ACKNOWLEDGEMENT_VIDEO_URL", "") or st.secrets.get("ACKNOWLEDGEMENT_VIDEO_URL", "")
-    col_v, col_t = st.columns(2)
-    with col_v:
-        with st.expander("📹 Watch the video"):
-            if _video_url:
-                st.video(_video_url)
-            else:
-                st.info("Video not configured for this meeting.")
-    with col_t:
-        with st.expander("📄 Read the text version"):
-            st.markdown("""
-            *"Before we begin, I acknowledge the Kaurna people as the Traditional Custodians of this land, and pay my respects to their Elders past, present, and emerging.*
-
-            *As a Learning and Behaviour Unit, we recognise that many of our students carry trauma — and we acknowledge the particular trauma that colonisation has caused and continues to cause for Aboriginal and Torres Strait Islander peoples.*
-
-            *We are committed to trauma-informed, culturally responsive practice that honours the strengths, resilience, and cultures of all our students and their families.*
-
-            *I extend my respect to any Aboriginal and Torres Strait Islander people present today."*
-            """)
-    if meeting.get('acknowledgement_done'):
-        st.success(f"✅ Completed — led by {meeting.get('acknowledgement_by', '') or 'not recorded'}")
-    else:
-        st.info("Not marked as completed for this meeting.")
-
-    st.markdown("---")
-    st.markdown("### 🎯 Icebreaker / BSEM Activity")
-    try:
-        week_idx = (int(meeting.get('week_number') or 1) - 1) % len(BSEM_ICEBREAKERS)
-        icebreaker = BSEM_ICEBREAKERS[week_idx]
-        st.markdown(f"**{icebreaker['name']}** _({icebreaker['time']})_")
-        st.write(icebreaker['instructions'])
-    except Exception:
-        pass
-    if (meeting.get('icebreaker') or '').strip():
-        st.caption(f"Notes: {meeting['icebreaker']}")
-
-    st.markdown("---")
-    st.markdown("### 📑 Agenda")
-    try:
-        agenda_data = json.loads(meeting['agenda_items']) if isinstance(meeting.get('agenda_items'), str) else (meeting.get('agenda_items') or {})
-    except Exception:
-        agenda_data = {}
-
-    st.markdown("**Standing Items**")
-    for item in STANDING_AGENDA_ITEMS:
-        notes = (agenda_data.get(item) or '').strip()
-        with st.expander(f"📌 {item}"):
-            st.write(notes if notes else "Nothing recorded for this item.")
-
-    additional = agenda_data.get('additional_agenda', [])
-    if additional:
-        st.write("")
-        st.markdown("**Additional Agenda Items**")
-        for raw_entry in additional:
-            entry = _normalise_agenda_entry(raw_entry)
-            st.markdown(
-                f'<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;'
-                f'padding:10px 14px;font-family:Segoe UI,Arial,sans-serif;margin-bottom:6px;">'
-                f'<div style="font-size:14px;color:#14532d;">📌 {entry["item"]}</div>'
-                f'<div style="font-size:12px;color:#4b7c63;margin-top:3px;">🧑 Submitted by: {entry["staff"]}</div>'
-                f'</div>',
-                unsafe_allow_html=True
-            )
-
-    st.markdown("---")
-    st.markdown("### 🎓 Professional Development")
-    st.markdown(f"**{meeting.get('pd_title', '') or 'No PD title recorded'}**")
-    col_pa, col_pb = st.columns(2)
-    with col_pa:
-        st.markdown("**PD Attendees**")
-        st.write(meeting.get('pd_attendees', '') or "—")
-    with col_pb:
-        st.markdown("**PD Absent / Left Early**")
-        st.write(meeting.get('pd_absent', '') or "—")
-
-    try:
-        pd_attachments = json.loads(meeting['pd_attachments']) if isinstance(meeting.get('pd_attachments'), str) else (meeting.get('pd_attachments') or [])
-    except Exception as e:
-        pd_attachments = []
-        st.error(f"⚠️ Could not read this meeting's PD attachments data ({e}).")
-
-    if pd_attachments:
-        st.write("")
-        st.markdown("**PD Attachments / Resources**")
-        for att in pd_attachments:
-            name = att.get('name') or att.get('filename') or 'Attachment'
-            desc = att.get('description', '')
-            url = att.get('url')
-            if url:
-                st.markdown(f"📎 [{name}]({url})" + (f" — {desc}" if desc else ""))
-            else:
-                st.caption(f"📎 {name}" + (f" — {desc}" if desc else "") +
-                          " _(uploaded before file storage was set up — ask for a copy directly)_")
-    else:
-        st.caption("No PD attachments recorded.")
-
-    with st.expander("🔧 Debug: raw PD attachments data (temporary — tell Claude what this shows)"):
-        st.write("Raw value from the database (`meeting['pd_attachments']`):")
-        st.code(repr(meeting.get('pd_attachments')))
-        st.write("Parsed as a list:")
-        st.json(pd_attachments)
-
-
-def _persist_field_now(field_name: str, value) -> bool:
-    """Immediately write ONE field to the current meeting record in Supabase.
-    Needed right before any st.rerun() call: rerun() halts the script
-    immediately, so it never reaches the autosave code further down the
-    page — anything appended/removed from a plain local list (pd_attachments,
-    meeting_attachments, actions) just before a rerun would otherwise only
-    ever have existed in that one script run's memory and never actually
-    reach the database. Returns True if saved. On failure, stashes a message
-    in session_state (shown at the top of the page on the next render) rather
-    than calling st.error() directly here — a message shown in this same run,
-    right before the caller's st.rerun(), can flash by before it's visible."""
-    if not st.session_state.current_staff_meeting_id:
-        st.session_state['_last_persist_error'] = (
-            f"Tried to save '{field_name}' but no meeting is selected/saved yet."
-        )
-        return False
-    try:
-        result = supabase.table('staff_meetings').update({field_name: value}).eq(
-            'id', st.session_state.current_staff_meeting_id
-        ).execute()
-        if not result.data:
-            st.session_state['_last_persist_error'] = (
-                f"Saving '{field_name}' ran but Supabase returned no updated row for meeting id "
-                f"{st.session_state.current_staff_meeting_id} — the row may not exist, or Row Level "
-                f"Security may be silently blocking the write."
-            )
-            return False
-        st.session_state['_last_persist_success'] = f"'{field_name}' saved just now."
-        return True
-    except Exception as e:
-        st.session_state['_last_persist_error'] = f"Couldn't save '{field_name}' ({e})."
-        return False
-
-
 # ── Session state ──────────────────────────────────────────────────────────────
 if 'current_staff_meeting_id' not in st.session_state:
     st.session_state.current_staff_meeting_id = None
@@ -765,28 +565,16 @@ st.markdown("---")
 
 st.subheader("📅 Select Meeting")
 
-# Fetch existing meetings — cache the last successful fetch, and fall back to
-# it on a transient failure instead of emptying the list. Discarding the list
-# on a one-off network hiccup would shrink the dropdown down to just "➕ New
-# Meeting", which no longer contains whatever meeting you had selected — so
-# the dropdown silently resets to "New Meeting" and wipes
-# current_staff_meeting_id right as something (like a PD attachment save)
-# might be relying on it still being set.
+# Fetch existing meetings
 try:
-    result = supabase.table('staff_meetings').select('*').order('meeting_date', desc=True).limit(100).execute()
+    result = supabase.table('staff_meetings').select('*').order('meeting_date', desc=True).limit(20).execute()
     existing_meetings = result.data if result.data else []
-    st.session_state['_cached_existing_meetings'] = existing_meetings
 except Exception as e:
-    existing_meetings = st.session_state.get('_cached_existing_meetings', [])
-    if existing_meetings:
-        st.warning(f"⚠️ Could not refresh the meeting list just now ({e}) — showing the last known "
-                   f"list so your current selection isn't lost. Try again shortly.")
-    else:
-        st.warning(f"Could not load meetings: {e}")
+    st.warning(f"Could not load meetings: {e}")
+    existing_meetings = []
 
 meeting_options = ["➕ New Meeting"] + [
-    f"{m['meeting_date']} - T{m.get('term', '?')} W{m.get('week_number', '?')} - "
-    f"{m.get('minute_taker', 'Unknown')} (id {m['id']})"
+    f"{m['meeting_date']} - T{m.get('term', '?')} W{m.get('week_number', '?')} - {m.get('minute_taker', 'Unknown')}"
     for m in existing_meetings
 ]
 
@@ -824,57 +612,6 @@ else:
         with col_del2:
             if delete_confirmation != "DELETE":
                 st.caption("Type DELETE above to enable deletion")
-
-st.markdown("---")
-
-# ── Form scope ────────────────────────────────────────────────────────────────
-# Every widget below that is seeded from `selected_record` (dates, minute
-# taker, attendance, agenda notes, minutes sections, PD fields, etc.) has its
-# key suffixed with this scope. Without it, Streamlit keeps a widget's
-# session_state value from whatever was previously typed and ignores the new
-# `value=` argument on rerun — so switching the meeting picker above to a
-# different saved meeting would keep showing the PREVIOUS meeting's Minutes,
-# Attendance, etc. instead of loading the one you just selected. Scoping the
-# keys by meeting id means picking a different meeting gets a fresh set of
-# widgets seeded from that meeting's own saved data.
-_scope = str(st.session_state.current_staff_meeting_id or "new")
-
-# Show the result of the last immediate-save (attachments/actions) from the
-# PREVIOUS run — stashed in session_state because the st.rerun() called right
-# after that save halts the script instantly, so a message shown in that same
-# run can flash by before it's ever visible. Showing it here, at the very top
-# of the next render, guarantees it's actually seen.
-_last_err = st.session_state.pop('_last_persist_error', None)
-if _last_err:
-    st.error(f"⚠️ {_last_err}")
-_last_ok = st.session_state.pop('_last_persist_success', None)
-if _last_ok:
-    st.success(f"💾 {_last_ok}")
-
-# Guards the silent autosave further down: if any saved JSON field (agenda
-# items, meeting attachments, PD attachments) fails to parse, we do NOT want
-# autosave writing an empty/default value back over whatever is actually in
-# the database — that would silently and permanently erase it. Any failed
-# load below flips this to False, which skips autosave for this run.
-_autosave_safe = True
-
-# ── Staff View / Edit toggle ────────────────────────────────────────────────
-# A front-facing, read-only mode for general staff — shows what's relevant
-# to attend/prepare for the meeting without the manager's edit boxes,
-# AI/transcript tooling, or Save/Delete controls.
-if selected_record:
-    view_mode = st.radio(
-        "Mode", options=["✏️ Edit (Manager)", "👁️ Staff View"],
-        horizontal=True, key=f"page_mode_{_scope}",
-        label_visibility="collapsed"
-    )
-else:
-    view_mode = "✏️ Edit (Manager)"
-    st.caption("💡 Staff View becomes available once a saved meeting is selected above.")
-
-if selected_record and view_mode == "👁️ Staff View":
-    _render_staff_view(selected_record)
-    st.stop()
 
 st.markdown("---")
 
@@ -927,7 +664,7 @@ with tab2:
                         attachments = json.loads(meeting['meeting_attachments']) if isinstance(meeting['meeting_attachments'], str) else meeting['meeting_attachments']
                         if attachments:
                             for att in attachments:
-                                st.write(f"📎 {att.get('name', '')} - {att.get('description', '')}")
+                                _render_attachment_link(att, MEETING_ATTACHMENTS_BUCKET)
                     except:
                         pass
                 
@@ -950,7 +687,7 @@ with tab2:
                             if attachments:
                                 st.write("**PD Attachments:**")
                                 for att in attachments:
-                                    st.write(f"📎 {att.get('name', '')} - {att.get('description', '')}")
+                                    _render_attachment_link(att, PD_ATTACHMENTS_BUCKET)
                         except:
                             pass
 
@@ -1021,16 +758,16 @@ with tab1:
     _term_idx  = _term_opts.index(normalise_term_short(default_term)) if normalise_term_short(default_term) in _term_opts else 1
 
     with col1:
-        meeting_date = st.date_input("Meeting Date", value=default_date, key=f"staff_date_{_scope}")
+        meeting_date = st.date_input("Meeting Date", value=default_date, key="staff_date")
 
     with col2:
-        term = st.selectbox("Term", options=_term_opts, index=_term_idx, key=f"staff_term_{_scope}")
+        term = st.selectbox("Term", options=_term_opts, index=_term_idx, key="staff_term")
     
     with col3:
-        week_number = st.number_input("Week Number", min_value=1, max_value=11, value=default_week, key=f"staff_week_{_scope}")
+        week_number = st.number_input("Week Number", min_value=1, max_value=11, value=default_week, key="staff_week")
     
     default_minute_taker = selected_record.get('minute_taker', '') if selected_record else ''
-    minute_taker = st.text_input("Minute Taker", value=default_minute_taker, key=f"minute_taker_{_scope}")
+    minute_taker = st.text_input("Minute Taker", value=default_minute_taker, key="minute_taker")
     
     st.markdown("---")
     # ══════════════════════════════════════════════════════════════════════════════
@@ -1161,10 +898,12 @@ with tab1:
     st.subheader("👥 Attendance")
     
     default_attendees = selected_record.get('attendees', '') if selected_record else ''
+    attendees = st.text_area("Attendees Present", value=default_attendees, height=80, key="attendees", 
+                             placeholder="List staff members present...")
+    
     default_apologies = selected_record.get('apologies', '') if selected_record else ''
-    attendees, apologies = _attendance_picker(
-        "Present", "Apologies", default_attendees, default_apologies, key_prefix=f"meeting_attendance_{_scope}"
-    )
+    apologies = st.text_area("Apologies", value=default_apologies, height=60, key="apologies",
+                             placeholder="List staff members with apologies...")
     
     st.markdown("---")
     
@@ -1197,8 +936,8 @@ with tab1:
         """)
         st.caption("Chair can read this aloud at the start of the meeting")
     
-    acknowledgement_done = st.checkbox("✅ Acknowledgement completed", value=selected_record.get('acknowledgement_done', False) if selected_record else False, key=f"acknowledgement_done_{_scope}")
-    acknowledgement_by = st.text_input("Led by", value=selected_record.get('acknowledgement_by', '') if selected_record else '', placeholder="Who led the Acknowledgement?", key=f"acknowledgement_by_{_scope}")
+    acknowledgement_done = st.checkbox("✅ Acknowledgement completed", value=selected_record.get('acknowledgement_done', False) if selected_record else False)
+    acknowledgement_by = st.text_input("Led by", value=selected_record.get('acknowledgement_by', '') if selected_record else '', placeholder="Who led the Acknowledgement?")
     
     st.markdown("---")
     
@@ -1220,7 +959,7 @@ with tab1:
                                     value=selected_record.get('icebreaker', '') if selected_record else '',
                                     height=80, 
                                     placeholder="Any notes about how the icebreaker went...",
-                                    key=f"icebreaker_{_scope}")
+                                    key="icebreaker")
     
     st.markdown("---")
     
@@ -1237,21 +976,26 @@ with tab1:
     if selected_record and selected_record.get('agenda_items'):
         try:
             agenda_data = json.loads(selected_record['agenda_items']) if isinstance(selected_record['agenda_items'], str) else selected_record['agenda_items']
-        except Exception as e:
+        except:
             agenda_data = {}
-            _autosave_safe = False
-            st.error(f"⚠️ Could not read this meeting's saved agenda data ({e}) — autosave is paused for "
-                     f"this session so it doesn't overwrite it. Please check the data before saving manually.")
     else:
         agenda_data = {}
 
+    # Pre-populate the additional items text area from saved data
+    # (only if session state hasn't been set yet for this meeting)
+    _saved_additional = agenda_data.get('additional_agenda', [])
+    _ss_key = f"agenda_loaded_{st.session_state.current_staff_meeting_id}"
+    if _saved_additional and not st.session_state.get(_ss_key):
+        st.session_state['simple_agenda_items'] = "\n".join(_saved_additional)
+        st.session_state[_ss_key] = True
+    
     for item in STANDING_AGENDA_ITEMS:
         with st.expander(f"📌 {item}"):
             agenda_data[item] = st.text_area(
                 f"Notes for {item}", 
                 value=agenda_data.get(item, ''),
                 height=100,
-                key=f"agenda_{item.replace(' ', '_')}_{_scope}",
+                key=f"agenda_{item.replace(' ', '_')}",
                 placeholder=f"Add information/updates for {item}..."
             )
     
@@ -1280,12 +1024,10 @@ with tab1:
                                              .select('*').eq('status', 'pending').execute()
                 if pending_result.data:
                     loaded_count = 0
-                    existing_pairs = {(e["item"], e["staff"]) for e in
-                                       (_normalise_agenda_entry(x) for x in additional_items)}
                     for item in pending_result.data:
-                        new_entry = {"item": item['item_text'], "staff": item['submitted_by']}
-                        if (new_entry["item"], new_entry["staff"]) not in existing_pairs:
-                            additional_items.append(new_entry)
+                        label = f"📌 {item['item_text']}  — submitted by {item['submitted_by']}"
+                        if label not in additional_items:
+                            additional_items.append(label)
                             loaded_count += 1
                         supabase_ops.table('staff_agenda_items') \
                                     .update({'status': 'added'}).eq('id', item['id']).execute()
@@ -1320,17 +1062,13 @@ with tab1:
             unsafe_allow_html=True
         )
         items_to_remove = []
-        for i, raw_entry in enumerate(additional_items):
-            entry = _normalise_agenda_entry(raw_entry)
+        for i, item_text in enumerate(additional_items):
             col_item, col_del = st.columns([11, 1])
             with col_item:
                 st.markdown(
                     f'<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;'
-                    f'padding:10px 14px;font-family:Segoe UI,Arial,sans-serif;margin-bottom:4px;">'
-                    f'<div style="font-size:14px;color:#14532d;">📌 {entry["item"]}</div>'
-                    f'<div style="font-size:12px;color:#4b7c63;margin-top:3px;">'
-                    f'🧑 Submitted by: {entry["staff"]}</div>'
-                    f'</div>',
+                    f'padding:10px 14px;font-family:Segoe UI,Arial,sans-serif;font-size:14px;'
+                    f'color:#14532d;margin-bottom:4px;">{item_text}</div>',
                     unsafe_allow_html=True
                 )
             with col_del:
@@ -1351,35 +1089,18 @@ with tab1:
         )
 
     # ── Manual add ────────────────────────────────────────────────────────────
-    # If the previous run flagged a clear, wipe the value BEFORE the widget
-    # below is instantiated (Streamlit forbids writing to a widget's session_state
-    # key after that widget has been created in the same run).
-    if st.session_state.get('_clear_new_agenda_item', False):
-        st.session_state['new_agenda_item'] = ""
-        st.session_state['_clear_new_agenda_item'] = False
-
     st.write("")
-    col_new, col_staff, col_add = st.columns([3, 2, 1])
+    col_new, col_add = st.columns([4, 1])
     with col_new:
         new_item = st.text_input("Add an agenda item", key="new_agenda_item",
                                  placeholder="Type item and click Add →",
                                  label_visibility="collapsed")
-    with col_staff:
-        _staff_options = STAFF_MEMBERS + ["Other / not listed"]
-        new_item_staff = st.selectbox("Raised by", options=_staff_options,
-                                      key="new_agenda_item_staff", label_visibility="collapsed")
-        if new_item_staff == "Other / not listed":
-            new_item_staff = st.text_input("Name", key="new_agenda_item_staff_other",
-                                           placeholder="Type name", label_visibility="collapsed")
     with col_add:
         if st.button("➕ Add", key="add_agenda_item", use_container_width=True):
             if new_item.strip():
-                additional_items.append({
-                    "item": new_item.strip(),
-                    "staff": (new_item_staff or "").strip() or "Unknown"
-                })
+                additional_items.append(new_item.strip())
                 st.session_state[ss_key] = additional_items
-                st.session_state['_clear_new_agenda_item'] = True
+                st.session_state['new_agenda_item'] = ""
                 st.rerun()
 
     # Keep agenda_data in sync with session state list
@@ -1400,12 +1121,12 @@ with tab1:
         
         minutes_method = st.radio("Minutes Entry Method",
                                   options=["✍️ Manual Entry", "🤖 AI from Transcript"],
-                                  horizontal=True, key=f"minutes_entry_method_{_scope}")
+                                  horizontal=True, key="minutes_entry_method")
         
         if minutes_method == "✍️ Manual Entry":
             st.caption("Enter notes for each standing item. Leave a section blank if it wasn't discussed.")
             seed = _parse_minutes_sections(minutes)
-            section_values = _render_minutes_section_fields(seed, key_prefix=f"manual_section_{_scope}")
+            section_values = _render_minutes_section_fields(seed, key_prefix="manual_section")
             minutes = _build_minutes_from_sections(section_values)
         
         else:  # AI from Transcript
@@ -1629,12 +1350,12 @@ MEETING SYNTHESIS:
                             # The synthesis already merges any multi-part transcript (Step 1
                             # appends rather than overwrites), so a single classification pass
                             # over the whole thing can just replace the draft sections outright.
-                            st.session_state[f"ai_section_values_{_scope}"] = new_sections
+                            st.session_state["ai_section_values"] = new_sections
                             # Sync the edit widgets too — once a widget key exists in
                             # session_state, its `value=` argument is ignored on rerun,
                             # so this is what actually updates what's shown for editing.
                             for key, _ in MEETING_SECTIONS:
-                                st.session_state[f"ai_section_manual_{_scope}_{key}"] = new_sections[key]
+                                st.session_state[f"ai_section_manual_{key}"] = new_sections[key]
 
                             st.success("✅ Minutes generated — review the sections below before saving.")
 
@@ -1647,19 +1368,19 @@ MEETING SYNTHESIS:
                 st.caption("Complete Step 1 above to produce a synthesis, then generate structured minutes from it.")
 
             # ── Review and edit the generated sections before saving ──────────
-            if st.session_state.get(f"ai_section_values_{_scope}"):
+            if st.session_state.get("ai_section_values"):
                 st.markdown("---")
                 st.markdown("#### ✏️ Review and edit before saving")
                 col_edit, col_clear = st.columns([5, 1])
                 with col_clear:
                     st.markdown("<br>", unsafe_allow_html=True)
-                    if st.button("🗑️ Clear draft", key=f"clear_ai_sections_{_scope}"):
-                        st.session_state[f"ai_section_values_{_scope}"] = None
+                    if st.button("🗑️ Clear draft", key="clear_ai_sections"):
+                        st.session_state["ai_section_values"] = None
                         for key, _ in MEETING_SECTIONS:
-                            st.session_state.pop(f"ai_section_manual_{_scope}_{key}", None)
+                            st.session_state.pop(f"ai_section_manual_{key}", None)
                         st.rerun()
-                seed = st.session_state.get(f"ai_section_values_{_scope}", {})
-                section_values = _render_minutes_section_fields(seed, key_prefix=f"ai_section_manual_{_scope}")
+                seed = st.session_state.get("ai_section_values", {})
+                section_values = _render_minutes_section_fields(seed, key_prefix="ai_section_manual")
                 minutes = _build_minutes_from_sections(section_values)
             else:
                 st.info("Paste or upload a transcript, then run Step 1 and Step 2 above to fill in "
@@ -1759,7 +1480,6 @@ JSON array of actions:"""
                                         "done": False
                                     })
                                 st.success(f"Added {len(extracted_actions)} actions!")
-                                _persist_field_now("actions", json.dumps(actions))
                                 st.rerun()
                         else:
                             st.info("No action items found in minutes")
@@ -1779,7 +1499,6 @@ if actions:
         with col_b:
             if st.button("🗑️", key=f"delete_action_{idx}"):
                 actions.pop(idx)
-                _persist_field_now("actions", json.dumps(actions))
                 st.rerun()
 
 st.write("**Add New Action:**")
@@ -1805,7 +1524,6 @@ with col_a4:
                 "due_date": str(new_due) if new_due else "",
                 "done": False
             })
-            _persist_field_now("actions", json.dumps(actions))
             st.rerun()
 
 st.markdown("---")
@@ -1817,69 +1535,81 @@ st.markdown("---")
 st.subheader("📎 Meeting Attachments")
 
 with st.expander("📁 Attach Files to Meeting", expanded=False):
-    
-    # Load existing meeting attachments
-    if selected_record and selected_record.get('meeting_attachments'):
-        try:
-            meeting_attachments = json.loads(selected_record['meeting_attachments']) if isinstance(selected_record['meeting_attachments'], str) else selected_record['meeting_attachments']
-        except Exception as e:
-            meeting_attachments = []
-            _autosave_safe = False
-            st.error(f"⚠️ Could not read this meeting's saved attachments ({e}) — autosave is paused for "
-                     f"this session so it doesn't overwrite them. Please check the data before saving manually.")
-    else:
-        meeting_attachments = []
-    
+
+    # Kept in session_state, not just re-read from the saved record, so files
+    # added here survive the rerun this section triggers — previously they
+    # were silently lost on rerun before "Save Meeting" ever saw them.
+    _mtg_key = st.session_state.current_staff_meeting_id or "new"
+    _meeting_att_ss_key = f"meeting_attachments_{_mtg_key}"
+    if _meeting_att_ss_key not in st.session_state:
+        if selected_record and selected_record.get('meeting_attachments'):
+            try:
+                _seed = json.loads(selected_record['meeting_attachments']) if isinstance(selected_record['meeting_attachments'], str) else selected_record['meeting_attachments']
+            except Exception:
+                _seed = []
+        else:
+            _seed = []
+        st.session_state[_meeting_att_ss_key] = _seed
+    meeting_attachments = st.session_state[_meeting_att_ss_key]
+
     # Display existing attachments
     if meeting_attachments:
         st.write("**Attached Files:**")
         for idx, attachment in enumerate(meeting_attachments):
             col_m1, col_m2 = st.columns([4, 1])
             with col_m1:
-                st.write(f"📎 {attachment.get('name', 'Unnamed file')} ({attachment.get('filename', '')}) - {attachment.get('description', 'No description')}")
+                _render_attachment_link(attachment, MEETING_ATTACHMENTS_BUCKET)
             with col_m2:
                 if st.button("🗑️", key=f"delete_meeting_attachment_{idx}"):
+                    _delete_attachment(MEETING_ATTACHMENTS_BUCKET, attachment.get('path'))
                     meeting_attachments.pop(idx)
-                    _persist_field_now("meeting_attachments", json.dumps(meeting_attachments))
+                    st.session_state[_meeting_att_ss_key] = meeting_attachments
                     st.rerun()
-    
+
     # Add multiple attachments at once
     st.write("**Add Files:**")
-    meeting_uploaded_files = st.file_uploader("Upload files (select multiple)", 
+    meeting_uploaded_files = st.file_uploader("Upload files (select multiple)",
                                              type=['pdf', 'docx', 'pptx', 'txt', 'jpg', 'png', 'xlsx', 'csv', 'mp4', 'mov'],
                                              accept_multiple_files=True,
                                              key="meeting_file_upload")
-    
+
     if meeting_uploaded_files:
         st.write(f"**{len(meeting_uploaded_files)} file(s) selected**")
-        
+
         # Show selected files
         for f in meeting_uploaded_files:
             st.caption(f"📄 {f.name}")
-        
+
         # Description for all files
-        meeting_batch_desc = st.text_input("Description for all files (optional)", 
+        meeting_batch_desc = st.text_input("Description for all files (optional)",
                                           key="meeting_batch_desc",
                                           placeholder="E.g., Budget documents, Policy drafts")
-        
+
         if st.button("➕ Add All Files", key="add_all_meeting_attachments", type="secondary"):
-            for file in meeting_uploaded_files:
-                meeting_attachments.append({
-                    "name": file.name,
-                    "description": meeting_batch_desc if meeting_batch_desc else "",
-                    "filename": file.name,
-                    "size": file.size,
-                    "type": file.type,
-                    "uploaded_date": str(datetime.date.today())
-                })
-            st.success(f"✅ Successfully added {len(meeting_uploaded_files)} file(s) to meeting!")
-            st.info("ℹ️ Note: File metadata saved. For full file storage, integrate with Supabase Storage.")
-            if st.session_state.current_staff_meeting_id:
-                _persist_field_now("meeting_attachments", json.dumps(meeting_attachments))
-            else:
-                st.info("💡 This is a new, unsaved meeting — click 'Save Meeting' at the bottom to save it "
-                        "(including these files) for the first time.")
-            st.rerun()
+            added, failed = 0, []
+            with st.spinner("Uploading file(s)…"):
+                for file in meeting_uploaded_files:
+                    result = _upload_attachment(MEETING_ATTACHMENTS_BUCKET, f"meeting_{_mtg_key}", file)
+                    if "path" in result:
+                        meeting_attachments.append({
+                            "name": file.name,
+                            "description": meeting_batch_desc if meeting_batch_desc else "",
+                            "filename": file.name,
+                            "path": result["path"],
+                            "size": file.size,
+                            "type": file.type,
+                            "uploaded_date": str(datetime.date.today())
+                        })
+                        added += 1
+                    else:
+                        failed.append((file.name, result.get("error", "unknown error")))
+            st.session_state[_meeting_att_ss_key] = meeting_attachments
+            for name, err in failed:
+                st.error(f"⚠️ Could not upload {name}: {err}")
+            if added:
+                st.success(f"✅ Uploaded and added {added} file(s) to meeting!")
+                st.info("💡 Click 'Save Meeting' at the bottom to save these to the meeting record.")
+                st.rerun()
 
 st.markdown("---")
 
@@ -1893,18 +1623,23 @@ with st.expander("📚 PD Session Details", expanded=True):
 
     # PD Title
     default_pd_title = selected_record.get('pd_title', '') if selected_record else ''
-    pd_title = st.text_input("PD Session Title", value=default_pd_title, key=f"pd_title_{_scope}",
+    pd_title = st.text_input("PD Session Title", value=default_pd_title, key="pd_title",
                              placeholder="e.g. Sounds-Write Introduction, Berry Street Module 3, WHS Refresher…")
 
     st.write("**PD Attendance** (Auto-filled from meeting attendance - edit if needed)")
-
-    # Pre-fill with meeting attendees but allow editing
-    default_pd_attendees = selected_record.get('pd_attendees', attendees) if selected_record else attendees
-    default_pd_absent = selected_record.get('pd_absent', apologies) if selected_record else apologies
-    pd_attendees, pd_absent = _attendance_picker(
-        "PD Attendees", "PD Absent/Left Early", default_pd_attendees, default_pd_absent,
-        key_prefix=f"pd_attendance_{_scope}"
-    )
+    
+    col_pd1, col_pd2 = st.columns(2)
+    
+    with col_pd1:
+        # Pre-fill with meeting attendees but allow editing
+        default_pd_attendees = selected_record.get('pd_attendees', attendees) if selected_record else attendees
+        pd_attendees = st.text_area("PD Attendees", value=default_pd_attendees, height=80, key="pd_attendees",
+                                   placeholder="Staff who attended PD session...")
+    
+    with col_pd2:
+        default_pd_absent = selected_record.get('pd_absent', apologies) if selected_record else apologies
+        pd_absent = st.text_area("PD Absentees/Left Early", value=default_pd_absent, height=80, key="pd_absent",
+                                placeholder="Staff who missed PD or left early...")
     
     st.markdown("---")
     
@@ -1915,10 +1650,10 @@ with st.expander("📚 PD Session Details", expanded=True):
     pd_notes = selected_record.get('pd_notes', '') if selected_record else ''
     
     pd_method = st.radio("Choose entry method", options=["✍️ Manual Entry", "🤖 AI from Transcript"], 
-                       horizontal=True, key=f"pd_method_{_scope}")
+                       horizontal=True, key="pd_method")
     
     if pd_method == "✍️ Manual Entry":
-        pd_notes = st.text_area("PD Main Points / Notes", value=pd_notes, height=300, key=f"pd_notes_{_scope}",
+        pd_notes = st.text_area("PD Main Points / Notes", value=pd_notes, height=300, key="pd_notes",
                                placeholder="Document key points from the PD session...")
     
     else:  # AI from Transcript
@@ -2006,107 +1741,79 @@ Format as clear, structured notes."""
     # PD Attachments
     st.write("**PD Attachments / Resources:**")
 
-    # Show the result of the last Add/Save attempt — stored in session_state
-    # rather than shown inline, because st.rerun() right after adding files
-    # halts the script immediately, so a message shown in that same run can
-    # flash by too fast to read. This survives the rerun instead.
-    _last_pd_result = st.session_state.pop('_pd_attach_last_result', None)
-    if _last_pd_result:
-        if _last_pd_result['ok']:
-            st.success(_last_pd_result['message'])
+    # Kept in session_state, not just re-read from the saved record, so files
+    # added here survive the rerun this section triggers — previously they
+    # were silently lost on rerun before "Save Meeting" ever saw them.
+    _pd_att_ss_key = f"pd_attachments_{_mtg_key}"
+    if _pd_att_ss_key not in st.session_state:
+        if selected_record and selected_record.get('pd_attachments'):
+            try:
+                _pd_seed = json.loads(selected_record['pd_attachments']) if isinstance(selected_record['pd_attachments'], str) else selected_record['pd_attachments']
+            except Exception:
+                _pd_seed = []
         else:
-            st.error(_last_pd_result['message'])
-    
-    # Load existing attachments
-    if selected_record and selected_record.get('pd_attachments'):
-        try:
-            pd_attachments = json.loads(selected_record['pd_attachments']) if isinstance(selected_record['pd_attachments'], str) else selected_record['pd_attachments']
-        except Exception as e:
-            pd_attachments = []
-            _autosave_safe = False
-            st.error(f"⚠️ Could not read this meeting's saved PD attachments ({e}) — autosave is paused for "
-                     f"this session so it doesn't overwrite them. Please check the data before saving manually.")
-    else:
-        pd_attachments = []
-    
+            _pd_seed = []
+        st.session_state[_pd_att_ss_key] = _pd_seed
+    pd_attachments = st.session_state[_pd_att_ss_key]
+
     # Display existing attachments
     if pd_attachments:
         st.write("**Uploaded Attachments:**")
         for idx, attachment in enumerate(pd_attachments):
             col_att1, col_att2 = st.columns([4, 1])
             with col_att1:
-                _label = f"📎 {attachment.get('name', 'Unnamed file')} ({attachment.get('filename', '')}) - {attachment.get('description', 'No description')}"
-                if attachment.get('url'):
-                    st.markdown(f"[{_label}]({attachment['url']})")
-                else:
-                    st.write(_label)
+                _render_attachment_link(attachment, PD_ATTACHMENTS_BUCKET)
             with col_att2:
                 if st.button("🗑️", key=f"delete_pd_attachment_{idx}"):
+                    _delete_attachment(PD_ATTACHMENTS_BUCKET, attachment.get('path'))
                     pd_attachments.pop(idx)
-                    _persist_field_now("pd_attachments", json.dumps(pd_attachments))
+                    st.session_state[_pd_att_ss_key] = pd_attachments
                     st.rerun()
 
-    with st.expander("🔧 Debug: raw PD attachments data (temporary — tell Claude what this shows)"):
-        st.write(f"`current_staff_meeting_id` = `{st.session_state.current_staff_meeting_id}`")
-        st.write("Raw value from the database (`selected_record['pd_attachments']`):")
-        st.code(repr(selected_record.get('pd_attachments')) if selected_record else "no meeting selected")
-        st.write("Local `pd_attachments` list this run:")
-        st.json(pd_attachments)
-    
     # Add multiple attachments at once
     st.write("**Add New Attachments:**")
-    uploaded_files = st.file_uploader("Upload files (select multiple)", 
+    uploaded_files = st.file_uploader("Upload files (select multiple)",
                                      type=['pdf', 'docx', 'pptx', 'txt', 'jpg', 'png', 'xlsx', 'mp4', 'mov'],
                                      accept_multiple_files=True,
                                      key="pd_file_upload")
-    
+
     if uploaded_files:
         st.write(f"**{len(uploaded_files)} file(s) selected**")
-        
+
         # Show selected files
         for f in uploaded_files:
             st.caption(f"📄 {f.name}")
-        
+
         # Description for all files (optional)
-        batch_description = st.text_input("Description for all files (optional)", 
+        batch_description = st.text_input("Description for all files (optional)",
                                          key="pd_batch_desc",
                                          placeholder="E.g., Restorative Practices Resources")
-        
+
         if st.button("➕ Add All Files", key="add_all_pd_attachments", type="secondary"):
-            _upload_failures = 0
-            with st.spinner("Uploading files…"):
+            added, failed = 0, []
+            with st.spinner("Uploading file(s)…"):
                 for file in uploaded_files:
-                    url, storage_path = _upload_pd_attachment(file, _scope)
-                    if url is None:
-                        _upload_failures += 1
-                    pd_attachments.append({
-                        "name": file.name,
-                        "description": batch_description if batch_description else "",
-                        "filename": file.name,
-                        "size": file.size,
-                        "type": file.type,
-                        "uploaded_date": str(datetime.date.today()),
-                        "url": url,
-                        "storage_path": storage_path
-                    })
-            if _upload_failures:
-                st.warning(
-                    f"⚠️ {_upload_failures} file(s) were recorded but couldn't be uploaded for opening later "
-                    f"— create a public Storage bucket named `{PD_ATTACHMENTS_BUCKET}` in the MEETINGS "
-                    f"Supabase project (Storage → New bucket → Public) and re-upload them."
-                )
-            else:
-                st.success(f"✅ {len(uploaded_files)} file(s) added — they can be opened from PD Attachments and from Staff View.")
-            if st.session_state.current_staff_meeting_id:
-                _saved_ok = _persist_field_now("pd_attachments", json.dumps(pd_attachments))
-                if _saved_ok:
-                    st.info(f"💾 Saved to the database just now (meeting id `{st.session_state.current_staff_meeting_id}`).")
-                else:
-                    st.error("⚠️ Save did not go through — see the error above.")
-            else:
-                st.info("💡 This is a new, unsaved meeting — click 'Save Meeting' at the bottom to save it "
-                        "(including these files) for the first time.")
-            st.rerun()
+                    result = _upload_attachment(PD_ATTACHMENTS_BUCKET, f"pd_{_mtg_key}", file)
+                    if "path" in result:
+                        pd_attachments.append({
+                            "name": file.name,
+                            "description": batch_description if batch_description else "",
+                            "filename": file.name,
+                            "path": result["path"],
+                            "size": file.size,
+                            "type": file.type,
+                            "uploaded_date": str(datetime.date.today())
+                        })
+                        added += 1
+                    else:
+                        failed.append((file.name, result.get("error", "unknown error")))
+            st.session_state[_pd_att_ss_key] = pd_attachments
+            for name, err in failed:
+                st.error(f"⚠️ Could not upload {name}: {err}")
+            if added:
+                st.success(f"✅ Uploaded and added {added} file(s) to PD!")
+                st.info("💡 Click 'Save Meeting' at the bottom to save these to the meeting record.")
+                st.rerun()
 
 st.markdown("---")
 
@@ -2134,39 +1841,6 @@ meeting_data = {
     "pd_title": pd_title.strip() if pd_title else '',
     "pd_attachments": json.dumps(pd_attachments) if pd_attachments else '[]'
 }
-
-# ── Silent autosave ────────────────────────────────────────────────────────
-# Render's free/starter tier spins the app down after a period of inactivity;
-# when that happens the whole Streamlit session — including anything typed
-# into Minutes that hadn't been saved yet — is lost. Rather than relying on
-# the "Save Meeting" button being clicked before that happens, this saves the
-# current form state to Supabase on every interaction (every widget change
-# already triggers a script rerun, so this runs then too), so at most the
-# very last unsaved keystroke is ever at risk instead of the whole session.
-#
-# IMPORTANT: this only ever UPDATEs an already-saved meeting. It used to also
-# silently INSERT a brand new row whenever current_staff_meeting_id was None
-# but the form had content — intended for a genuinely new, not-yet-saved
-# meeting. But if the meeting selection ever got reset for any other reason
-# (a transient fetch failure, a dropdown mismatch) while you had an existing
-# meeting's content on screen, that same fallback would silently create a
-# DUPLICATE of that meeting instead of doing nothing — which is what produced
-# the duplicate T3 Week 7 records. Creating a new meeting now only ever
-# happens when you explicitly click "💾 Save Meeting" below.
-try:
-    if not _autosave_safe:
-        st.caption("💾 Autosave paused — see the warning above. Existing data won't be touched "
-                   "until you save manually with 💾 Save Meeting.")
-    elif st.session_state.current_staff_meeting_id:
-        supabase.table('staff_meetings').update(meeting_data).eq(
-            'id', st.session_state.current_staff_meeting_id
-        ).execute()
-        st.caption(f"💾 Autosaved {datetime.datetime.now().strftime('%H:%M:%S')}")
-    else:
-        st.caption("💾 Autosave will begin once this meeting is saved for the first time — "
-                   "click 💾 Save Meeting below.")
-except Exception as _autosave_err:
-    st.caption(f"⚠️ Autosave failed — click 💾 Save Meeting below to save manually ({_autosave_err})")
 
 col_dl, col_save = st.columns([1, 2])
 with col_dl:
