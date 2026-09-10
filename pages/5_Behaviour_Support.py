@@ -6073,20 +6073,28 @@ def render_student_dashboard():
                 from groq import Groq as GroqClient
                 import json as _json
                 client = GroqClient(api_key=GROQ_KEY)
-                prompt = f"""You are a behaviour support data analyst for Cowandilla Learning Centre, Learning & Behaviour Unit.
-The following document describes ONE critical incident involving student: {student_name}.
-Extract the incident as a single JSON object with this exact structure:
-{"date":"YYYY-MM-DD","severity":3,"sapol_reference":"reference number or null","outcomes":["list","of","outcomes"],"primary":{"time":"time","location":"location","context":"antecedent context","behaviour":"narrative description of what happened","behaviour_type":"CANONICAL LABEL — see list below","consequence":"staff response"},"additional_entries":[{"time":"time","location":"location","context":"antecedent","behaviour":"behaviour narrative","behaviour_type":"canonical label","consequence":"consequence","hypothesis":""}],"notes":"any other relevant context"}
-
-CANONICAL BEHAVIOUR TYPES — behaviour_type MUST be one of these exact strings:
-Verbal refusal of instruction | Task refusal / passive non-compliance | Shutdown / complete withdrawal | Selective mutism / non-responsiveness | Unsanctioned departure (elopement) | Absconding from school grounds | Hiding or avoiding adult proximity | Inappropriate vocalisation / noises | Disruptive verbal commentary | Interrupting / calling out | Property misuse or interference | Verbal aggression toward peer | Verbal aggression toward adult | Physical aggression toward peer | Physical aggression toward adult | Threatening behaviour | Property destruction | Throwing objects | Self-injurious behaviour | Dysregulated emotional expression | Other (specify in description)
-
-Rules:
-- severity 1-5 (1=minor/coping, 2=low, 3=elevated, 4=serious, 5=crisis); if SAPOL called then at least 4.
-- behaviour_type must exactly match one of the canonical labels above.
-- behaviour is the narrative/description; behaviour_type is the clinical classification.
-- Return ONLY valid JSON, no markdown fences, no extra text.
-Document: {doc_text}"""
+                prompt = (
+                    "You are a behaviour support data analyst for Cowandilla Learning Centre, Learning & Behaviour Unit.\n"
+                    f"The following document describes ONE critical incident involving student: {student_name}.\n"
+                    "Extract the incident as a single JSON object with this exact structure:\n"
+                    '{"date":"YYYY-MM-DD","severity":3,"sapol_reference":"reference number or null",'
+                    '"outcomes":["list","of","outcomes"],'
+                    '"primary":{"time":"time","location":"location","context":"antecedent context",'
+                    '"behaviour":"narrative description of what happened",'
+                    '"behaviour_type":"CANONICAL LABEL — see list below","consequence":"staff response"},'
+                    '"additional_entries":[{"time":"time","location":"location","context":"antecedent",'
+                    '"behaviour":"behaviour narrative","behaviour_type":"canonical label",'
+                    '"consequence":"consequence","hypothesis":""}],'
+                    '"notes":"any other relevant context"}\n\n'
+                    "CANONICAL BEHAVIOUR TYPES — behaviour_type MUST be one of these exact strings:\n"
+                    "Verbal refusal of instruction | Task refusal / passive non-compliance | Shutdown / complete withdrawal | Selective mutism / non-responsiveness | Unsanctioned departure (elopement) | Absconding from school grounds | Hiding or avoiding adult proximity | Inappropriate vocalisation / noises | Disruptive verbal commentary | Interrupting / calling out | Property misuse or interference | Verbal aggression toward peer | Verbal aggression toward adult | Physical aggression toward peer | Physical aggression toward adult | Threatening behaviour | Property destruction | Throwing objects | Self-injurious behaviour | Dysregulated emotional expression | Other (specify in description)\n\n"
+                    "Rules:\n"
+                    "- severity 1-5 (1=minor/coping, 2=low, 3=elevated, 4=serious, 5=crisis); if SAPOL called then at least 4.\n"
+                    "- behaviour_type must exactly match one of the canonical labels above.\n"
+                    "- behaviour is the narrative/description; behaviour_type is the clinical classification.\n"
+                    "- Return ONLY valid JSON, no markdown fences, no extra text.\n"
+                    f"Document: {doc_text}"
+                )
                 response = client.chat.completions.create(
                     model="llama-3.3-70b-versatile",
                     messages=[{"role": "user", "content": prompt}],
