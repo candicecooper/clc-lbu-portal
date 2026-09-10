@@ -5302,6 +5302,17 @@ def render_student_analysis_page():
 
     st.markdown("---")
 
+    # ── Derive sensory-overview flags used by the Teaching Lens section below ──
+    # (fixes NameError: these were referenced but never computed)
+    _n_sensory_ants   = int((full_df["_ant_cat"] == "Sensory").sum()) if "_ant_cat" in full_df.columns else 0
+    _sensory_prominent = len(full_df) > 0 and (_n_sensory_ants / len(full_df)) >= 0.2
+    _has_sensory  = bool(_so_data)
+    _so_recs       = _so_data.get("recommendations", []) if _so_data else []
+    _so_seeking    = _so_data.get("sensory_seeking", []) if _so_data else []
+    _so_avoiding   = _so_data.get("sensory_avoiding", []) if _so_data else []
+    _so_strategies = _so_data.get("regulation_strategies", []) if _so_data else []
+    _so_triggers   = _so_data.get("triggers", []) if _so_data else []
+
     # ══════════════════════════════════════════════════════════════════════════
     # TEACHING LENS
     # ══════════════════════════════════════════════════════════════════════════
