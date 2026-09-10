@@ -375,6 +375,7 @@ if st.session_state.page == 'students':
                     try:
                         sb.table("scatter_students").insert({
                             "student_name": new_name,
+                            "name": new_name,
                             "program_type": new_prog,
                             "behaviour_definitions": json.dumps(beh_defs) if beh_defs else None
                         }).execute()
@@ -459,6 +460,7 @@ elif st.session_state.page == 'setup':
                 try:
                     sb.table("scatter_students").insert({
                         "student_name": new_name.strip(),
+                        "name": new_name.strip(),
                         "program_type": new_prog
                     }).execute()
                     st.success(f"✅ Added {new_name}")
