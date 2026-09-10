@@ -1183,12 +1183,24 @@ with tab1:
     
     minutes = selected_record.get('minutes', '') if selected_record else ''
     has_existing_minutes = bool(minutes and minutes.strip())
-    
-    with st.expander("📄 Meeting Minutes", expanded=not has_existing_minutes):
-        
+
+    # ── Keep this section's open/closed state and entry-method choice pinned
+    # per-meeting in session_state, seeded ONCE when a meeting is opened.
+    # Recomputing `expanded=` fresh from has_existing_minutes on every rerun
+    # (as this used to do) forces the expander back to its default state the
+    # instant something inside it — like the radio button below — triggers a
+    # rerun, which is what made the section look like it "wouldn't expand" or
+    # "wouldn't show" the AI transcript box after switching to it.
+    _minutes_mkey = st.session_state.current_staff_meeting_id or "new"
+    _minutes_expander_key = f"_minutes_section_open_{_minutes_mkey}"
+    if _minutes_expander_key not in st.session_state:
+        st.session_state[_minutes_expander_key] = not has_existing_minutes
+
+    with st.expander("📄 Meeting Minutes", expanded=st.session_state[_minutes_expander_key]):
+
         minutes_method = st.radio("Minutes Entry Method",
                                   options=["✍️ Manual Entry", "🤖 AI from Transcript"],
-                                  horizontal=True, key="minutes_entry_method")
+                                  horizontal=True, key=f"minutes_entry_method_{_minutes_mkey}")
         
         if minutes_method == "✍️ Manual Entry":
             st.caption("Enter notes for each standing item. Leave a section blank if it wasn't discussed.")
@@ -1216,7 +1228,7 @@ with tab1:
             pasted = st.text_area(
                 "Paste transcript here",
                 height=180,
-                key="transcript_paste",
+                key=f"transcript_paste_{_mkey}",
                 placeholder="Paste your meeting transcript or voice-to-text output here…"
             )
             if pasted.strip():
@@ -1225,7 +1237,7 @@ with tab1:
             transcript_file = st.file_uploader(
                 "Or upload a file",
                 type=['txt', 'docx'],
-                key="transcript_upload",
+                key=f"transcript_upload_{_mkey}",
                 label_visibility="collapsed"
             )
             if transcript_file and not transcript_text:
