@@ -82,6 +82,49 @@ def get_sb():
         return None
 
 # ==============================================================================
+# GROQ AI (shared fallback chain — matches the fleet-wide fix used elsewhere
+# in the portal: gpt-oss-120b -> qwen3.6-27b -> llama-3.3-70b-versatile,
+# because Groq retired llama-3.3-70b-versatile for free/dev-tier accounts
+# on 16 Aug 2026. Also self-heals the httpx "proxies" client-init error and
+# 413 "request too large" by halving max_tokens and retrying.)
+# ==============================================================================
+GROQ_MODEL_CHAIN = ["openai/gpt-oss-120b", "qwen/qwen3.6-27b", "llama-3.3-70b-versatile"]
+
+def groq_ai_call(prompt, temperature=0.3, max_tokens=120):
+    from groq import Groq
+    api_key = st.secrets.get("GROQ_API_KEY") or st.secrets.get("groq", {}).get("api_key")
+    if not api_key:
+        raise RuntimeError("Add GROQ_API_KEY to Render secrets.")
+    try:
+        client = Groq(api_key=api_key)
+    except TypeError:
+        import httpx
+        client = Groq(api_key=api_key, http_client=httpx.Client())
+
+    last_err = None
+    for model in GROQ_MODEL_CHAIN:
+        tokens = max_tokens
+        for _attempt in range(2):
+            try:
+                kwargs = dict(
+                    model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=temperature,
+                    max_tokens=tokens,
+                )
+                if model.startswith("qwen/"):
+                    kwargs["reasoning_effort"] = "none"  # suppress thinking-token output
+                response = client.chat.completions.create(**kwargs)
+                return response.choices[0].message.content.strip()
+            except Exception as e:
+                last_err = e
+                if "413" in str(e) or "too large" in str(e).lower():
+                    tokens = max(tokens // 2, 20)
+                    continue
+                break  # non-413 error: try next model in the chain
+    raise last_err
+
+# ==============================================================================
 # SESSION STATE
 # ==============================================================================
 def init():
@@ -162,22 +205,13 @@ if st.session_state.page == 'students':
         with st.expander("🔧 Test AI Connection (click if AI not working)"):
             if st.button("Test Groq API Connection"):
                 try:
-                    from groq import Groq
                     api_key = st.secrets.get("GROQ_API_KEY") or st.secrets.get("groq", {}).get("api_key")
-                    
                     if not api_key:
                         st.error("❌ No API key found. Add GROQ_API_KEY to Render secrets.")
                     else:
                         st.info(f"✓ API key found: {api_key[:8]}...")
-                        
-                        client = Groq(api_key=api_key)
-                        response = client.chat.completions.create(
-                            model="llama-3.3-70b-versatile",
-                            messages=[{"role": "user", "content": "Say 'test successful'"}],
-                            max_tokens=10
-                        )
-                        
-                        st.success(f"✅ AI Working! Response: {response.choices[0].message.content}")
+                        result = groq_ai_call("Say 'test successful'", temperature=0.0, max_tokens=10)
+                        st.success(f"✅ AI Working! Response: {result}")
                 except ImportError as e:
                     st.error(f"❌ Groq library not installed: {e}")
                 except Exception as e:
@@ -223,27 +257,11 @@ if st.session_state.page == 'students':
                 if beh1_name:
                     with st.spinner("Generating..."):
                         try:
-                            from groq import Groq
-                            api_key = st.secrets.get("GROQ_API_KEY") or st.secrets.get("groq", {}).get("api_key")
-                            
-                            if not api_key:
-                                st.error("Add GROQ_API_KEY to Render Environment Variables")
-                            else:
-                                client = Groq(api_key=api_key)
-                                
-                                response = client.chat.completions.create(
-                                    model="llama-3.3-70b-versatile",
-                                    messages=[{
-                                        "role": "user",
-                                        "content": f"Write a 2-3 sentence operational definition for the school behaviour '{beh1_name}'. Format: Description. Includes examples. Excludes non-examples."
-                                    }],
-                                    temperature=0.3,
-                                    max_tokens=120
-                                )
-                                
-                                st.session_state['ai_gen1'] = response.choices[0].message.content.strip()
-                                st.success("✅ Generated!")
-                                st.rerun()
+                            st.session_state['ai_gen1'] = groq_ai_call(
+                                f"Write a 2-3 sentence operational definition for the school behaviour '{beh1_name}'. Format: Description. Includes examples. Excludes non-examples."
+                            )
+                            st.success("✅ Generated!")
+                            st.rerun()
                         except Exception as e:
                             st.error(f"AI Error: {str(e)[:100]}")
         
@@ -283,27 +301,11 @@ if st.session_state.page == 'students':
                 if beh2_name:
                     with st.spinner("Generating..."):
                         try:
-                            from groq import Groq
-                            api_key = st.secrets.get("GROQ_API_KEY") or st.secrets.get("groq", {}).get("api_key")
-                            
-                            if not api_key:
-                                st.error("Add GROQ_API_KEY to Render")
-                            else:
-                                client = Groq(api_key=api_key)
-                                
-                                response = client.chat.completions.create(
-                                    model="llama-3.3-70b-versatile",
-                                    messages=[{
-                                        "role": "user",
-                                        "content": f"Write a 2-3 sentence operational definition for the school behaviour '{beh2_name}'. Format: Description. Includes examples. Excludes non-examples."
-                                    }],
-                                    temperature=0.3,
-                                    max_tokens=120
-                                )
-                                
-                                st.session_state['ai_gen2'] = response.choices[0].message.content.strip()
-                                st.success("✅ Generated!")
-                                st.rerun()
+                            st.session_state['ai_gen2'] = groq_ai_call(
+                                f"Write a 2-3 sentence operational definition for the school behaviour '{beh2_name}'. Format: Description. Includes examples. Excludes non-examples."
+                            )
+                            st.success("✅ Generated!")
+                            st.rerun()
                         except Exception as e:
                             st.error(f"AI Error: {str(e)[:100]}")
         
@@ -341,27 +343,11 @@ if st.session_state.page == 'students':
                 if beh3_name:
                     with st.spinner("Generating..."):
                         try:
-                            from groq import Groq
-                            api_key = st.secrets.get("GROQ_API_KEY") or st.secrets.get("groq", {}).get("api_key")
-                            
-                            if not api_key:
-                                st.error("Add GROQ_API_KEY to Render")
-                            else:
-                                client = Groq(api_key=api_key)
-                                
-                                response = client.chat.completions.create(
-                                    model="llama-3.3-70b-versatile",
-                                    messages=[{
-                                        "role": "user",
-                                        "content": f"Write a 2-3 sentence operational definition for the school behaviour '{beh3_name}'. Format: Description. Includes examples. Excludes non-examples."
-                                    }],
-                                    temperature=0.3,
-                                    max_tokens=120
-                                )
-                                
-                                st.session_state['ai_gen3'] = response.choices[0].message.content.strip()
-                                st.success("✅ Generated!")
-                                st.rerun()
+                            st.session_state['ai_gen3'] = groq_ai_call(
+                                f"Write a 2-3 sentence operational definition for the school behaviour '{beh3_name}'. Format: Description. Includes examples. Excludes non-examples."
+                            )
+                            st.success("✅ Generated!")
+                            st.rerun()
                         except Exception as e:
                             st.error(f"AI Error: {str(e)[:100]}")
         
@@ -572,51 +558,35 @@ elif st.session_state.page == 'setup':
                 
                 with st.spinner("Generating..."):
                     try:
-                        from groq import Groq
-                        api_key = st.secrets.get("GROQ_API_KEY") or st.secrets.get("groq", {}).get("api_key")
-                        
-                        if api_key:
-                            client = Groq(api_key=api_key)
-                            response = client.chat.completions.create(
-                                model="llama-3.3-70b-versatile",
-                                messages=[{
-                                    "role": "user",
-                                    "content": f"Write a 2-3 sentence operational definition for the school behaviour '{beh1}'. Format: Description. Includes examples. Excludes non-examples."
-                                }],
-                                temperature=0.3,
-                                max_tokens=120
-                            )
-                            
-                            # Save to student's behaviour definitions
-                            new_def = response.choices[0].message.content.strip()
-                            st.session_state[f'setup_def_{beh1}'] = new_def
-                            
-                            # Update student record
-                            sb = get_sb()
-                            if sb and st.session_state.student_name:
-                                try:
-                                    # Get current definitions
-                                    res = sb.table("scatter_students").select("behaviour_definitions").eq("student_name", st.session_state.student_name).execute()
-                                    current_defs = {}
-                                    if res.data:
-                                        defs = res.data[0].get('behaviour_definitions')
-                                        if defs:
-                                            current_defs = json.loads(defs) if isinstance(defs, str) else defs
-                                    
-                                    # Add new definition
-                                    current_defs[beh1] = new_def
-                                    
-                                    # Save back
-                                    sb.table("scatter_students").update({
-                                        "behaviour_definitions": json.dumps(current_defs)
-                                    }).eq("student_name", st.session_state.student_name).execute()
-                                    
-                                    st.success("✅ Generated & saved!")
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Save error: {e}")
-                        else:
-                            st.error("Add GROQ_API_KEY to Render")
+                        new_def = groq_ai_call(
+                            f"Write a 2-3 sentence operational definition for the school behaviour '{beh1}'. Format: Description. Includes examples. Excludes non-examples."
+                        )
+                        st.session_state[f'setup_def_{beh1}'] = new_def
+
+                        # Update student record
+                        sb = get_sb()
+                        if sb and st.session_state.student_name:
+                            try:
+                                # Get current definitions
+                                res = sb.table("scatter_students").select("behaviour_definitions").eq("student_name", st.session_state.student_name).execute()
+                                current_defs = {}
+                                if res.data:
+                                    defs = res.data[0].get('behaviour_definitions')
+                                    if defs:
+                                        current_defs = json.loads(defs) if isinstance(defs, str) else defs
+
+                                # Add new definition
+                                current_defs[beh1] = new_def
+
+                                # Save back
+                                sb.table("scatter_students").update({
+                                    "behaviour_definitions": json.dumps(current_defs)
+                                }).eq("student_name", st.session_state.student_name).execute()
+
+                                st.success("✅ Generated & saved!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Save error: {e}")
                     except Exception as e:
                         st.error(f"AI Error: {str(e)[:80]}")
     
@@ -646,46 +616,31 @@ elif st.session_state.page == 'setup':
                 
                 with st.spinner("Generating..."):
                     try:
-                        from groq import Groq
-                        api_key = st.secrets.get("GROQ_API_KEY") or st.secrets.get("groq", {}).get("api_key")
-                        
-                        if api_key:
-                            client = Groq(api_key=api_key)
-                            response = client.chat.completions.create(
-                                model="llama-3.3-70b-versatile",
-                                messages=[{
-                                    "role": "user",
-                                    "content": f"Write a 2-3 sentence operational definition for the school behaviour '{beh2}'. Format: Description. Includes examples. Excludes non-examples."
-                                }],
-                                temperature=0.3,
-                                max_tokens=120
-                            )
-                            
-                            new_def = response.choices[0].message.content.strip()
-                            st.session_state[f'setup_def_{beh2}'] = new_def
-                            
-                            sb = get_sb()
-                            if sb and st.session_state.student_name:
-                                try:
-                                    res = sb.table("scatter_students").select("behaviour_definitions").eq("student_name", st.session_state.student_name).execute()
-                                    current_defs = {}
-                                    if res.data:
-                                        defs = res.data[0].get('behaviour_definitions')
-                                        if defs:
-                                            current_defs = json.loads(defs) if isinstance(defs, str) else defs
-                                    
-                                    current_defs[beh2] = new_def
-                                    
-                                    sb.table("scatter_students").update({
-                                        "behaviour_definitions": json.dumps(current_defs)
-                                    }).eq("student_name", st.session_state.student_name).execute()
-                                    
-                                    st.success("✅ Generated & saved!")
-                                    st.rerun()
-                                except:
-                                    pass
-                        else:
-                            st.error("Add GROQ_API_KEY")
+                        new_def = groq_ai_call(
+                            f"Write a 2-3 sentence operational definition for the school behaviour '{beh2}'. Format: Description. Includes examples. Excludes non-examples."
+                        )
+                        st.session_state[f'setup_def_{beh2}'] = new_def
+
+                        sb = get_sb()
+                        if sb and st.session_state.student_name:
+                            try:
+                                res = sb.table("scatter_students").select("behaviour_definitions").eq("student_name", st.session_state.student_name).execute()
+                                current_defs = {}
+                                if res.data:
+                                    defs = res.data[0].get('behaviour_definitions')
+                                    if defs:
+                                        current_defs = json.loads(defs) if isinstance(defs, str) else defs
+
+                                current_defs[beh2] = new_def
+
+                                sb.table("scatter_students").update({
+                                    "behaviour_definitions": json.dumps(current_defs)
+                                }).eq("student_name", st.session_state.student_name).execute()
+
+                                st.success("✅ Generated & saved!")
+                                st.rerun()
+                            except:
+                                pass
                     except Exception as e:
                         st.error(f"AI Error: {str(e)[:80]}")
     
@@ -714,46 +669,31 @@ elif st.session_state.page == 'setup':
                 
                 with st.spinner("Generating..."):
                     try:
-                        from groq import Groq
-                        api_key = st.secrets.get("GROQ_API_KEY") or st.secrets.get("groq", {}).get("api_key")
-                        
-                        if api_key:
-                            client = Groq(api_key=api_key)
-                            response = client.chat.completions.create(
-                                model="llama-3.3-70b-versatile",
-                                messages=[{
-                                    "role": "user",
-                                    "content": f"Write a 2-3 sentence operational definition for the school behaviour '{beh3}'. Format: Description. Includes examples. Excludes non-examples."
-                                }],
-                                temperature=0.3,
-                                max_tokens=120
-                            )
-                            
-                            new_def = response.choices[0].message.content.strip()
-                            st.session_state[f'setup_def_{beh3}'] = new_def
-                            
-                            sb = get_sb()
-                            if sb and st.session_state.student_name:
-                                try:
-                                    res = sb.table("scatter_students").select("behaviour_definitions").eq("student_name", st.session_state.student_name).execute()
-                                    current_defs = {}
-                                    if res.data:
-                                        defs = res.data[0].get('behaviour_definitions')
-                                        if defs:
-                                            current_defs = json.loads(defs) if isinstance(defs, str) else defs
-                                    
-                                    current_defs[beh3] = new_def
-                                    
-                                    sb.table("scatter_students").update({
-                                        "behaviour_definitions": json.dumps(current_defs)
-                                    }).eq("student_name", st.session_state.student_name).execute()
-                                    
-                                    st.success("✅ Generated & saved!")
-                                    st.rerun()
-                                except:
-                                    pass
-                        else:
-                            st.error("Add GROQ_API_KEY")
+                        new_def = groq_ai_call(
+                            f"Write a 2-3 sentence operational definition for the school behaviour '{beh3}'. Format: Description. Includes examples. Excludes non-examples."
+                        )
+                        st.session_state[f'setup_def_{beh3}'] = new_def
+
+                        sb = get_sb()
+                        if sb and st.session_state.student_name:
+                            try:
+                                res = sb.table("scatter_students").select("behaviour_definitions").eq("student_name", st.session_state.student_name).execute()
+                                current_defs = {}
+                                if res.data:
+                                    defs = res.data[0].get('behaviour_definitions')
+                                    if defs:
+                                        current_defs = json.loads(defs) if isinstance(defs, str) else defs
+
+                                current_defs[beh3] = new_def
+
+                                sb.table("scatter_students").update({
+                                    "behaviour_definitions": json.dumps(current_defs)
+                                }).eq("student_name", st.session_state.student_name).execute()
+
+                                st.success("✅ Generated & saved!")
+                                st.rerun()
+                            except:
+                                pass
                     except Exception as e:
                         st.error(f"AI Error: {str(e)[:80]}")
     
