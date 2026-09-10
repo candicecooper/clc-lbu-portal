@@ -17,6 +17,12 @@ except ImportError:
 # require_auth(app_title="CLC LBU Staff Portal", app_icon="🏫")
 # logout_button()
 
+try:
+    from archive_utils import fetch_register, initials_from_name
+except ImportError:
+    fetch_register = None
+    initials_from_name = None
+
 TEAL = "#1A7A6E"
 AMBER = "#C8760A"
 
@@ -82,6 +88,86 @@ def get_sb():
         return None
 
 # ==============================================================================
+# STUDENT REGISTER INTEGRATION
+# The Student Register (archive_utils.fetch_register) is the single front
+# door for adding/archiving students, same as Comm Log and SMARTAR — this
+# tool no longer has its own "Add Student" path. The register stores
+# INITIALS ONLY (no names), while this tool's existing scatter_students
+# rows are keyed by full name from before this integration. To avoid
+# losing history, a registered student is matched to any existing local
+# row by deriving that row's initials — if matched, the existing full
+# name stays the identity key (so old weekly data keeps working); if not
+# matched (never tracked here before), the initials themselves become
+# the identity key going forward, since that's all the register has.
+# ==============================================================================
+@st.cache_data(ttl=60)
+def get_trackable_students():
+    if fetch_register is None:
+        return []
+    registered = fetch_register("active")
+    sb = get_sb()
+    local_rows = []
+    if sb:
+        try:
+            local_rows = sb.table("scatter_students").select("*").execute().data or []
+        except Exception:
+            local_rows = []
+
+    by_initials = {}
+    for row in local_rows:
+        ini = initials_from_name(row.get("student_name")) if initials_from_name else None
+        if ini and ini not in by_initials:
+            by_initials[ini] = row
+
+    trackable = []
+    for s in registered:
+        ini = s.get("initials")
+        program = s.get("program") or "-"
+        match = by_initials.get(ini)
+        if match:
+            key = match["student_name"]
+            display = f"{key} ({ini} · {program})"
+        else:
+            key = ini
+            display = f"{ini} ({program})"
+        trackable.append({
+            "initials": ini,
+            "program": s.get("program"),
+            "key": key,
+            "display": display,
+            "row": match,
+        })
+    return trackable
+
+
+def upsert_behaviour_definition(key, program, beh_name, definition):
+    """Create or update this student's single tracked behaviour +
+    definition in scatter_students, keyed by `key` (see note above)."""
+    sb = get_sb()
+    if not sb:
+        return False
+    try:
+        beh_defs = {beh_name: definition} if beh_name and definition else {}
+        existing = sb.table("scatter_students").select("id").eq("student_name", key).execute()
+        if existing.data:
+            sb.table("scatter_students").update({
+                "behaviour_definitions": json.dumps(beh_defs) if beh_defs else None,
+                "program_type": program,
+            }).eq("id", existing.data[0]["id"]).execute()
+        else:
+            sb.table("scatter_students").insert({
+                "student_name": key,
+                "name": key,
+                "program_type": program,
+                "behaviour_definitions": json.dumps(beh_defs) if beh_defs else None,
+            }).execute()
+        get_trackable_students.clear()
+        return True
+    except Exception as e:
+        st.error(f"Save error: {e}")
+        return False
+
+# ==============================================================================
 # GROQ AI (shared fallback chain — matches the fleet-wide fix used elsewhere
 # in the portal: gpt-oss-120b -> qwen3.6-27b -> llama-3.3-70b-versatile,
 # because Groq retired llama-3.3-70b-versatile for free/dev-tier accounts
@@ -123,6 +209,23 @@ def groq_ai_call(prompt, temperature=0.3, max_tokens=120):
                     continue
                 break  # non-413 error: try next model in the chain
     raise last_err
+
+# ==============================================================================
+# BEHAVIOUR TEMPLATES (shared by the Students page and the Setup page)
+# ==============================================================================
+BEHAVIOUR_TEMPLATES = {
+    "": "—",
+    "Hitting": "Making forceful contact with another person using an open or closed hand. Includes slapping, punching, striking. Excludes accidental contact, light taps, high-fives.",
+    "Pushing": "Using hands, arms, or body to forcefully move another person. Includes shoving, bumping with force. Excludes gentle guidance, accidental contact.",
+    "Kicking": "Making forceful contact with another person using foot or leg. Includes kicking, stomping, tripping. Excludes accidental contact, stretching.",
+    "Yelling": "Speaking louder than conversational tone for 3+ seconds. Includes shouting, screaming. Excludes excited play voice, calling from distance.",
+    "Task refusal": "Refusing to begin or continue assigned work. Includes saying 'no', pushing materials away. Excludes asking for help, requesting breaks.",
+    "Leaving area": "Moving beyond boundaries without permission. Includes leaving classroom, wandering. Excludes transitions with class.",
+    "Throwing objects": "Propelling objects through air with force. Includes throwing books, materials. Excludes passing items, accidental drops.",
+    "Swearing": "Using profanity or inappropriate language. Includes curse words. Excludes repeating without understanding.",
+    "Property destruction": "Damaging or breaking materials. Includes tearing, breaking, scratching. Excludes accidental damage.",
+    "Self-hitting": "Making forceful contact with own body. Includes hitting head with hand or on objects. Excludes scratching itch.",
+}
 
 # ==============================================================================
 # SESSION STATE
@@ -179,254 +282,132 @@ st.markdown("---")
 # ==============================================================================
 # PAGE 1: STUDENTS
 # ==============================================================================
+# ==============================================================================
+# PAGE 1: STUDENTS (target behaviour management)
+# ==============================================================================
 if st.session_state.page == 'students':
-    st.markdown("## 👤 Student Management")
-    
-    @st.cache_data(ttl=60)
-    def load_students():
-        sb = get_sb()
-        if not sb: return []
-        try:
-            res = sb.table("scatter_students").select("*").order("student_name").execute()
-            return res.data or []
-        except:
-            return []
-    
-    students = load_students()
-    
-    # Add student
-    with st.expander("➕ Add New Student", expanded=not students):
-        new_name = st.text_input("Student Name")
-        new_prog = st.selectbox("Program", ["JP", "PY", "SY"])
-        
-        st.markdown("**Optional: Target Behaviours with Definitions**")
-        
-        # AI Connection Test
-        with st.expander("🔧 Test AI Connection (click if AI not working)"):
-            if st.button("Test Groq API Connection"):
-                try:
-                    api_key = st.secrets.get("GROQ_API_KEY") or st.secrets.get("groq", {}).get("api_key")
-                    if not api_key:
-                        st.error("❌ No API key found. Add GROQ_API_KEY to Render secrets.")
-                    else:
-                        st.info(f"✓ API key found: {api_key[:8]}...")
-                        result = groq_ai_call("Say 'test successful'", temperature=0.0, max_tokens=10)
-                        st.success(f"✅ AI Working! Response: {result}")
-                except ImportError as e:
-                    st.error(f"❌ Groq library not installed: {e}")
-                except Exception as e:
-                    st.error(f"❌ Connection failed: {str(e)}")
-        
-        st.caption("Select from templates below, or use AI to generate custom definitions")
-        
-        # Pre-built templates
-        TEMPLATES = {
-            "": "—",
-            "Hitting": "Making forceful contact with another person using an open or closed hand. Includes slapping, punching, striking. Excludes accidental contact, light taps, high-fives.",
-            "Pushing": "Using hands, arms, or body to forcefully move another person. Includes shoving, bumping with force. Excludes gentle guidance, accidental contact.",
-            "Kicking": "Making forceful contact with another person using foot or leg. Includes kicking, stomping, tripping. Excludes accidental contact, stretching.",
-            "Yelling": "Speaking louder than conversational tone for 3+ seconds. Includes shouting, screaming. Excludes excited play voice, calling from distance.",
-            "Task refusal": "Refusing to begin or continue assigned work. Includes saying 'no', pushing materials away. Excludes asking for help, requesting breaks.",
-            "Leaving area": "Moving beyond boundaries without permission. Includes leaving classroom, wandering. Excludes transitions with class.",
-            "Throwing objects": "Propelling objects through air with force. Includes throwing books, materials. Excludes passing items, accidental drops.",
-            "Swearing": "Using profanity or inappropriate language. Includes curse words. Excludes repeating without understanding.",
-            "Property destruction": "Damaging or breaking materials. Includes tearing, breaking, scratching. Excludes accidental damage.",
-            "Self-hitting": "Making forceful contact with own body. Includes hitting head with hand or on objects. Excludes scratching itch.",
-        }
-        
-        # Behaviour 1
-        st.markdown("**Behaviour 1**")
-        
-        col1a, col1b = st.columns([1, 1])
-        with col1a:
-            template1 = st.selectbox("Quick select from templates", list(TEMPLATES.keys()), key="temp1")
-        with col1b:
-            st.markdown("<br>", unsafe_allow_html=True)
-            st.caption("Or type your own below ↓")
-        
-        col1, col2 = st.columns([4, 1])
-        with col1:
-            beh1_name = st.text_input(
-                "Behaviour name (select from dropdown OR type custom)", 
-                value=template1 if template1 else "",
-                key="new_beh1",
-                placeholder="e.g., 'Hitting' or 'Interrupting others'"
-            )
-        with col2:
-            if st.button("🤖 AI", key="ai1", use_container_width=True, help="Generate definition with AI"):
-                if beh1_name:
-                    with st.spinner("Generating..."):
-                        try:
-                            st.session_state['ai_gen1'] = groq_ai_call(
-                                f"Write a 2-3 sentence operational definition for the school behaviour '{beh1_name}'. Format: Description. Includes examples. Excludes non-examples."
-                            )
-                            st.success("✅ Generated!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"AI Error: {str(e)[:100]}")
-        
-        # Show definition in prominent box
-        def_value = st.session_state.get('ai_gen1', TEMPLATES.get(template1, ''))
-        if def_value:
-            st.info(f"📋 **Definition:** {def_value}")
-        
-        beh1_def = st.text_area(
-            "Edit definition if needed",
-            value=def_value,
-            height=80,
-            key="def1",
-            placeholder="Observable, measurable description"
+    st.markdown("## 👤 Target Behaviour")
+    st.caption("Students are added and archived via the Student Register — they'll appear here automatically once active.")
+
+    trackable = get_trackable_students()
+
+    if fetch_register is None:
+        st.error("❌ Could not load `archive_utils` — the Student Register module isn't available. Check the deployment.")
+        st.stop()
+
+    if not trackable:
+        st.warning("⚠️ No active students found in the Student Register. Add students there first.")
+        st.stop()
+
+    selected_display = st.selectbox("Select Student", options=[t['display'] for t in trackable])
+    selected = next(t for t in trackable if t['display'] == selected_display)
+
+    # AI Connection Test
+    with st.expander("🔧 Test AI Connection (click if AI not working)"):
+        if st.button("Test Groq API Connection"):
+            try:
+                api_key = st.secrets.get("GROQ_API_KEY") or st.secrets.get("groq", {}).get("api_key")
+                if not api_key:
+                    st.error("❌ No API key found. Add GROQ_API_KEY to Render secrets.")
+                else:
+                    st.info(f"✓ API key found: {api_key[:8]}...")
+                    result = groq_ai_call("Say 'test successful'", temperature=0.0, max_tokens=10)
+                    st.success(f"✅ AI Working! Response: {result}")
+            except ImportError as e:
+                st.error(f"❌ Groq library not installed: {e}")
+            except Exception as e:
+                st.error(f"❌ Connection failed: {str(e)}")
+
+    st.caption("Select from templates below, or use AI to generate a custom definition")
+
+    # Existing definition, if any
+    existing_defs = {}
+    if selected['row']:
+        raw = selected['row'].get('behaviour_definitions')
+        if raw:
+            try:
+                existing_defs = json.loads(raw) if isinstance(raw, str) else raw
+            except Exception:
+                existing_defs = {}
+    existing_beh = next(iter(existing_defs), '')
+    existing_def = existing_defs.get(existing_beh, '')
+
+    st.markdown("**Behaviour**")
+
+    col1a, col1b = st.columns([1, 1])
+    with col1a:
+        template1 = st.selectbox(
+            "Quick select from templates",
+            list(BEHAVIOUR_TEMPLATES.keys()),
+            index=list(BEHAVIOUR_TEMPLATES.keys()).index(existing_beh) if existing_beh in BEHAVIOUR_TEMPLATES else 0,
+            key="temp1"
         )
-        
-        # Behaviour 2
-        st.markdown("**Behaviour 2 (optional)**")
-        
-        col2a, col2b = st.columns([1, 1])
-        with col2a:
-            template2 = st.selectbox("Quick select from templates", list(TEMPLATES.keys()), key="temp2")
-        with col2b:
-            st.markdown("<br>", unsafe_allow_html=True)
-            st.caption("Or type your own below ↓")
-        
-        col1, col2 = st.columns([4, 1])
-        with col1:
-            beh2_name = st.text_input(
-                "Behaviour name (select from dropdown OR type custom)",
-                value=template2 if template2 else "",
-                key="new_beh2",
-                placeholder="e.g., 'Task refusal' or custom behaviour"
-            )
-        with col2:
-            if st.button("🤖 AI", key="ai2", use_container_width=True):
-                if beh2_name:
-                    with st.spinner("Generating..."):
-                        try:
-                            st.session_state['ai_gen2'] = groq_ai_call(
-                                f"Write a 2-3 sentence operational definition for the school behaviour '{beh2_name}'. Format: Description. Includes examples. Excludes non-examples."
-                            )
-                            st.success("✅ Generated!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"AI Error: {str(e)[:100]}")
-        
-        def_value2 = st.session_state.get('ai_gen2', TEMPLATES.get(template2, ''))
-        if def_value2:
-            st.info(f"📋 **Definition:** {def_value2}")
-        
-        beh2_def = st.text_area(
-            "Edit definition if needed",
-            value=def_value2,
-            height=80,
-            key="def2"
+    with col1b:
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.caption("Or type your own below ↓")
+
+    col1, col2 = st.columns([4, 1])
+    with col1:
+        beh1_name = st.text_input(
+            "Behaviour name (select from dropdown OR type custom)",
+            value=template1 if template1 else existing_beh,
+            key="new_beh1",
+            placeholder="e.g., 'Hitting' or 'Interrupting others'"
         )
-        
-        # Behaviour 3
-        st.markdown("**Behaviour 3 (optional)**")
-        
-        col3a, col3b = st.columns([1, 1])
-        with col3a:
-            template3 = st.selectbox("Quick select from templates", list(TEMPLATES.keys()), key="temp3")
-        with col3b:
-            st.markdown("<br>", unsafe_allow_html=True)
-            st.caption("Or type your own below ↓")
-        
-        col1, col2 = st.columns([4, 1])
-        with col1:
-            beh3_name = st.text_input(
-                "Behaviour name (select from dropdown OR type custom)",
-                value=template3 if template3 else "",
-                key="new_beh3",
-                placeholder="e.g., 'Swearing' or custom behaviour"
-            )
-        with col2:
-            if st.button("🤖 AI", key="ai3", use_container_width=True):
-                if beh3_name:
-                    with st.spinner("Generating..."):
-                        try:
-                            st.session_state['ai_gen3'] = groq_ai_call(
-                                f"Write a 2-3 sentence operational definition for the school behaviour '{beh3_name}'. Format: Description. Includes examples. Excludes non-examples."
-                            )
-                            st.success("✅ Generated!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"AI Error: {str(e)[:100]}")
-        
-        def_value3 = st.session_state.get('ai_gen3', TEMPLATES.get(template3, ''))
-        if def_value3:
-            st.info(f"📋 **Definition:** {def_value3}")
-        
-        beh3_def = st.text_area(
-            "Edit definition if needed",
-            value=def_value3,
-            height=80,
-            key="def3"
-        )
-        
-        if st.button("Add Student", type="primary", use_container_width=True):
-            if new_name:
-                # Build definitions dict
-                beh_defs = {}
-                if beh1_name and beh1_def: beh_defs[beh1_name] = beh1_def
-                if beh2_name and beh2_def: beh_defs[beh2_name] = beh2_def
-                if beh3_name and beh3_def: beh_defs[beh3_name] = beh3_def
-                
-                sb = get_sb()
-                if sb:
+    with col2:
+        if st.button("🤖 AI", key="ai1", use_container_width=True, help="Generate definition with AI"):
+            if beh1_name:
+                with st.spinner("Generating..."):
                     try:
-                        sb.table("scatter_students").insert({
-                            "student_name": new_name,
-                            "name": new_name,
-                            "program_type": new_prog,
-                            "behaviour_definitions": json.dumps(beh_defs) if beh_defs else None
-                        }).execute()
-                        st.success(f"✅ Added {new_name}")
-                        # Clear AI generated definitions
-                        for key in ['ai_def1', 'ai_def2', 'ai_def3']:
-                            if key in st.session_state:
-                                del st.session_state[key]
-                        load_students.clear()
+                        st.session_state['ai_gen1'] = groq_ai_call(
+                            f"Write a 2-3 sentence operational definition for the school behaviour '{beh1_name}'. Format: Description. Includes examples. Excludes non-examples."
+                        )
+                        st.success("✅ Generated!")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Error: {e}")
-    
+                        st.error(f"AI Error: {str(e)[:100]}")
+
+    # Show definition in prominent box
+    def_value = st.session_state.get('ai_gen1', BEHAVIOUR_TEMPLATES.get(template1) or existing_def)
+    if def_value:
+        st.info(f"📋 **Definition:** {def_value}")
+
+    beh1_def = st.text_area(
+        "Edit definition if needed",
+        value=def_value,
+        height=80,
+        key="def1",
+        placeholder="Observable, measurable description"
+    )
+
+    if st.button("💾 Save Behaviour Definition", type="primary", use_container_width=True):
+        if upsert_behaviour_definition(selected['key'], selected['program'], beh1_name, beh1_def):
+            st.success(f"✅ Saved for {selected['initials']}")
+            if 'ai_gen1' in st.session_state:
+                del st.session_state['ai_gen1']
+            st.rerun()
+
+    st.markdown("---")
+
     # List students
-    if students:
-        st.markdown("### Current Students")
-        for stu in students:
-            with st.expander(f"**{stu['student_name']}** ({stu.get('program_type', '-')})"):
-                st.markdown(f"**Program:** {stu.get('program_type', 'Not set')}")
-                
-                # Show behaviour definitions
-                beh_defs = stu.get('behaviour_definitions')
-                if beh_defs:
-                    if isinstance(beh_defs, str):
-                        try:
-                            beh_defs = json.loads(beh_defs)
-                        except:
-                            beh_defs = {}
-                    
-                    if beh_defs:
-                        st.markdown("**Target Behaviours:**")
-                        for beh_name, beh_def in beh_defs.items():
-                            st.markdown(f"- **{beh_name}:** {beh_def}")
-                    else:
-                        st.caption("No behaviour definitions set")
-                else:
-                    st.caption("No behaviour definitions set")
-                
-                st.markdown("---")
-                
-                if st.button("🗑️ Delete Student", key=f"del_{stu['id']}", use_container_width=True):
-                    if st.checkbox(f"Confirm delete {stu['student_name']}", key=f"conf_{stu['id']}"):
-                        sb = get_sb()
-                        if sb:
-                            try:
-                                sb.table("scatter_students").delete().eq("id", stu['id']).execute()
-                                st.success("✅ Deleted")
-                                load_students.clear()
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Error: {e}")
+    st.markdown("### Current Students")
+    for t in trackable:
+        with st.expander(f"**{t['display']}**"):
+            st.markdown(f"**Program:** {t.get('program') or 'Not set'}")
+            beh_defs = {}
+            if t['row']:
+                raw = t['row'].get('behaviour_definitions')
+                if raw:
+                    try:
+                        beh_defs = json.loads(raw) if isinstance(raw, str) else raw
+                    except Exception:
+                        beh_defs = {}
+            if beh_defs:
+                st.markdown("**Target Behaviour:**")
+                for beh_name, beh_def in beh_defs.items():
+                    st.markdown(f"- **{beh_name}:** {beh_def}")
+            else:
+                st.caption("No behaviour definition set")
 
 # ==============================================================================
 # PAGE 2: SETUP
@@ -438,44 +419,21 @@ elif st.session_state.page == 'setup':
     # Student selection
     st.markdown("### 1. Student")
     
-    @st.cache_data(ttl=120)
-    def load_students():
-        sb = get_sb()
-        if not sb: return []
-        try:
-            res = sb.table("scatter_students").select("*").order("student_name").execute()
-            return res.data or []
-        except:
-            return []
+    trackable = get_trackable_students()
     
-    students = load_students()
-    
-    if not students:
-        st.warning("⚠️ No students found. Add a student first.")
-        new_name = st.text_input("Student Name")
-        new_prog = st.selectbox("Program", ["JP", "PY", "SY"])
-        if st.button("Add Student", type="primary"):
-            sb = get_sb()
-            if sb and new_name:
-                try:
-                    sb.table("scatter_students").insert({
-                        "student_name": new_name.strip(),
-                        "name": new_name.strip(),
-                        "program_type": new_prog
-                    }).execute()
-                    st.success(f"✅ Added {new_name}")
-                    load_students.clear()
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error: {e}")
+    if not trackable:
+        st.warning("⚠️ No active students found in the Student Register. Add students there first.")
+        st.stop()
     else:
-        student_names = [s['student_name'] for s in students]
-        selected = st.selectbox(
+        display_options = [t['display'] for t in trackable]
+        current_display = next((t['display'] for t in trackable if t['key'] == st.session_state.student_name), display_options[0])
+        selected_display = st.selectbox(
             "Select Student",
-            options=student_names,
-            index=student_names.index(st.session_state.student_name) if st.session_state.student_name in student_names else 0
+            options=display_options,
+            index=display_options.index(current_display)
         )
-        st.session_state.student_name = selected
+        selected_student = next(t for t in trackable if t['display'] == selected_display)
+        st.session_state.student_name = selected_student['key']
     
     st.markdown("---")
     
@@ -496,55 +454,37 @@ elif st.session_state.page == 'setup':
     st.markdown("---")
     
     # Target behaviours
-    st.markdown("### 3. Target Behaviours")
+    st.markdown("### 3. Target Behaviour")
     
-    # Check if student has pre-defined behaviours
-    student_obj = [s for s in students if s['student_name'] == selected][0] if selected else None
+    # Check if student has a pre-defined behaviour
+    student_row = selected_student['row']
     has_predefined = False
+    beh_defs = {}
     
-    if student_obj:
-        beh_defs = student_obj.get('behaviour_definitions')
-        if beh_defs:
-            if isinstance(beh_defs, str):
-                try:
-                    beh_defs = json.loads(beh_defs)
-                    has_predefined = bool(beh_defs)
-                except:
-                    pass
-            else:
+    if student_row:
+        raw = student_row.get('behaviour_definitions')
+        if raw:
+            try:
+                beh_defs = json.loads(raw) if isinstance(raw, str) else raw
                 has_predefined = bool(beh_defs)
+            except:
+                pass
     
     if has_predefined:
-        st.info(f"📋 {selected} has pre-defined behaviours: {', '.join(beh_defs.keys())}")
-        if st.button("✨ Use Pre-defined Behaviours", use_container_width=True):
-            st.session_state.behaviours = list(beh_defs.keys())[:3]
+        st.info(f"📋 {selected_student['initials']} has a pre-defined behaviour: {', '.join(beh_defs.keys())}")
+        if st.button("✨ Use Pre-defined Behaviour", use_container_width=True):
+            st.session_state.behaviours = list(beh_defs.keys())[:1]
             st.rerun()
     
-    st.caption("Select from templates or type custom behaviour names")
+    st.caption("Select from templates or type a custom behaviour name")
+    st.markdown("**For a custom behaviour not in templates, type the name and click AI to generate a definition**")
     
-    # Behaviour templates
-    TEMPLATES = {
-        "": "—",
-        "Hitting": "Making forceful contact with another person using an open or closed hand. Includes slapping, punching, striking. Excludes accidental contact, light taps, high-fives.",
-        "Pushing": "Using hands, arms, or body to forcefully move another person. Includes shoving, bumping with force. Excludes gentle guidance, accidental contact.",
-        "Kicking": "Making forceful contact with another person using foot or leg. Includes kicking, stomping, tripping. Excludes accidental contact, stretching.",
-        "Yelling": "Speaking louder than conversational tone for 3+ seconds. Includes shouting, screaming. Excludes excited play voice, calling from distance.",
-        "Task refusal": "Refusing to begin or continue assigned work. Includes saying 'no', pushing materials away. Excludes asking for help, requesting breaks.",
-        "Leaving area": "Moving beyond boundaries without permission. Includes leaving classroom, wandering. Excludes transitions with class.",
-        "Throwing objects": "Propelling objects through air with force. Includes throwing books, materials. Excludes passing items, accidental drops.",
-        "Swearing": "Using profanity or inappropriate language. Includes curse words. Excludes repeating without understanding.",
-        "Property destruction": "Damaging or breaking materials. Includes tearing, breaking, scratching. Excludes accidental damage.",
-        "Self-hitting": "Making forceful contact with own body. Includes hitting head with hand or on objects. Excludes scratching itch.",
-    }
-    
-    st.markdown("**For custom behaviours not in templates, type name and click AI to generate definition**")
-    
-    # Behaviour 1
+    # Behaviour
     col1, col2 = st.columns([4, 1])
     with col1:
-        template1 = st.selectbox("Select Behaviour 1 or type custom below", list(TEMPLATES.keys()), key="setup_temp1")
+        template1 = st.selectbox("Select Behaviour or type custom below", list(BEHAVIOUR_TEMPLATES.keys()), key="setup_temp1")
         beh1 = st.text_input(
-            "Behaviour 1 name", 
+            "Behaviour name", 
             value=(template1 if template1 and template1 != "—" else st.session_state.get('setup_beh1', '')),
             key="beh1",
             placeholder="Select from dropdown OR type custom"
@@ -565,143 +505,16 @@ elif st.session_state.page == 'setup':
                         )
                         st.session_state[f'setup_def_{beh1}'] = new_def
 
-                        # Update student record
-                        sb = get_sb()
-                        if sb and st.session_state.student_name:
-                            try:
-                                # Get current definitions
-                                res = sb.table("scatter_students").select("behaviour_definitions").eq("student_name", st.session_state.student_name).execute()
-                                current_defs = {}
-                                if res.data:
-                                    defs = res.data[0].get('behaviour_definitions')
-                                    if defs:
-                                        current_defs = json.loads(defs) if isinstance(defs, str) else defs
-
-                                # Add new definition
-                                current_defs[beh1] = new_def
-
-                                # Save back
-                                sb.table("scatter_students").update({
-                                    "behaviour_definitions": json.dumps(current_defs)
-                                }).eq("student_name", st.session_state.student_name).execute()
-
-                                st.success("✅ Generated & saved!")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Save error: {e}")
+                        if upsert_behaviour_definition(selected_student['key'], selected_student['program'], beh1, new_def):
+                            st.success("✅ Generated & saved!")
+                            st.rerun()
                     except Exception as e:
                         st.error(f"AI Error: {str(e)[:80]}")
     
     # Show definition if available
-    def1 = st.session_state.get(f'setup_def_{beh1}', TEMPLATES.get(template1, ''))
+    def1 = st.session_state.get(f'setup_def_{beh1}', BEHAVIOUR_TEMPLATES.get(template1) or beh_defs.get(beh1, ''))
     if def1:
         st.info(f"📋 {def1}")
-    
-    # Behaviour 2
-    col1, col2 = st.columns([4, 1])
-    with col1:
-        template2 = st.selectbox("Select Behaviour 2 (optional)", list(TEMPLATES.keys()), key="setup_temp2")
-        beh2 = st.text_input(
-            "Behaviour 2 name",
-            value=(template2 if template2 and template2 != "—" else st.session_state.get('setup_beh2', '')),
-            key="beh2",
-            placeholder="Select from dropdown OR type custom"
-        )
-        # ALWAYS save to session state
-        st.session_state['setup_beh2'] = beh2 if beh2 else ''
-    with col2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🤖 AI", key="setup_ai2", use_container_width=True):
-            if beh2:
-                # Save behaviour name before generating
-                st.session_state['setup_beh2'] = beh2
-                
-                with st.spinner("Generating..."):
-                    try:
-                        new_def = groq_ai_call(
-                            f"Write a 2-3 sentence operational definition for the school behaviour '{beh2}'. Format: Description. Includes examples. Excludes non-examples."
-                        )
-                        st.session_state[f'setup_def_{beh2}'] = new_def
-
-                        sb = get_sb()
-                        if sb and st.session_state.student_name:
-                            try:
-                                res = sb.table("scatter_students").select("behaviour_definitions").eq("student_name", st.session_state.student_name).execute()
-                                current_defs = {}
-                                if res.data:
-                                    defs = res.data[0].get('behaviour_definitions')
-                                    if defs:
-                                        current_defs = json.loads(defs) if isinstance(defs, str) else defs
-
-                                current_defs[beh2] = new_def
-
-                                sb.table("scatter_students").update({
-                                    "behaviour_definitions": json.dumps(current_defs)
-                                }).eq("student_name", st.session_state.student_name).execute()
-
-                                st.success("✅ Generated & saved!")
-                                st.rerun()
-                            except:
-                                pass
-                    except Exception as e:
-                        st.error(f"AI Error: {str(e)[:80]}")
-    
-    def2 = st.session_state.get(f'setup_def_{beh2}', TEMPLATES.get(template2, ''))
-    if def2:
-        st.info(f"📋 {def2}")
-    
-    # Behaviour 3
-    col1, col2 = st.columns([4, 1])
-    with col1:
-        template3 = st.selectbox("Select Behaviour 3 (optional)", list(TEMPLATES.keys()), key="setup_temp3")
-        beh3 = st.text_input(
-            "Behaviour 3 name",
-            value=(template3 if template3 and template3 != "—" else st.session_state.get('setup_beh3', '')),
-            key="beh3",
-            placeholder="Select from dropdown OR type custom"
-        )
-        # ALWAYS save to session state
-        st.session_state['setup_beh3'] = beh3 if beh3 else ''
-    with col2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🤖 AI", key="setup_ai3", use_container_width=True):
-            if beh3:
-                # Save behaviour name before generating
-                st.session_state['setup_beh3'] = beh3
-                
-                with st.spinner("Generating..."):
-                    try:
-                        new_def = groq_ai_call(
-                            f"Write a 2-3 sentence operational definition for the school behaviour '{beh3}'. Format: Description. Includes examples. Excludes non-examples."
-                        )
-                        st.session_state[f'setup_def_{beh3}'] = new_def
-
-                        sb = get_sb()
-                        if sb and st.session_state.student_name:
-                            try:
-                                res = sb.table("scatter_students").select("behaviour_definitions").eq("student_name", st.session_state.student_name).execute()
-                                current_defs = {}
-                                if res.data:
-                                    defs = res.data[0].get('behaviour_definitions')
-                                    if defs:
-                                        current_defs = json.loads(defs) if isinstance(defs, str) else defs
-
-                                current_defs[beh3] = new_def
-
-                                sb.table("scatter_students").update({
-                                    "behaviour_definitions": json.dumps(current_defs)
-                                }).eq("student_name", st.session_state.student_name).execute()
-
-                                st.success("✅ Generated & saved!")
-                                st.rerun()
-                            except:
-                                pass
-                    except Exception as e:
-                        st.error(f"AI Error: {str(e)[:80]}")
-    
-    def3 = st.session_state.get(f'setup_def_{beh3}', TEMPLATES.get(template3, ''))
-    if def3:
-        st.info(f"📋 {def3}")
     
     st.markdown("---")
     
@@ -738,46 +551,18 @@ elif st.session_state.page == 'setup':
     
     st.markdown("---")
     
-    # DEBUG: Show raw values
-    with st.expander("🔍 DEBUG - Click to see what values we have", expanded=False):
-        st.write("**Widget values:**")
-        st.write(f"- beh1 (widget): `{beh1}` (length: {len(beh1) if beh1 else 0})")
-        st.write(f"- beh2 (widget): `{beh2}` (length: {len(beh2) if beh2 else 0})")
-        st.write(f"- beh3 (widget): `{beh3}` (length: {len(beh3) if beh3 else 0})")
-        st.write("")
-        st.write("**Session state values:**")
-        st.write(f"- setup_beh1: `{st.session_state.get('setup_beh1', 'NOT SET')}`")
-        st.write(f"- setup_beh2: `{st.session_state.get('setup_beh2', 'NOT SET')}`")
-        st.write(f"- setup_beh3: `{st.session_state.get('setup_beh3', 'NOT SET')}`")
-    
-    # Build behaviours list from inputs (use template, then widget, then session_state)
+    # Build behaviours list from the single behaviour input (use widget, then template, then session_state)
     behaviours = []
-    
-    # Behaviour 1
     val1 = beh1 if beh1 else (template1 if template1 and template1 != "—" else st.session_state.get('setup_beh1', ''))
     if val1 and val1.strip():
         behaviours.append(val1.strip())
-        st.write(f"DEBUG: Added behaviour 1: '{val1.strip()}'")
-    
-    # Behaviour 2  
-    val2 = beh2 if beh2 else (template2 if template2 and template2 != "—" else st.session_state.get('setup_beh2', ''))
-    if val2 and val2.strip():
-        behaviours.append(val2.strip())
-        st.write(f"DEBUG: Added behaviour 2: '{val2.strip()}'")
-    
-    # Behaviour 3
-    val3 = beh3 if beh3 else (template3 if template3 and template3 != "—" else st.session_state.get('setup_beh3', ''))
-    if val3 and val3.strip():
-        behaviours.append(val3.strip())
-        st.write(f"DEBUG: Added behaviour 3: '{val3.strip()}'")
     
     st.session_state.behaviours = behaviours
     
-    # Debug: Show what will be saved
     if behaviours:
-        st.info(f"✅ Ready to track: **{', '.join(behaviours)}** ({len(behaviours)} behaviour(s))")
+        st.info(f"✅ Ready to track: **{behaviours[0]}**")
     else:
-        st.error("❌ No behaviours detected!")
+        st.error("❌ Please select or enter a behaviour to track")
     
     # Save and continue
     if st.button("✅ Setup Complete - Start Recording", type="primary", use_container_width=True):
@@ -874,14 +659,6 @@ elif st.session_state.page == 'record':
     # Initialize grid data if needed
     if not st.session_state.grid_data:
         st.session_state.grid_data = {}
-    
-    # Debug: Show exactly what we have
-    st.success(f"✅ Tracking **{len(behaviours)}** behaviour(s):")
-    for i, beh in enumerate(behaviours):
-        st.write(f"  {i+1}. {beh}")
-    
-    if len(behaviours) == 1:
-        st.warning("⚠️ Only 1 behaviour detected. If you set up multiple behaviours, they may not have been saved correctly. Check Setup page.")
     
     st.markdown("### 📊 Weekly Grid")
     st.caption("Click any cell to add a tally mark ( / ). Click repeatedly to add more.")
