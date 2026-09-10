@@ -645,6 +645,17 @@ meeting_options = ["➕ New Meeting"] + [
     for m in existing_meetings
 ]
 
+# ── "Edit / Add to This Meeting" jump from the Meeting Archive tab ─────────
+# Streamlit won't let a script set `st.session_state["staff_meeting_selector"]`
+# in the SAME run where the button that requests it lives, because that
+# selectbox is instantiated further down the page — assigning to its key
+# after it's already rendered raises StreamlitWidgetAlreadyInstantiatedError.
+# So the archive button only stashes the requested label in a plain
+# (non-widget) session_state slot and reruns; THIS code, which runs before
+# the selectbox exists at all, is what actually applies the jump.
+if "_pending_meeting_jump" in st.session_state:
+    st.session_state["staff_meeting_selector"] = st.session_state.pop("_pending_meeting_jump")
+
 selected_option = st.selectbox("Choose a meeting", options=meeting_options, key="staff_meeting_selector")
 
 if selected_option == "➕ New Meeting":
@@ -758,9 +769,23 @@ with tab2:
                         except:
                             pass
 
-                # ── Download + delete this archived meeting ────────────────────
+                # ── Edit + download + delete this archived meeting ──────────────
                 st.markdown("---")
-                col_arc_dl, col_arc_del = st.columns([1, 1])
+                col_arc_edit, col_arc_dl, col_arc_del = st.columns([1.3, 1, 1])
+                with col_arc_edit:
+                    if st.button("✏️ Edit / Add to This Meeting", key=f"edit_archived_{meeting['id']}",
+                                 type="primary", use_container_width=True):
+                        _edit_label = (
+                            f"{meeting['meeting_date']} - T{meeting.get('term', '?')} "
+                            f"W{meeting.get('week_number', '?')} - {meeting.get('minute_taker', 'Unknown')}"
+                        )
+                        st.session_state["_pending_meeting_jump"] = _edit_label
+                        st.session_state.current_staff_meeting_id = meeting['id']
+                        st.success(
+                            "✅ Loaded. Click the **📝 Current Meeting** tab at the top of the page "
+                            "to continue editing this meeting — it's now pre-selected there."
+                        )
+                        st.rerun()
                 with col_arc_dl:
                     if DOCX_AVAILABLE and (meeting.get('minutes') or '').strip():
                         st.download_button(
