@@ -1081,13 +1081,19 @@ with tab1:
         st.session_state['simple_agenda_items'] = "\n".join(_saved_additional)
         st.session_state[_ss_key] = True
     
+    _agenda_mkey = st.session_state.current_staff_meeting_id or "new"
     for item in STANDING_AGENDA_ITEMS:
         with st.expander(f"📌 {item}"):
+            # Namespaced per meeting (_agenda_mkey) for the same reason as the
+            # Minutes section fields below: Streamlit only honours `value=`
+            # the first time a widget key is created, so an un-namespaced key
+            # here would keep showing one meeting's agenda notes on every
+            # other meeting for the rest of the session.
             agenda_data[item] = st.text_area(
-                f"Notes for {item}", 
+                f"Notes for {item}",
                 value=agenda_data.get(item, ''),
                 height=100,
-                key=f"agenda_{item.replace(' ', '_')}",
+                key=f"agenda_{_agenda_mkey}_{item.replace(' ', '_')}",
                 placeholder=f"Add information/updates for {item}..."
             )
     
@@ -1230,7 +1236,15 @@ with tab1:
         if minutes_method == "✍️ Manual Entry":
             st.caption("Enter notes for each standing item. Leave a section blank if it wasn't discussed.")
             seed = _parse_minutes_sections(minutes)
-            section_values = _render_minutes_section_fields(seed, key_prefix="manual_section")
+            # key_prefix is namespaced per meeting — Streamlit only honours a
+            # text_area's `value=` the FIRST time its key is created; on every
+            # later rerun (including switching to a completely different
+            # meeting) it silently ignores `value=` and keeps showing
+            # whatever was last typed under that key. An un-namespaced prefix
+            # here meant every meeting after the first showed the previous
+            # meeting's frozen text instead of its own — this is what made it
+            # look like the tool "wouldn't let you add" anything.
+            section_values = _render_minutes_section_fields(seed, key_prefix=f"manual_section_{_minutes_mkey}")
             minutes = _build_minutes_from_sections(section_values)
         
         else:  # AI from Transcript
@@ -1454,12 +1468,17 @@ MEETING SYNTHESIS:
                             # The synthesis already merges any multi-part transcript (Step 1
                             # appends rather than overwrites), so a single classification pass
                             # over the whole thing can just replace the draft sections outright.
-                            st.session_state["ai_section_values"] = new_sections
+                            # Namespaced per meeting (_mkey) — an un-namespaced key here meant
+                            # a generated draft from one meeting kept showing up (and blocking
+                            # fresh transcript entry) on every other meeting for the rest of
+                            # the session, since this dict is only ever replaced, never read
+                            # per-meeting.
+                            st.session_state[f"ai_section_values_{_mkey}"] = new_sections
                             # Sync the edit widgets too — once a widget key exists in
                             # session_state, its `value=` argument is ignored on rerun,
                             # so this is what actually updates what's shown for editing.
                             for key, _ in MEETING_SECTIONS:
-                                st.session_state[f"ai_section_manual_{key}"] = new_sections[key]
+                                st.session_state[f"ai_section_manual_{_mkey}_{key}"] = new_sections[key]
 
                             st.success("✅ Minutes generated — review the sections below before saving.")
 
@@ -1472,19 +1491,19 @@ MEETING SYNTHESIS:
                 st.caption("Complete Step 1 above to produce a synthesis, then generate structured minutes from it.")
 
             # ── Review and edit the generated sections before saving ──────────
-            if st.session_state.get("ai_section_values"):
+            if st.session_state.get(f"ai_section_values_{_mkey}"):
                 st.markdown("---")
                 st.markdown("#### ✏️ Review and edit before saving")
                 col_edit, col_clear = st.columns([5, 1])
                 with col_clear:
                     st.markdown("<br>", unsafe_allow_html=True)
-                    if st.button("🗑️ Clear draft", key="clear_ai_sections"):
-                        st.session_state["ai_section_values"] = None
+                    if st.button("🗑️ Clear draft", key=f"clear_ai_sections_{_mkey}"):
+                        st.session_state[f"ai_section_values_{_mkey}"] = None
                         for key, _ in MEETING_SECTIONS:
-                            st.session_state.pop(f"ai_section_manual_{key}", None)
+                            st.session_state.pop(f"ai_section_manual_{_mkey}_{key}", None)
                         st.rerun()
-                seed = st.session_state.get("ai_section_values", {})
-                section_values = _render_minutes_section_fields(seed, key_prefix="ai_section_manual")
+                seed = st.session_state.get(f"ai_section_values_{_mkey}", {})
+                section_values = _render_minutes_section_fields(seed, key_prefix=f"ai_section_manual_{_mkey}")
                 minutes = _build_minutes_from_sections(section_values)
             else:
                 st.info("Paste or upload a transcript, then run Step 1 and Step 2 above to fill in "
