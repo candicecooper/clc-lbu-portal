@@ -225,6 +225,66 @@ REFERENCE_DOCS = {
             "This guide is a draft — send the set-up steps to complete it.",
         ],
     },
+    "critical_incident": {
+        "menu": "🚨 Critical Incident Reporting Management (as needed)",
+        "title": "Critical Incident Reporting Management — Quick Reference",
+        "subtitle": "Cowandilla Learning Centre (LBU) • Needs-basis guide — follow only when a "
+                    "critical incident occurs. The whole process must be complete within 24 hours.",
+        "sections": [
+            ("① Incident is flagged", [
+                "Incident is flagged through Teams, where the report is uploaded.",
+                "Admin receives a physical copy of the report, signed by the Manager, to be "
+                "filed in the student's file.",
+            ]),
+            ("② Lodge on IRMS", [
+                "Lodge the incident on IRMS, ensuring all details are entered correctly.",
+                "Ensure the summary from the report is entered into IRMS.",
+                "Ensure the ABCH is attached to the report.",
+                "<b>This must all occur within the first 24 hours after the incident occurs.</b>",
+            ]),
+            ("③ Save and file the ABCH", [
+                "Save the ABCH in the student's file in OneDrive.",
+                "Also add it to the CLC shared drive, filed under Administration → the correct "
+                "year → Critical Incident → the correct Term.",
+                "Ensure it is saved with the student's name and the date.",
+            ]),
+            ("④ Update the Portal", [
+                "Add the ABCH to the Behaviour Support tool on the Portal, in the Analysis "
+                "section, under Historical Incidents.",
+            ]),
+        ],
+        "reminders": [
+            "<b>24-hour rule:</b> Teams upload → signed physical copy filed → IRMS lodged "
+            "(with summary and ABCH attached), all within 24 hours of the incident.",
+            "<b>Two homes for the ABCH:</b> the student's OneDrive file AND the CLC shared "
+            "drive (Administration / correct year / Critical Incident / correct Term).",
+            "<b>Naming:</b> always save with the student's name and the date.",
+            "<b>Don't forget the Portal:</b> Behaviour Support tool → Analysis → Historical "
+            "Incidents.",
+        ],
+    },
+    "first_aid": {
+        "menu": "🩹 First Aid & Student Injury (as needed)",
+        "title": "First Aid & Student Injury — Quick Reference",
+        "subtitle": "Cowandilla Learning Centre (LBU) • Needs-basis guide — follow only when a "
+                    "student is injured.",
+        "sections": [
+            ("① Respond", [
+                "Provide first aid to the student.",
+            ]),
+            ("② Record", [
+                "Record the incident in the incident log folder on the bookshelf.",
+                "Complete the incident on the Parent Information Record.",
+            ]),
+            ("③ Send home", [
+                "Ensure the completed Parent Information Record is sent home with the student.",
+            ]),
+        ],
+        "reminders": [
+            "<b>Always three steps:</b> first aid → incident log (bookshelf folder) → Parent "
+            "Information Record sent home with the student.",
+        ],
+    },
 }
 
 # ── Supabase client (fails to a read-only "offline" mode if unavailable) ───
