@@ -9,7 +9,11 @@ import plotly.graph_objects as go
 from datetime import date, timedelta, datetime
 import json
 
-from auth import require_auth, logout_button, get_staff_name
+try:
+    from staff_auth import get_staff_name
+except ImportError:
+    def get_staff_name():
+        return st.session_state.get("staff_name", "Staff")
 # require_auth(app_title="CLC LBU Staff Portal", app_icon="🏫")
 # logout_button()
 
