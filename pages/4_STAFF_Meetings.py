@@ -388,7 +388,7 @@ def _upload_attachment(bucket_name: str, folder: str, file) -> dict:
             path, file_bytes, {"content-type": content_type}
         )
         return {"path": path}
-    except Exception:
+    except Exception as e1:
         # Most likely cause of a first-ever upload failing: the bucket
         # doesn't exist yet. Create it and retry once before giving up.
         try:
@@ -398,20 +398,47 @@ def _upload_attachment(bucket_name: str, folder: str, file) -> dict:
             )
             return {"path": path}
         except Exception as e2:
-            return {"error": str(e2)}
+            return {"error": f"{type(e2).__name__}: {e2}  (first attempt: {type(e1).__name__}: {e1})"}
+
+
+def _extract_signed_url_value(result):
+    """Pull the signed URL out of whatever shape create_signed_url() returned
+    — different supabase-py/storage3 versions hand back a plain dict, a
+    pydantic model, or different key casing."""
+    if result is None:
+        return None
+    if isinstance(result, dict):
+        return result.get('signedURL') or result.get('signedUrl') or result.get('signed_url')
+    return (
+        getattr(result, 'signedURL', None)
+        or getattr(result, 'signedUrl', None)
+        or getattr(result, 'signed_url', None)
+    )
 
 
 def _attachment_signed_url(bucket_name: str, path: str, expires_in: int = 3600):
-    """Return a temporary signed URL to open/download a stored attachment, or
-    None if it can't be generated (e.g. the file is missing from storage)."""
+    """Return (url, error). url is a temporary signed download URL, or None
+    on failure; error is the raw exception/diagnostic text when it fails, so
+    a failure can be shown to the user instead of disappearing silently."""
     if not path:
-        return None
+        return None, "No file path stored for this attachment."
     try:
         result = supabase.storage.from_(bucket_name).create_signed_url(path, expires_in)
-        # Different supabase-py versions use different key casing.
-        return result.get('signedURL') or result.get('signedUrl') or result.get('signed_url')
-    except Exception:
-        return None
+        url = _extract_signed_url_value(result)
+        if not url:
+            return None, f"Supabase returned no signed URL ({result!r})."
+        if not (url.startswith('http://') or url.startswith('https://')):
+            # Some supabase-py versions return a URL relative to the storage
+            # API host instead of a full URL — normalise it defensively so a
+            # relative path doesn't silently produce a dead link.
+            base = SUPABASE_URL_MEETINGS.rstrip('/')
+            rel = url if url.startswith('/') else '/' + url
+            if not rel.startswith('/storage/v1'):
+                rel = '/storage/v1' + rel
+            url = base + rel
+        return url, None
+    except Exception as e:
+        return None, f"{type(e).__name__}: {e}"
 
 
 def _delete_attachment(bucket_name: str, path: str):
@@ -436,11 +463,12 @@ def _render_attachment_link(att: dict, bucket_name: str):
     label = f"📎 **{name}**" + (f" — {desc}" if desc else "")
     path = att.get('path')
     if path:
-        url = _attachment_signed_url(bucket_name, path)
+        url, err = _attachment_signed_url(bucket_name, path)
         if url:
             st.markdown(f"{label}  \n[🔗 Open / Download]({url})")
         else:
-            st.markdown(f"{label}  \n:orange[File couldn't be opened right now — it may have been removed from storage.]")
+            st.markdown(f"{label}  \n:orange[Couldn't generate a link for this file.]")
+            st.caption(f"⚠️ {err}")
     else:
         st.markdown(f"{label}  \n:gray[Added before file upload was enabled — no file stored. Delete and re-upload to attach it.]")
 
