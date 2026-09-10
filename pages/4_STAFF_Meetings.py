@@ -416,6 +416,24 @@ def _extract_signed_url_value(result):
     )
 
 
+def _decode_jwt_role(token: str) -> str:
+    """Best-effort decode of a Supabase API key's `role` claim (anon /
+    authenticated / service_role), with no signature check — this is only to
+    show which key is actually configured, not to validate it. A repeated
+    'new row violates row-level security policy' error on Storage uploads is
+    only possible if the key in use is NOT service_role (service_role bypasses
+    RLS entirely at the Postgres level, unconditionally) — so this settles
+    that question directly instead of guessing from Render/Supabase dashboards."""
+    try:
+        import base64
+        payload_b64 = token.split('.')[1]
+        padded = payload_b64 + '=' * (-len(payload_b64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded))
+        return payload.get('role', 'unknown (no role claim)')
+    except Exception:
+        return "couldn't decode — is this a valid Supabase API key?"
+
+
 def _attachment_signed_url(bucket_name: str, path: str, expires_in: int = 3600):
     """Return (url, error). url is a temporary signed download URL, or None
     on failure; error is the raw exception/diagnostic text when it fails, so
@@ -585,6 +603,27 @@ if 'current_staff_meeting_id' not in st.session_state:
 
 st.title("👥 STAFF MEETINGS")
 st.caption("Weekly All-Staff Meetings · DfE Format")
+
+# ── Storage connection diagnostics ──────────────────────────────────────────
+# Attachment uploads have been hitting a Storage RLS "row violates row-level
+# security policy" error that policy changes haven't fixed. That error is
+# only possible if the configured key is NOT service_role — service_role
+# bypasses Storage RLS unconditionally, no policy can make it happen. Rather
+# than keep guessing which key Render actually has configured, decode its
+# role claim directly and say so plainly.
+_meetings_key_role = _decode_jwt_role(SUPABASE_SERVICE_KEY_MEETINGS)
+if _meetings_key_role != "service_role":
+    st.error(
+        f"⚠️ **Attachment uploads will keep failing with a row-level security error.** "
+        f"The Supabase key configured for `SUPABASE_SERVICE_KEY_MEETINGS` has role "
+        f"**`{_meetings_key_role}`**, not `service_role` — so Storage's row-level "
+        f"security is being enforced against it (no policy can override this; only "
+        f"the real service_role key bypasses it). In Render's Environment tab, set "
+        f"`SUPABASE_SERVICE_KEY_MEETINGS` to the **service_role** secret from "
+        f"Supabase (MEETINGS project → Settings → API) — not the anon/public key — "
+        f"and redeploy."
+    )
+
 st.markdown("---")
 
 # ══════════════════════════════════════════════════════════════════════════════
