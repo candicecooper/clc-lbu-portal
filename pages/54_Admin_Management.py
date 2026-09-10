@@ -163,6 +163,7 @@ def _build_reference_pdf(title, subtitle, sections, reminders):
 # ---- Reference doc definitions (edit the text here to update a guide) ----
 REFERENCE_DOCS = {
     "student_workflow": {
+        "kind": "routine",
         "menu": "🧑‍🎓 Student Workflow — new / ending / extended",
         "title": "Student Workflow — Quick Reference",
         "subtitle": "Cowandilla Learning Centre (LBU) • The Student Register is the "
@@ -205,7 +206,8 @@ REFERENCE_DOCS = {
         ],
     },
     "admin_setup": {
-        "menu": "🗂️ Admin Set-up & Onboarding (DRAFT)",
+        "kind": "draft",
+        "menu": "🗂️ Admin Set-up & Onboarding",
         "title": "Admin Set-up & Onboarding — Quick Reference",
         "subtitle": "Cowandilla Learning Centre (LBU) • DRAFT — content to be confirmed.",
         "sections": [
@@ -226,7 +228,8 @@ REFERENCE_DOCS = {
         ],
     },
     "critical_incident": {
-        "menu": "🚨 Critical Incident Reporting Management (as needed)",
+        "kind": "needs",
+        "menu": "🚨 Critical Incident Reporting Management",
         "title": "Critical Incident Reporting Management — Quick Reference",
         "subtitle": "Cowandilla Learning Centre (LBU) • Needs-basis guide — follow only when a "
                     "critical incident occurs. The whole process must be complete within 24 hours.",
@@ -264,7 +267,8 @@ REFERENCE_DOCS = {
         ],
     },
     "first_aid": {
-        "menu": "🩹 First Aid & Student Injury (as needed)",
+        "kind": "needs",
+        "menu": "🩹 First Aid & Student Injury",
         "title": "First Aid & Student Injury — Quick Reference",
         "subtitle": "Cowandilla Learning Centre (LBU) • Needs-basis guide — follow only when a "
                     "student is injured.",
@@ -330,6 +334,17 @@ VIOLET_LIGHT = "#E9E2F5"
 GREY_DARK   = "#2E4057"
 GREY_LIGHT  = "#F2F6F6"
 SAFETY_RED  = "#C0392B"
+
+# Visual grouping for the Reference Docs tab — each guide is tagged
+# "kind" (see REFERENCE_DOCS above) and picks up this colour/label/order
+# so routine workflows, as-needed incident guides, and drafts are easy to
+# tell apart at a glance in the picker and in the guide's own banner.
+KIND_META = {
+    "routine": {"label": "Routine workflow", "icon": "📘", "color": TEAL, "light": TEAL_LIGHT},
+    "needs":   {"label": "As-needed / incident guide", "icon": "🚨", "color": AMBER, "light": AMBER_LIGHT},
+    "draft":   {"label": "Draft — not yet finalised", "icon": "✏️", "color": "#7a8894", "light": GREY_LIGHT},
+}
+KIND_ORDER = ["routine", "needs", "draft"]
 
 WEEKDAY_COLS = ["Mon", "Tue", "Wed", "Thu", "Fri"]  # date.weekday(): Mon=0..Fri=4
 
@@ -1166,6 +1181,28 @@ st.markdown(f"""
 
   div[data-testid="stExpander"] {{ border:1.5px solid {TEAL_LIGHT} !important; border-radius:8px !important; }}
   .stButton > button {{ font-family:'DM Sans',sans-serif !important; font-weight:600 !important; border-radius:8px !important; }}
+
+  /* ── Reference Docs tab ── */
+  .ref-kind-label {{ font-size:10.5px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; margin:16px 0 6px; }}
+  .ref-kind-label:first-child {{ margin-top:2px; }}
+
+  .ref-banner {{ border-radius:12px; padding:16px 22px; color:white; margin-bottom:14px; }}
+  .ref-banner-kind {{ font-size:10.5px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; opacity:0.85; margin-bottom:4px; }}
+  .ref-banner h3 {{ margin:0 0 4px; font-size:1.25rem; }}
+  .ref-banner p {{ margin:0; font-size:0.83rem; opacity:0.9; }}
+
+  .ref-section {{ background:white; border:1px solid #e2e8f0; border-left-width:5px; border-left-color:var(--ref-accent, {TEAL}); border-radius:10px; padding:14px 18px 16px; margin-bottom:14px; }}
+  .ref-section-title {{ font-weight:700; font-size:14.5px; color:{GREY_DARK}; margin-bottom:10px; }}
+  .ref-steps {{ counter-reset:refstep; list-style:none; margin:0; padding:0; }}
+  .ref-steps li {{ counter-increment:refstep; position:relative; padding:9px 12px 9px 40px; margin-bottom:6px; background:{GREY_LIGHT}; border-radius:8px; font-size:13.3px; line-height:1.48; color:{GREY_DARK}; }}
+  .ref-steps li:last-child {{ margin-bottom:0; }}
+  .ref-steps li::before {{ content:counter(refstep); position:absolute; left:10px; top:9px; width:20px; height:20px; border-radius:50%; background:var(--ref-accent, {TEAL}); color:white; font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; }}
+
+  .ref-reminders {{ border-radius:10px; border:1.5px solid; padding:12px 18px 14px; margin-top:4px; }}
+  .ref-reminders-title {{ font-weight:700; font-size:12.5px; text-transform:uppercase; letter-spacing:.05em; margin-bottom:8px; }}
+  .ref-reminders ul {{ margin:0; padding-left:18px; }}
+  .ref-reminders li {{ font-size:13px; line-height:1.55; margin-bottom:4px; color:{GREY_DARK}; }}
+  .ref-reminders li:last-child {{ margin-bottom:0; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1757,38 +1794,87 @@ with tab_refs:
     st.subheader("📚 Reference Docs")
     st.caption("Printable staff guides for the portal's workflows. Read on screen, or "
                "download as a one-page PDF to print and keep by the desk.")
-    _keys = list(REFERENCE_DOCS.keys())
-    _choice = st.radio("Guide", _keys,
-                       format_func=lambda k: REFERENCE_DOCS[k]["menu"],
-                       key="ref_choice")
+
+    if "ref_choice" not in st.session_state or st.session_state["ref_choice"] not in REFERENCE_DOCS:
+        st.session_state["ref_choice"] = next(iter(REFERENCE_DOCS))
+
+    # Group guides by kind (routine / as-needed / draft) so the picker reads
+    # as a labelled menu rather than one flat list — the as-needed guides in
+    # particular should be easy to find fast when something's happened.
+    _groups = {k: [] for k in KIND_ORDER}
+    for _key, _doc in REFERENCE_DOCS.items():
+        _groups.setdefault(_doc.get("kind", "routine"), []).append(_key)
+
+    nav_col, content_col = st.columns([1, 2.3], gap="large")
+
+    with nav_col:
+        for _kind in KIND_ORDER:
+            _doc_keys = _groups.get(_kind, [])
+            if not _doc_keys:
+                continue
+            _meta = KIND_META[_kind]
+            st.markdown(
+                f'<div class="ref-kind-label" style="color:{_meta["color"]}">'
+                f'{_meta["icon"]} {_meta["label"]}</div>',
+                unsafe_allow_html=True,
+            )
+            for _k in _doc_keys:
+                _selected = st.session_state["ref_choice"] == _k
+                if st.button(
+                    REFERENCE_DOCS[_k]["menu"], key=f"refbtn_{_k}",
+                    use_container_width=True,
+                    type="primary" if _selected else "secondary",
+                ):
+                    st.session_state["ref_choice"] = _k
+                    st.rerun()
+
+    _choice = st.session_state["ref_choice"]
     _d = REFERENCE_DOCS[_choice]
+    _meta = KIND_META[_d.get("kind", "routine")]
 
-    if _HAS_RL:
-        try:
-            _pdf = _build_reference_pdf(_d["title"], _d["subtitle"],
-                                        _d["sections"], _d["reminders"])
-            st.download_button(
-                "⬇️ Download / print this guide (PDF)", data=_pdf,
-                file_name=_d["title"].split(" — ")[0].replace(" ", "_") + "_QuickRef.pdf",
-                mime="application/pdf", type="primary")
-        except Exception as _pe:
-            st.error(f"Could not build the PDF: {_pe}")
-    else:
-        st.info("PDF download needs 'reportlab' in requirements.txt. You can still read "
-                "the guide below.")
+    with content_col:
+        st.markdown(
+            f"""<div class="ref-banner" style="background:{_meta['color']};">
+                  <div class="ref-banner-kind">{_meta['icon']} {_meta['label']}</div>
+                  <h3>{_d['title']}</h3>
+                  <p>{_d['subtitle'].replace('•', '·')}</p>
+                </div>""",
+            unsafe_allow_html=True,
+        )
 
-    st.markdown("---")
-    st.markdown(f"### {_d['title']}")
-    st.caption(_d["subtitle"].replace("•", "·"))
-    for _heading, _steps in _d["sections"]:
-        st.markdown(f"**{_heading}**")
-        for _i, _s in enumerate(_steps, 1):
-            st.markdown(f"{_i}. {_s}", unsafe_allow_html=True)
-        st.write("")
-    if _d.get("reminders"):
-        st.markdown("---")
-        for _r in _d["reminders"]:
-            st.markdown(f"- {_r}", unsafe_allow_html=True)
+        if _HAS_RL:
+            try:
+                _pdf = _build_reference_pdf(_d["title"], _d["subtitle"],
+                                            _d["sections"], _d["reminders"])
+                st.download_button(
+                    "⬇️ Download / print this guide (PDF)", data=_pdf,
+                    file_name=_d["title"].split(" — ")[0].replace(" ", "_") + "_QuickRef.pdf",
+                    mime="application/pdf", type="primary")
+            except Exception as _pe:
+                st.error(f"Could not build the PDF: {_pe}")
+        else:
+            st.info("PDF download needs 'reportlab' in requirements.txt. You can still read "
+                    "the guide below.")
+
+        for _heading, _steps in _d["sections"]:
+            _steps_html = "".join(f"<li>{_s}</li>" for _s in _steps)
+            st.markdown(
+                f"""<div class="ref-section" style="--ref-accent:{_meta['color']};">
+                      <div class="ref-section-title">{_heading}</div>
+                      <ol class="ref-steps">{_steps_html}</ol>
+                    </div>""",
+                unsafe_allow_html=True,
+            )
+
+        if _d.get("reminders"):
+            _rem_html = "".join(f"<li>{_r}</li>" for _r in _d["reminders"])
+            st.markdown(
+                f"""<div class="ref-reminders" style="border-color:{_meta['color']}; background:{_meta['light']};">
+                      <div class="ref-reminders-title" style="color:{_meta['color']};">💡 Key reminders</div>
+                      <ul>{_rem_html}</ul>
+                    </div>""",
+                unsafe_allow_html=True,
+            )
 
 
 st.markdown("---")
