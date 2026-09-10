@@ -7259,6 +7259,21 @@ def render_quick_incident_log():
         st.warning("No students found in the database.")
         return
 
+    # Load staff live (avoids free-text name matching, which can silently
+    # fail to resolve an id and violate the NOT NULL constraint on
+    # incidents.reported_by)
+    try:
+        _staff_resp = supabase.table("staff").select("id,name") \
+            .order("name").execute()
+        _staff_opts = {str(_r["id"]): _r["name"] for _r in _staff_resp.data}
+    except Exception as _e:
+        st.error(f"Could not load staff list: {_e}")
+        return
+
+    if not _staff_opts:
+        st.warning("No staff found in the database.")
+        return
+
     _SESSIONS_QL = {
         "Morning (before 11:00am)": "Morning",
         "Middle of day (11:00am – 1:30pm)": "Middle",
@@ -7280,7 +7295,8 @@ def render_quick_incident_log():
             _sel_id = st.selectbox("👤 Student *", list(_stu_opts.keys()),
                                    format_func=lambda x: _stu_opts[x])
         with _ql_c2:
-            _rep_by = st.text_input("🙋 Your name *", placeholder="e.g. Sarah")
+            _rep_by_id = st.selectbox("🙋 Your name *", list(_staff_opts.keys()),
+                                       format_func=lambda x: _staff_opts[x])
 
         st.markdown("<hr style='margin:.5rem 0;border-color:#e2e8f0;'>", unsafe_allow_html=True)
 
@@ -7352,8 +7368,8 @@ def render_quick_incident_log():
 
     if _submitted:
         _errs = []
-        if not _rep_by.strip():
-            _errs.append("Please enter your name.")
+        if not _rep_by_id:
+            _errs.append("Please select your name.")
         if _antecedent.startswith("---"):
             _errs.append("Please select an antecedent (not a section header).")
         if _behaviour.startswith("---"):
@@ -7365,14 +7381,7 @@ def render_quick_incident_log():
                 st.error(_e)
         else:
             try:
-                _staff_id = None
-                try:
-                    _sr = supabase.table("staff").select("id").eq(
-                        "name", _rep_by.strip()).limit(1).execute()
-                    if _sr.data:
-                        _staff_id = str(_sr.data[0]["id"])
-                except Exception:
-                    pass
+                _staff_id = _rep_by_id
 
                 _data = {
                     "id":               str(_uuid.uuid4()),
@@ -7411,7 +7420,7 @@ def render_quick_incident_log():
                     f"<b>Severity:</b> <span style='background:{_sc2};color:white;"
                     f"padding:.1rem .4rem;border-radius:4px;font-size:.82rem;'>"
                     f"{_SEV_LABELS_QL[_severity]}</span><br>"
-                    f"<b>Logged by:</b> {_rep_by.strip()}"
+                    f"<b>Logged by:</b> {_staff_opts[_rep_by_id]}"
                     f"</div></div>",
                     unsafe_allow_html=True,
                 )
