@@ -370,18 +370,47 @@ BEHAVIOUR_STUDENTS_TABLE = "students"
 
 
 def _behaviour_find(client, initials: str) -> list[dict]:
-    """Find Behaviour-tool student rows matching these initials
-    (matches rows the sync created and the tool's own naming style)."""
+    """Find Behaviour-tool student rows matching these initials.
+
+    Matches three ways, merged together:
+    1. first_name == initials (rows the register sync created)
+    2. name ILIKE 'INITIALS%' (the tool's own prefix-name convention)
+    3. Legacy students entered directly in the tool under a real name
+       (e.g. "Emma T.") — computed by running their stored name through
+       the same initials_from_name() logic the register uses, so
+       archiving/reactivating from the register still finds students
+       who predate the register sync and were never given an
+       initials-only first_name.
+    """
+    ini = initials.strip().upper()
+    matches: dict = {}
     try:
         res = (
             client.table(BEHAVIOUR_STUDENTS_TABLE)
             .select("id, name, first_name, archived")
-            .or_(f"first_name.eq.{initials},name.ilike.{initials}%")
+            .or_(f"first_name.eq.{ini},name.ilike.{ini}%")
             .execute()
         )
-        return res.data or []
+        for r in (res.data or []):
+            matches[r["id"]] = r
     except Exception:
-        return []
+        pass
+
+    try:
+        all_res = (
+            client.table(BEHAVIOUR_STUDENTS_TABLE)
+            .select("id, name, first_name, archived")
+            .execute()
+        )
+        for r in (all_res.data or []):
+            if r["id"] in matches:
+                continue
+            if initials_from_name(r.get("name")) == ini:
+                matches[r["id"]] = r
+    except Exception:
+        pass
+
+    return list(matches.values())
 
 
 def sync_behaviour_create(initials, program=None, start_date=None,
