@@ -252,7 +252,7 @@ REFERENCE_DOCS = {
                 "Ensure it is saved with the student's name and the date.",
             ]),
             ("④ Update the Portal", [
-                "Add the ABCH to the Behaviour Support tool on the Portal, in the Analysis "
+                "Add the ABCH to the Behaviour Support tool on the Portal, in the Dashboard "
                 "section, under Historical Incidents.",
             ]),
         ],
@@ -262,7 +262,7 @@ REFERENCE_DOCS = {
             "<b>Two homes for the ABCH:</b> the student's OneDrive file AND the CLC shared "
             "drive (Administration / correct year / Critical Incident / correct Term).",
             "<b>Naming:</b> always save with the student's name and the date.",
-            "<b>Don't forget the Portal:</b> Behaviour Support tool → Analysis → Historical "
+            "<b>Don't forget the Portal:</b> Behaviour Support tool → Dashboard → Historical "
             "Incidents.",
         ],
     },
@@ -287,6 +287,48 @@ REFERENCE_DOCS = {
         "reminders": [
             "<b>Always three steps:</b> first aid → incident log (bookshelf folder) → Parent "
             "Information Record sent home with the student.",
+        ],
+    },
+    "ventia_repairs": {
+        "kind": "needs",
+        "menu": "🔧 Ventia — Repairs & Maintenance",
+        "title": "Ventia — Repairs & Maintenance — Quick Reference",
+        "subtitle": "Cowandilla Learning Centre (LBU) • Needs-basis guide — follow when "
+                    "something on-site needs repairing or replacing.",
+        "sections": [
+            ("① Lodging a standard repair (portal)", [
+                "Go to the Ventia <b>Panorama</b> work zone portal — bookmark: "
+                "<b>panorama.portal.ventia.com</b>.",
+                "Log in with <b>Single Sign-On (Okta)</b> using your schools.sa.edu.au email "
+                "address.",
+                "Lodge a new job/work request, with a clear description of the fault, the "
+                "exact location, and the item/category affected.",
+            ]),
+            ("② Urgent repairs (phone)", [
+                "For anything urgent, phone Ventia directly on <b>1300 903 063</b> rather than "
+                "waiting on the portal.",
+                "Have the location, the item, and the nature of the fault ready before you "
+                "call.",
+            ]),
+            ("③ Getting it replaced, not just patched up", [
+                "<b>White goods:</b> always lodge as a <b>repair</b> — never as a replacement "
+                "request. A trade will attend, and once they assess it as unrepairable, that "
+                "assessment is what triggers the replacement.",
+                "<b>TVs &amp; ICT equipment:</b> also lodge as a repair, but list the job to "
+                "<b>[specific electrician — details to be added]</b>, who replaces the product "
+                "for us directly rather than attempting an on-site repair.",
+            ]),
+            ("④ Signing off", [
+                "Once the job is complete, sign it off in the Ventia portal.",
+            ]),
+        ],
+        "reminders": [
+            "<b>White goods:</b> lodge as \"repair\" first — the unrepairable assessment is "
+            "what gets it replaced.",
+            "<b>TV/ICT:</b> lodge as \"repair\", directed to our named electrician for direct "
+            "replacement (contact details: TBC).",
+            "<b>Urgent?</b> Call 1300 903 063 instead of waiting on the portal.",
+            "Always sign off completed jobs in the portal once finished.",
         ],
     },
 }
