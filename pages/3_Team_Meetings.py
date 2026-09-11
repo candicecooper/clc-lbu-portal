@@ -3512,523 +3512,326 @@ RAW TRANSCRIPT:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def render_meeting_archive(program):
-    """Display archive of past meetings with full section editing."""
+    """Display archive of past meetings with interactive table structure (like STAFF Meetings)."""
     import json as _json
-
+    
     st.markdown("### 📚 Meeting Archive")
-    st.caption(f"Browse and edit past {PROGRAMS[program]['label']} meetings")
-
-    # ── AD-HOC MEETINGS SECTION ──
-    st.markdown("#### 📝 Ad-Hoc Meetings")
+    st.caption(f"Browse and manage past {PROGRAMS[program]['label']} meetings")
+    
+    # Fetch all meetings for this program
     try:
-        adhoc_result = supabase.table('tm_program_meetings').select("*").eq('program', program).eq('week_type', 'ad-hoc').order('meeting_date', desc=True).execute()
-        adhoc_meetings = adhoc_result.data or []
-        
-        if adhoc_meetings:
-            st.markdown(f"**Ad-Hoc meetings recorded:** {len(adhoc_meetings)}")
-            
-            for mtg in adhoc_meetings:
-                mtg_date = mtg.get('meeting_date', 'Unknown')
-                facilitator = mtg.get('facilitator', '')
-                attendees = mtg.get('attendees', 'Not recorded')
-                mtg_id = mtg.get('id', '')
-                
-                header = f"📝 {mtg_date} | {facilitator}"
-                
-                with st.expander(header, expanded=False):
-                    st.markdown(f"**Facilitator:** {facilitator} &nbsp;|&nbsp; **Attendees:** {attendees}")
-                    st.markdown(f"<small style='color:#888;'>Meeting ID: {mtg_id}</small>", unsafe_allow_html=True)
-                    st.markdown("")
-                    
-                    # Meeting Minutes
-                    if mtg.get('checkin_notes') or mtg.get('reports_tac_notes'):
-                        st.markdown("**📋 Minutes:**")
-                        if mtg.get('checkin_notes'):
-                            st.markdown(mtg.get('checkin_notes'))
-                        else:
-                            st.markdown(mtg.get('reports_tac_notes'))
-                    
-                    # Full Transcript
-                    if mtg.get('meeting_minutes'):
-                        with st.expander("📄 Full Transcript", expanded=False):
-                            st.markdown(mtg.get('meeting_minutes'))
-                    
-                    # Download Button
-                    doc = generate_minutes_docx(
-                        program=program,
-                        meeting_date=mtg_date,
-                        facilitator=facilitator,
-                        attendees=attendees,
-                        extracted_notes=mtg.get('checkin_notes', ''),
-                        summary_notes=mtg.get('reports_tac_notes', ''),
-                        transcript=mtg.get('meeting_minutes', '')
-                    )
-                    
-                    doc_bytes = io.BytesIO()
-                    doc.save(doc_bytes)
-                    doc_bytes.seek(0)
-                    
-                    st.download_button(
-                        label="📥 Download Minutes",
-                        data=doc_bytes,
-                        file_name=f"Minutes_{mtg_date}_{facilitator}_{program}.docx",
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        key=f"archive_adhoc_download_{mtg_id}"
-                    )
-        else:
-            st.info("No ad-hoc meetings recorded yet.")
+        result = supabase.table('tm_program_meetings').select("*").eq('program', program).order('meeting_date', desc=True).execute()
+        all_meetings = result.data or []
     except Exception as e:
-        st.warning(f"Could not load ad-hoc meetings: {e}")
+        st.error(f"Could not load meetings: {e}")
+        return
     
-    st.markdown("---")
-
-    # ── WEEK A / WEEK B MEETINGS SECTION ──
-    st.markdown("#### 📅 Scheduled Meetings (Week A & B)")
-    
-    all_meetings = fetch("tm_program_meetings", {"program": program}, "meeting_date")
-
     if not all_meetings:
         st.info("No past meetings found. Start recording meetings in the Program Meeting tab!")
         return
-
-    st.markdown(f"**Total meetings recorded:** {len(all_meetings)}")
-
-    col_filter1, col_filter2 = st.columns(2)
-    with col_filter1:
-        filter_term = st.selectbox(
-            "Filter by term",
-            ["All Terms"] + sorted(set(m.get('term', '') for m in all_meetings if m.get('term'))),
-            key=f"archive_filter_term_{program}"
-        )
-    with col_filter2:
-        if program in ["JP", "PY", "SY"]:
-            filter_week_type = st.selectbox(
-                "Filter by type", ["All Types", "Week A", "Week B"],
-                key=f"archive_filter_type_{program}"
+    
+    # Separate ad-hoc from scheduled meetings
+    adhoc_meetings = [m for m in all_meetings if m.get('week_type') == 'ad-hoc']
+    scheduled_meetings = [m for m in all_meetings if m.get('week_type') in ['A', 'B']]
+    
+    # ── AD-HOC MEETINGS TABLE ────────────────────────────────────────────────────
+    if adhoc_meetings:
+        st.markdown("#### 📝 Ad-Hoc Meetings")
+        
+        _archive_col_ratios = [1.2, 1.5, 1.3, 0.8, 1]
+        
+        # Header row
+        _hcols = st.columns(_archive_col_ratios, gap="small")
+        for _hc, _htext in zip(_hcols, ["Date", "Facilitator", "Attendees", "Minutes", ""]):
+            _hc.markdown(
+                f'<div style="background:#EAF5F5;padding:8px 10px;'
+                f'border-bottom:2px solid #1A7A7A;font-family:&quot;Segoe UI&quot;,Arial,sans-serif;'
+                f'font-size:13px;font-weight:700;color:#1A7A7A;">{_htext}</div>',
+                unsafe_allow_html=True
             )
-        else:
-            filter_week_type = "All Types"
-
-    filtered_meetings = all_meetings
-    if filter_term != "All Terms":
-        filtered_meetings = [m for m in filtered_meetings if m.get('term') == filter_term]
-    if filter_week_type == "Week A":
-        filtered_meetings = [m for m in filtered_meetings if m.get('week_type') == 'A']
-    elif filter_week_type == "Week B":
-        filtered_meetings = [m for m in filtered_meetings if m.get('week_type') == 'B']
-
-    st.markdown("---")
-
-    for meeting in reversed(filtered_meetings):
-        meeting_date  = meeting.get('meeting_date', 'Unknown')
-        term          = meeting.get('term', '')
-        week_num      = meeting.get('week_number', '')
-        week_type     = meeting.get('week_type', '')
-        facilitator   = meeting.get('facilitator', '')
-        meeting_id    = meeting.get('id', '')
-        edit_key      = f"arch_edit_{meeting_id}"
-
-        if program in ["JP", "PY", "SY"]:
-            week_badge = "🔵 Week A" if week_type == "A" else "🟡 Week B"
-            header = f"{week_badge} | {meeting_date} | Term {term} W{week_num} | {facilitator}"
-        else:
-            header = f"🎨 Specialist | {meeting_date} | Term {term} W{week_num} | {facilitator}"
-
-        in_edit_mode = st.session_state.get(edit_key, False)
-        with st.expander(header, expanded=in_edit_mode):
-
-            if not in_edit_mode:
-                # ── READ VIEW ──────────────────────────────────────────────
-                st.markdown(f"**Facilitator:** {facilitator} &nbsp;|&nbsp; **Attendees:** {meeting.get('attendees','Not recorded')}")
-                st.markdown(f"<small style='color:#888;'>Meeting ID: {meeting_id}</small>", unsafe_allow_html=True)
-                st.markdown("")
-
-                # Check-in notes
-                raw_checkin = meeting.get('checkin_notes', '')
-                if raw_checkin:
-                    st.markdown("**📋 Check-in Notes:**")
-                    if program == "SPECIALIST":
-                        try:
-                            cd = _json.loads(raw_checkin)
-                            if cd.get('monday_teacher'):
-                                st.markdown(f"*Monday:* {cd['monday_teacher']}")
-                            if cd.get('tuefri_teacher'):
-                                st.markdown(f"*Tue–Fri:* {cd['tuefri_teacher']}")
-                        except Exception:
-                            st.markdown(raw_checkin)
-                    else:
-                        st.markdown(raw_checkin)
-
-                # Priority focus (Week B)
-                if week_type == "B" and meeting.get('priority_focus'):
-                    st.markdown("**🎯 Priority Focus:**")
-                    try:
-                        pf = _json.loads(meeting['priority_focus'])
-                        if isinstance(pf, dict):
-                            st.markdown(pf.get('notes', ''))
-                        elif isinstance(pf, list):
-                            for r in pf:
-                                if isinstance(r, dict) and any(r.values()):
-                                    st.markdown("• " + " | ".join(v for v in r.values() if v))
-                    except Exception:
-                        st.markdown(str(meeting['priority_focus']))
-
-                # Student concerns (Week A)
-                if week_type == "A" and meeting.get('student_concerns'):
-                    try:
-                        sc = _json.loads(meeting['student_concerns'])
-                        if isinstance(sc, list) and sc:
-                            st.markdown("**👥 Student Concerns:**")
-                            for r in sc:
-                                note = r.get('notes','') if isinstance(r, dict) else str(r)
-                                if note:
-                                    st.markdown(f"• {note}")
-                    except Exception:
-                        pass
-
-                # Meeting minutes
-                current_minutes = meeting.get('meeting_minutes', '')
-                st.markdown("**📝 Meeting Minutes:**")
-                if current_minutes:
-                    st.markdown(current_minutes)
-                else:
-                    st.caption("No minutes recorded yet.")
-
-                # Actions summary
-                if meeting.get('actions'):
-                    try:
-                        actions = _json.loads(meeting['actions'])
-                        if actions:
-                            st.markdown("**✅ Actions:**")
-                            for a in actions:
-                                if a.get('action'):
-                                    done = "✅" if a.get("done") else "🔲"
-                                    p_emoji = {"Low":"⬇️","Medium":"➡️","High":"⬆️","Urgent":"🔴"}.get(a.get("priority","Medium"),"➡️")
-                                    st.markdown(f"{done} {p_emoji} {a['action']} — {a.get('who','')} by {a.get('by_when','')}")
-                    except Exception:
-                        pass
-
-                st.markdown("")
-                col_edit_btn, col_dl_btn = st.columns(2)
-                with col_edit_btn:
-                    if st.button("✏️ Edit / Add to This Meeting", key=f"arch_open_{meeting_id}", type="secondary", use_container_width=True):
-                        st.session_state[edit_key] = True
-                        st.rerun()
-                with col_dl_btn:
-                    try:
-                        _abuf = build_minutes_docx(meeting, program)
-                        st.download_button(
-                            "📥 Download Minutes (Word)",
-                            data=_abuf,
-                            file_name=f"CLC_{program}_Minutes_{meeting_date}.docx",
-                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                            use_container_width=True,
-                            key=f"arch_dl_{meeting_id}",
-                        )
-                    except Exception as _e:
-                        st.caption(f"Minutes doc error: {_e}")
-
-                # ── Delete this meeting (admin only, with confirmation) ──
-                if st.session_state.get("admin"):
-                    _confirm_key = f"arch_delconfirm_{meeting_id}"
-                    if not st.session_state.get(_confirm_key):
-                        if st.button("🗑️ Delete this meeting", key=f"arch_del_{meeting_id}",
-                                     use_container_width=True):
-                            st.session_state[_confirm_key] = True
+        
+        # Data rows
+        for _idx, meeting in enumerate(adhoc_meetings):
+            _has_min = bool((meeting.get('checkin_notes') or meeting.get('reports_tac_notes') or '').strip())
+            _open_key = f"_archive_adhoc_open_{meeting['id']}"
+            _is_open = st.session_state.get(_open_key, False)
+            
+            _row_bg = "#FAFBFC" if _idx % 2 else "white"
+            _cell = (f'background:{_row_bg};padding:10px;border-bottom:1px solid #D9DEE2;'
+                    f'font-family:&quot;Segoe UI&quot;,Arial,sans-serif;font-size:13.5px;')
+            
+            _rcols = st.columns(_archive_col_ratios, gap="small")
+            _rcols[0].markdown(f'<div style="{_cell}">{meeting.get("meeting_date", "")}</div>', unsafe_allow_html=True)
+            _rcols[1].markdown(f'<div style="{_cell}">{meeting.get("facilitator", "Unknown")}</div>', unsafe_allow_html=True)
+            _rcols[2].markdown(f'<div style="{_cell}">{meeting.get("attendees", "Not recorded")[:30]}...</div>', unsafe_allow_html=True)
+            _rcols[3].markdown(f'<div style="{_cell}text-align:center;">{"✅" if _has_min else "—"}</div>', unsafe_allow_html=True)
+            
+            with _rcols[4]:
+                if st.button("▾ Close" if _is_open else "▸ Open", key=f"toggle_adhoc_{meeting['id']}",
+                            use_container_width=True):
+                    st.session_state[_open_key] = not _is_open
+                    st.rerun()
+            
+            if _is_open:
+                with st.container(border=True):
+                    st.write(f"**Facilitator:** {meeting.get('facilitator', 'Unknown')}")
+                    st.write(f"**Attendees:** {meeting.get('attendees', 'Not recorded')}")
+                    st.write(f"**Term:** {meeting.get('term', '?')}")
+                    
+                    st.markdown("---")
+                    st.write("**📋 Meeting Notes:**")
+                    notes = meeting.get('checkin_notes') or meeting.get('reports_tac_notes') or 'No notes recorded'
+                    st.markdown(notes)
+                    
+                    if meeting.get('meeting_minutes'):
+                        with st.expander("📄 Full Transcript"):
+                            st.markdown(meeting.get('meeting_minutes'))
+                    
+                    st.markdown("---")
+                    col_arc_edit, col_arc_dl, col_arc_del = st.columns([1.3, 1, 1])
+                    
+                    with col_arc_edit:
+                        if st.button("✏️ Edit", key=f"edit_adhoc_{meeting['id']}", type="primary", use_container_width=True):
+                            st.session_state.current_meeting_id = meeting['id']
+                            st.success("✅ Meeting loaded. Scroll up to edit.")
                             st.rerun()
-                    else:
-                        st.warning("Permanently delete this meeting? This can't be undone.")
-                        c_yes, c_no = st.columns(2)
-                        with c_yes:
-                            if st.button("✅ Yes, delete permanently", key=f"arch_delyes_{meeting_id}",
-                                         type="primary", use_container_width=True):
-                                try:
-                                    delete_row("tm_program_meetings", meeting_id)
-                                    if str(st.session_state.get("current_meeting_id")) == str(meeting_id):
-                                        st.session_state.current_meeting_id = None
-                                    st.session_state.pop(_confirm_key, None)
-                                    st.success("Meeting deleted.")
+                    
+                    with col_arc_dl:
+                        try:
+                            doc = generate_minutes_docx(
+                                program=program,
+                                meeting_date=meeting.get('meeting_date', ''),
+                                facilitator=meeting.get('facilitator', ''),
+                                attendees=meeting.get('attendees', ''),
+                                extracted_notes=meeting.get('checkin_notes', ''),
+                                summary_notes=meeting.get('reports_tac_notes', ''),
+                                transcript=meeting.get('meeting_minutes', '')
+                            )
+                            doc_bytes = io.BytesIO()
+                            doc.save(doc_bytes)
+                            doc_bytes.seek(0)
+                            
+                            st.download_button(
+                                "📥 Download (.docx)",
+                                data=doc_bytes,
+                                file_name=f"Minutes_{meeting.get('meeting_date', '')}_{program}.docx",
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                key=f"download_adhoc_{meeting['id']}",
+                                use_container_width=True
+                            )
+                        except:
+                            st.button("📥 Download (.docx)", disabled=True, use_container_width=True, 
+                                    key=f"download_adhoc_disabled_{meeting['id']}")
+                    
+                    with col_arc_del:
+                        confirm_key = f"confirm_delete_adhoc_{meeting['id']}"
+                        if st.session_state.get(confirm_key):
+                            col_yes, col_no = st.columns(2)
+                            with col_yes:
+                                if st.button("⚠️ Confirm", key=f"confirm_del_adhoc_{meeting['id']}", type="secondary", use_container_width=True):
+                                    try:
+                                        supabase.table('tm_program_meetings').delete().eq('id', meeting['id']).execute()
+                                        st.success("✅ Deleted.")
+                                        st.session_state[confirm_key] = False
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"⚠️ Could not delete: {e}")
+                            with col_no:
+                                if st.button("Cancel", key=f"cancel_del_adhoc_{meeting['id']}", use_container_width=True):
+                                    st.session_state[confirm_key] = False
                                     st.rerun()
-                                except Exception as _e:
-                                    st.error(f"Could not delete: {_e}")
-                        with c_no:
-                            if st.button("Cancel", key=f"arch_delno_{meeting_id}",
-                                         use_container_width=True):
-                                st.session_state.pop(_confirm_key, None)
+                        else:
+                            if st.button("🗑️ Delete", key=f"delete_adhoc_{meeting['id']}", use_container_width=True):
+                                st.session_state[confirm_key] = True
                                 st.rerun()
-                else:
-                    st.caption("🔐 Log in as admin (sidebar) to delete a meeting.")
-
-            else:
-                # ── FULL EDIT MODE ─────────────────────────────────────────
-                st.markdown(
-                    f"""<div style="background:#fef3c7;border-left:4px solid #d97706;
-                    border-radius:0 8px 8px 0;padding:8px 14px;margin-bottom:10px;font-size:13px;color:#92400e;">
-                    ✏️ <strong>Editing:</strong> {meeting_date} — Term {term} W{week_num}
-                    </div>""",
+        
+        st.markdown("---")
+    
+    # ── SCHEDULED MEETINGS TABLE (grouped by term) ────────────────────────────────
+    if scheduled_meetings:
+        st.markdown("#### 📅 Scheduled Meetings (Week A & B)")
+        
+        # Group by term
+        def _get_term_sort_key(meeting):
+            term = meeting.get('term', '')
+            # Extract term number for sorting (T1, T2, T3, T4)
+            import re
+            match = re.search(r'T(\d+)', term)
+            return int(match.group(1)) if match else 999
+        
+        term_groups = {}
+        for m in scheduled_meetings:
+            term = m.get('term', 'No Term')
+            if term not in term_groups:
+                term_groups[term] = []
+            term_groups[term].append(m)
+        
+        _archive_col_ratios = [0.8, 1, 1.5, 1.3, 1, 1]
+        
+        for term in sorted(term_groups.keys(), key=lambda t: _get_term_sort_key({'term': t}), reverse=True):
+            meetings = term_groups[term]
+            
+            st.markdown(
+                f'<div style="margin-top:20px;margin-bottom:0;padding:10px 14px;'
+                f'background:#1A7A7A;border-radius:6px 6px 0 0;'
+                f'font-family:&quot;Segoe UI&quot;,Arial,sans-serif;'
+                f'font-size:15px;font-weight:700;color:white;">'
+                f'🗓️ {term} &nbsp;·&nbsp; {len(meetings)} meeting(s)</div>',
+                unsafe_allow_html=True
+            )
+            
+            # Header row
+            _hcols = st.columns(_archive_col_ratios, gap="small")
+            for _hc, _htext in zip(_hcols, ["Type", "Week", "Date", "Facilitator", "Minutes", ""]):
+                _hc.markdown(
+                    f'<div style="background:#EAF5F5;padding:8px 10px;'
+                    f'border-bottom:2px solid #1A7A7A;font-family:&quot;Segoe UI&quot;,Arial,sans-serif;'
+                    f'font-size:13px;font-weight:700;color:#1A7A7A;">{_htext}</div>',
                     unsafe_allow_html=True
                 )
-
-                # ── Header fields ──
-                col_d, col_f, col_a = st.columns([1.5, 1.5, 3])
-                with col_d:
-                    try:
-                        ed_date = st.date_input("Date", value=datetime.date.fromisoformat(meeting_date), key=f"arch_date_{meeting_id}")
-                    except Exception:
-                        ed_date = st.date_input("Date", value=datetime.date.today(), key=f"arch_date_{meeting_id}")
-                with col_f:
-                    ed_fac = st.text_input("Facilitator", value=facilitator, key=f"arch_fac_{meeting_id}")
-                with col_a:
-                    ed_att = st.text_input("Attendees", value=meeting.get('attendees',''), key=f"arch_att_{meeting_id}")
-
-                st.markdown("---")
-
-                # ── Check-in notes ──
-                st.markdown("**📋 Check-in Notes**")
-                raw_checkin = meeting.get('checkin_notes','')
-                if program == "SPECIALIST":
-                    try:
-                        cd = _json.loads(raw_checkin) if raw_checkin else {}
-                    except Exception:
-                        cd = {}
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        ed_mon = st.text_area("Monday Teacher", value=cd.get('monday_teacher',''), height=80, key=f"arch_mon_{meeting_id}")
-                    with c2:
-                        ed_tuefri = st.text_area("Tue–Fri Teacher", value=cd.get('tuefri_teacher',''), height=80, key=f"arch_tuefri_{meeting_id}")
-                    ed_checkin_json = _json.dumps({"monday_teacher": ed_mon, "tuefri_teacher": ed_tuefri})
-                    ed_checkin_raw = None
-                else:
-                    ed_checkin_raw = st.text_area(
-                        "Check-in notes",
-                        value=raw_checkin,
-                        height=90,
-                        key=f"arch_checkin_{meeting_id}",
-                        label_visibility="collapsed",
-                        placeholder="Check-in / regulation notes from the meeting…"
-                    )
-                    ed_checkin_json = None
-
-                st.markdown("---")
-
-                # ── Priority focus (Week B) ──
-                ed_priority_json = None
-                if week_type == "B":
-                    st.markdown("**🎯 Priority Focus Notes**")
-                    raw_pf = meeting.get('priority_focus','')
-                    existing_pf = ""
-                    if raw_pf:
-                        try:
-                            pf = _json.loads(raw_pf)
-                            if isinstance(pf, dict):
-                                existing_pf = pf.get('notes','')
-                            elif isinstance(pf, list):
-                                lines = []
-                                for r in pf:
-                                    if isinstance(r, dict):
-                                        parts = [v for v in r.values() if v]
-                                        if parts:
-                                            lines.append("• " + " | ".join(parts))
-                                existing_pf = "\n".join(lines)
-                        except Exception:
-                            existing_pf = str(raw_pf)
-                    _stage_pf = st.session_state.pop(f"_stage_arch_pf_{meeting_id}", None)
-                    if _stage_pf is not None:
-                        st.session_state[f"arch_pf_{meeting_id}"] = _stage_pf
-                    elif f"arch_pf_{meeting_id}" not in st.session_state:
-                        st.session_state[f"arch_pf_{meeting_id}"] = existing_pf
-                    ed_pf = st.text_area(
-                        "Priority focus",
-                        height=160,
-                        key=f"arch_pf_{meeting_id}",
-                        label_visibility="collapsed",
-                        placeholder="Type or append priority focus notes…"
-                    )
-                    # Groq recalibration for archive priority notes
-                    with st.expander("📋 Paste Transcript → Recalibrate with AI", expanded=False):
-                        arch_transcript = st.text_area(
-                            "Transcript",
-                            height=120,
-                            key=f"arch_pf_transcript_{meeting_id}",
-                            label_visibility="collapsed",
-                            placeholder="Paste rough notes or transcript here…"
-                        )
-                        if st.button("✨ Recalibrate", key=f"arch_pf_groq_{meeting_id}"):
-                            if arch_transcript.strip() and GROQ_KEY:
-                                with st.spinner("Recalibrating…"):
-                                    try:
-                                        _gc = Groq(api_key=GROQ_KEY)
-                                        _r = _gc.chat.completions.create(
-                                            model="llama-3.1-8b-instant",
-                                            messages=[{"role": "user", "content":
-                                                f"Transform these rough meeting notes into structured CLC focus-area minutes. "
-                                                f"Use headings: FOCUS AREA, WHAT'S WORKING, GAP, ADJUSTMENT, EVIDENCE, WHO & WHEN. "
-                                                f"Trauma-informed, strengths-based, plain English. Preserve all facts.\n\n{arch_transcript[:3000]}"}],
-                                            max_tokens=800
-                                        )
-                                        _new_text = _r.choices[0].message.content
-                                        st.session_state[f"_stage_arch_pf_{meeting_id}"] = (ed_pf + "\n\n--- AI ---\n" + _new_text).strip() if ed_pf.strip() else _new_text
-                                        st.rerun()
-                                    except Exception as _e:
-                                        st.error(f"Groq error: {_e}")
-                    ed_priority_json = _json.dumps({"notes": ed_pf})
-                    st.markdown("---")
-
-                # ── Student concerns (Week A) ──
-                ed_concerns_json = None
-                if week_type == "A":
-                    st.markdown("**👥 Student Concerns**")
-                    raw_sc = meeting.get('student_concerns','')
-                    existing_sc = ""
-                    if raw_sc:
-                        try:
-                            sc = _json.loads(raw_sc)
-                            if isinstance(sc, list):
-                                existing_sc = "\n\n".join(r.get('notes','') for r in sc if isinstance(r,dict) and r.get('notes'))
-                        except Exception:
-                            existing_sc = str(raw_sc)
-                    ed_sc = st.text_area(
-                        "Student concerns",
-                        value=existing_sc,
-                        height=140,
-                        key=f"arch_sc_{meeting_id}",
-                        label_visibility="collapsed",
-                        placeholder="Add or edit student concern notes…"
-                    )
-                    ed_concerns_json = _json.dumps([{"notes": ed_sc}])
-                    st.markdown("---")
-
-                # ── Meeting minutes ──
-                st.markdown("**📝 Meeting Minutes**")
-                st.caption("Edit existing minutes or append new content — add your notes at the bottom.")
-                # Pending key carries Groq output across reruns without touching the widget key
-                _stage_am = st.session_state.pop(f"_stage_arch_min_{meeting_id}", None)
-                if _stage_am is not None:
-                    st.session_state[f"arch_minutes_{meeting_id}"] = _stage_am
-                elif f"arch_minutes_{meeting_id}" not in st.session_state:
-                    st.session_state[f"arch_minutes_{meeting_id}"] = meeting.get('meeting_minutes', '') or ''
-                ed_minutes = st.text_area(
-                    "Meeting minutes",
-                    height=280,
-                    key=f"arch_minutes_{meeting_id}",
-                    label_visibility="collapsed",
-                    placeholder="Add or edit meeting minutes here…"
-                )
-
-                # Groq recalibration for minutes
-                with st.expander("📋 Generate Minutes from Transcript (Groq)", expanded=False):
-                    arch_min_transcript = st.text_area(
-                        "Raw transcript",
-                        height=140,
-                        key=f"arch_min_transcript_{meeting_id}",
-                        label_visibility="collapsed",
-                        placeholder="Paste raw transcript or rough notes to generate polished minutes…"
-                    )
-                    if st.button("✨ Generate Minutes with AI", key=f"arch_min_groq_{meeting_id}"):
-                        if arch_min_transcript.strip() and GROQ_KEY:
-                            with st.spinner("Generating…"):
-                                try:
-                                    _gc2 = Groq(api_key=GROQ_KEY)
-                                    _r2 = _gc2.chat.completions.create(
-                                        model="llama-3.1-8b-instant",
-                                        messages=[{"role": "user", "content":
-                                            f"Transform these notes into polished professional meeting minutes for "
-                                            f"Cowandilla Learning Centre ({PROGRAMS[program]['label']} team meeting, {meeting_date}). "
-                                            f"Structured, trauma-informed, plain English. Preserve all facts.\n\n{arch_min_transcript[:3000]}"}],
-                                        max_tokens=900
-                                    )
-                                    _new_min = _r2.choices[0].message.content
-                                    st.session_state[f"_stage_arch_min_{meeting_id}"] = (
-                                        (ed_minutes + "\n\n--- AI Generated ---\n" + _new_min).strip()
-                                        if ed_minutes.strip() else _new_min
-                                    )
-                                    st.rerun()
-                                except Exception as _e:
-                                    st.error(f"Groq error: {_e}")
-
-                st.markdown("---")
-
-                # ── Actions — add new rows ──
-                st.markdown("**✅ Actions**")
-                existing_actions = []
-                if meeting.get('actions'):
-                    try:
-                        existing_actions = _json.loads(meeting['actions'])
-                    except Exception:
-                        existing_actions = []
-
-                # Show existing + allow toggling done
-                if existing_actions:
-                    st.caption("Existing actions:")
-                    for aidx, a in enumerate(existing_actions):
-                        if a.get('action'):
-                            ac1, ac2 = st.columns([5, 1])
-                            with ac1:
-                                p_emoji = {"Low":"⬇️","Medium":"➡️","High":"⬆️","Urgent":"🔴"}.get(a.get("priority","Medium"),"➡️")
-                                st.markdown(f"{p_emoji} **{a['action']}** — {a.get('who','')} by {a.get('by_when','')}")
-                            with ac2:
-                                existing_actions[aidx]["done"] = st.checkbox(
-                                    "Done", value=a.get("done", False),
-                                    key=f"arch_done_{meeting_id}_{aidx}"
-                                )
-
-                st.caption("Add new action (will be included when you save):")
-                new_act_cols = st.columns([3, 1.5, 1, 1])
-                new_act_action = new_act_cols[0].text_input("Action", key=f"arch_new_act_{meeting_id}", label_visibility="collapsed", placeholder="New action item")
-                new_act_who   = new_act_cols[1].text_input("Who",    key=f"arch_new_who_{meeting_id}", label_visibility="collapsed", placeholder="Person")
-                new_act_when  = new_act_cols[2].text_input("By",     key=f"arch_new_when_{meeting_id}", label_visibility="collapsed", placeholder="Date/week")
-                new_act_pri   = new_act_cols[3].selectbox("Pri",     ["Medium","Low","High","Urgent"], key=f"arch_new_pri_{meeting_id}", label_visibility="collapsed")
-
-                # NOTE: new action is appended only inside the Save block below, not here,
-                # to prevent it being duplicated on every rerun.
-
-                st.markdown("---")
-
-                # ── Save / Cancel ──
-                col_sv, col_cn = st.columns([1, 1])
-                with col_sv:
-                    if st.button("💾 Save All Changes", key=f"arch_save_{meeting_id}", type="primary", use_container_width=True):
-                        # Append new action only at save time
-                        if new_act_action.strip():
-                            existing_actions.append({
-                                "action": new_act_action.strip(),
-                                "who": new_act_who.strip(),
-                                "by_when": new_act_when.strip(),
-                                "priority": new_act_pri,
-                                "done": False
-                            })
-                        try:
-                            update_payload = {
-                                "meeting_date": str(ed_date),
-                                "facilitator": ed_fac.strip(),
-                                "attendees": ed_att.strip(),
-                                "meeting_minutes": ed_minutes.strip(),
-                                "actions": _json.dumps(existing_actions),
-                            }
-                            if ed_checkin_json is not None:
-                                update_payload["checkin_notes"] = ed_checkin_json
-                            elif ed_checkin_raw is not None:
-                                update_payload["checkin_notes"] = ed_checkin_raw.strip()
-                            if ed_priority_json is not None:
-                                update_payload["priority_focus"] = ed_priority_json
-                            if ed_concerns_json is not None:
-                                update_payload["student_concerns"] = ed_concerns_json
-
-                            result = supabase.table('tm_program_meetings') \
-                                .update(update_payload) \
-                                .eq('id', str(meeting_id)) \
-                                .execute()
-                            st.success("✅ Meeting updated successfully!")
-                            st.session_state[edit_key] = False
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"⚠️ Save failed: {e}")
-                            st.info("Check the console or try again. Meeting ID: " + str(meeting_id))
-
-                with col_cn:
-                    if st.button("❌ Cancel", key=f"arch_cancel_{meeting_id}", use_container_width=True):
-                        st.session_state[edit_key] = False
+            
+            # Data rows
+            for _idx, meeting in enumerate(sorted(meetings, key=lambda m: m.get('meeting_date', ''), reverse=True)):
+                _has_min = bool((meeting.get('meeting_minutes') or '').strip())
+                _open_key = f"_archive_scheduled_open_{meeting['id']}"
+                _is_open = st.session_state.get(_open_key, False)
+                
+                _row_bg = "#FAFBFC" if _idx % 2 else "white"
+                _cell = (f'background:{_row_bg};padding:10px;border-bottom:1px solid #D9DEE2;'
+                        f'font-family:&quot;Segoe UI&quot;,Arial,sans-serif;font-size:13.5px;')
+                
+                _rcols = st.columns(_archive_col_ratios, gap="small")
+                
+                week_type = meeting.get('week_type', 'A')
+                week_badge = "🔵 Week A" if week_type == "A" else "🟡 Week B"
+                _rcols[0].markdown(f'<div style="{_cell}">{week_badge}</div>', unsafe_allow_html=True)
+                _rcols[1].markdown(f'<div style="{_cell}">W{meeting.get("week_number", "?")}</div>', unsafe_allow_html=True)
+                _rcols[2].markdown(f'<div style="{_cell}">{meeting.get("meeting_date", "")}</div>', unsafe_allow_html=True)
+                _rcols[3].markdown(f'<div style="{_cell}">{meeting.get("facilitator", "Unknown")}</div>', unsafe_allow_html=True)
+                _rcols[4].markdown(f'<div style="{_cell}text-align:center;">{"✅" if _has_min else "—"}</div>', unsafe_allow_html=True)
+                
+                with _rcols[5]:
+                    if st.button("▾ Close" if _is_open else "▸ Open", key=f"toggle_scheduled_{meeting['id']}",
+                                use_container_width=True):
+                        st.session_state[_open_key] = not _is_open
                         st.rerun()
+                
+                if _is_open:
+                    with st.container(border=True):
+                        st.write(f"**Facilitator:** {meeting.get('facilitator', 'Unknown')} &nbsp;|&nbsp; **Attendees:** {meeting.get('attendees', 'Not recorded')}")
+                        st.write(f"**Type:** {'Week A' if meeting.get('week_type') == 'A' else 'Week B'}")
+                        
+                        st.markdown("---")
+                        
+                        # Check-in Notes
+                        if meeting.get('checkin_notes'):
+                            st.markdown("**📋 Check-in Notes:**")
+                            st.markdown(meeting.get('checkin_notes'))
+                        
+                        # Priority Focus (Week B)
+                        if meeting.get('week_type') == 'B' and meeting.get('priority_focus'):
+                            st.markdown("**🎯 Priority Focus:**")
+                            try:
+                                pf = _json.loads(meeting['priority_focus'])
+                                if isinstance(pf, dict):
+                                    st.markdown(pf.get('notes', ''))
+                                elif isinstance(pf, list):
+                                    for r in pf:
+                                        if isinstance(r, dict) and any(r.values()):
+                                            st.markdown("• " + " | ".join(v for v in r.values() if v))
+                            except:
+                                st.markdown(str(meeting.get('priority_focus', '')))
+                        
+                        # Student Concerns (Week A)
+                        if meeting.get('week_type') == 'A' and meeting.get('student_concerns'):
+                            try:
+                                sc = _json.loads(meeting['student_concerns'])
+                                if isinstance(sc, list) and sc:
+                                    st.markdown("**👥 Student Concerns:**")
+                                    for r in sc:
+                                        note = r.get('notes','') if isinstance(r, dict) else str(r)
+                                        if note:
+                                            st.markdown(f"• {note}")
+                            except:
+                                pass
+                        
+                        # Meeting Minutes
+                        if meeting.get('meeting_minutes'):
+                            st.markdown("**📝 Meeting Minutes:**")
+                            st.markdown(meeting.get('meeting_minutes'))
+                        else:
+                            st.info("No minutes recorded")
+                        
+                        # Actions
+                        if meeting.get('actions'):
+                            try:
+                                actions = _json.loads(meeting['actions'])
+                                if actions:
+                                    st.markdown("**✋ Actions:**")
+                                    for act in actions:
+                                        if isinstance(act, dict) and any(act.values()):
+                                            st.markdown("• " + " | ".join(v for v in act.values() if v))
+                            except:
+                                pass
+                        
+                        st.markdown("---")
+                        col_arc_edit, col_arc_dl, col_arc_del = st.columns([1.3, 1, 1])
+                        
+                        with col_arc_edit:
+                            if st.button("✏️ Edit", key=f"edit_scheduled_{meeting['id']}", type="primary", use_container_width=True):
+                                st.session_state.current_meeting_id = meeting['id']
+                                st.success("✅ Meeting loaded. Scroll up to edit.")
+                                st.rerun()
+                        
+                        with col_arc_dl:
+                            try:
+                                doc = generate_minutes_docx(
+                                    program=program,
+                                    meeting_date=meeting.get('meeting_date', ''),
+                                    facilitator=meeting.get('facilitator', ''),
+                                    attendees=meeting.get('attendees', ''),
+                                    extracted_notes=meeting.get('checkin_notes', ''),
+                                    summary_notes='',
+                                    transcript=meeting.get('meeting_minutes', '')
+                                )
+                                doc_bytes = io.BytesIO()
+                                doc.save(doc_bytes)
+                                doc_bytes.seek(0)
+                                
+                                st.download_button(
+                                    "📥 Download (.docx)",
+                                    data=doc_bytes,
+                                    file_name=f"Minutes_{meeting.get('meeting_date', '')}_{meeting.get('week_type', '')}_{program}.docx",
+                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                    key=f"download_scheduled_{meeting['id']}",
+                                    use_container_width=True
+                                )
+                            except:
+                                st.button("📥 Download (.docx)", disabled=True, use_container_width=True,
+                                        key=f"download_scheduled_disabled_{meeting['id']}")
+                        
+                        with col_arc_del:
+                            confirm_key = f"confirm_delete_scheduled_{meeting['id']}"
+                            if st.session_state.get(confirm_key):
+                                col_yes, col_no = st.columns(2)
+                                with col_yes:
+                                    if st.button("⚠️ Confirm", key=f"confirm_del_scheduled_{meeting['id']}", type="secondary", use_container_width=True):
+                                        try:
+                                            supabase.table('tm_program_meetings').delete().eq('id', meeting['id']).execute()
+                                            st.success("✅ Deleted.")
+                                            st.session_state[confirm_key] = False
+                                            st.rerun()
+                                        except Exception as e:
+                                            st.error(f"⚠️ Could not delete: {e}")
+                                with col_no:
+                                    if st.button("Cancel", key=f"cancel_del_scheduled_{meeting['id']}", use_container_width=True):
+                                        st.session_state[confirm_key] = False
+                                        st.rerun()
+                            else:
+                                if st.button("🗑️ Delete", key=f"delete_scheduled_{meeting['id']}", use_container_width=True):
+                                    st.session_state[confirm_key] = True
+                                    st.rerun()
+
 
 def main():
     program   = get_program_from_params()
