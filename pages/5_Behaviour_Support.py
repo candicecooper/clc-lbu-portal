@@ -36,6 +36,12 @@ def init_supabase() -> Client:
 
 supabase: Client = init_supabase()
 
+try:
+    from archive_utils import archive_once, initials_from_name
+    _ARCHIVE_AVAILABLE = True
+except Exception:
+    _ARCHIVE_AVAILABLE = False
+
 # ══════════════════════════════════════════════════════════════════════════
 # SHARED GROQ HELPER
 # Model fallback chain (openai/gpt-oss-120b -> qwen/qwen3.6-27b ->
@@ -2912,7 +2918,10 @@ def render_student_analysis_page():
     col1, col2 = st.columns([3, 1])
     with col1:
         if st.button("⬅ Back to Students", key="back_analysis_top"):
-            go_to("program_students", selected_program=student["program"])
+            if student.get("archived", False):
+                go_to("admin_portal")
+            else:
+                go_to("program_students", selected_program=student["program"])
     with col2:
         if st.button("🏠 Program Landing", key="home_analysis"):
             go_to("landing")
@@ -5881,16 +5890,47 @@ def render_student_analysis_page():
             docx_file = generate_behaviour_analysis_plan_docx(
                 student, full_df, top_ant, top_beh, top_loc, top_session, risk_score, risk_level)
         if docx_file:
+            _bs_date = datetime.now().strftime("%Y%m%d")
+            _bs_local_name = f"BehaviourSummary_{student['name'].replace(' ', '_')}_{_bs_date}.docx"
+            _dl_kwargs = {}
+            if _ARCHIVE_AVAILABLE:
+                _bs_initials = initials_from_name(student["name"])
+                _bs_creator = (
+                    st.session_state.current_user.get("email")
+                    or st.session_state.current_user.get("name", "unknown")
+                ) if st.session_state.get("current_user") else "unknown"
+                _dl_kwargs = dict(
+                    on_click=archive_once,
+                    kwargs=dict(
+                        guard_key=f"behreport_{student_id}_{_bs_date}",
+                        source_tool="Behaviour Support Tool",
+                        doc_type="Behaviour Report",
+                        title=f"Behaviour Summary — {_bs_initials}",
+                        file_bytes=docx_file.getvalue(),
+                        # Archive filename uses initials only — the archive
+                        # never stores full student names (privacy policy
+                        # in archive_utils.py) — separate from the
+                        # full-name filename used for the local download.
+                        filename=f"BehaviourSummary_{_bs_initials}_{_bs_date}.docx",
+                        student_initials=_bs_initials,
+                        created_by=_bs_creator,
+                        notes=f"Auto-archived on download. Risk level: {risk_level}.",
+                    ),
+                )
             st.download_button("📄 Behaviour Summary (Word)", docx_file,
-                file_name=f"BehaviourSummary_{student['name'].replace(" ", "_")}_{datetime.now().strftime("%Y%m%d")}.docx",
+                file_name=_bs_local_name,
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True)
+                use_container_width=True,
+                **_dl_kwargs)
 
     st.markdown("---")
     col1, col2 = st.columns(2)
     with col1:
         if st.button("⬅ Back to Students", type="primary", key="back_analysis_bottom", use_container_width=True):
-            go_to("program_students", selected_program=student["program"])
+            if student.get("archived", False):
+                go_to("admin_portal")
+            else:
+                go_to("program_students", selected_program=student["program"])
     with col2:
         if st.button("🏠 Program Landing", key="home_analysis_bottom", use_container_width=True):
             go_to("landing")
@@ -5905,7 +5945,10 @@ def render_student_dashboard():
     col1, col2, col3 = st.columns([2, 1, 1])
     with col1:
         if st.button("⬅ Back to Students", key="back_dash"):
-            go_to("program_students", selected_program=student["program"])
+            if student.get("archived", False):
+                go_to("admin_portal")
+            else:
+                go_to("program_students", selected_program=student["program"])
     with col2:
         if st.button("📝 Log Incident", key="log_dash"):
             go_to("incident_log", selected_student_id=student_id)
@@ -6102,7 +6145,10 @@ def render_student_dashboard():
             go_to("student_analysis", selected_student_id=student_id)
     with col3:
         if st.button("⬅ Back", use_container_width=True, key="dash_back_btn"):
-            go_to("program_students", selected_program=student["program"])
+            if student.get("archived", False):
+                go_to("admin_portal")
+            else:
+                go_to("program_students", selected_program=student["program"])
 
     # ══════════════════════════════════════════════════════════════════════════
     # PATCH 2: HISTORICAL CRITICAL INCIDENTS — tabbed: Paste / Upload
@@ -6523,6 +6569,8 @@ def render_admin_portal():
                             incident_count = len([i for i in st.session_state.incidents if i['student_id'] == student['id']])
                             st.caption(f"📋 {incident_count} incidents on record")
                         with col3:
+                            if st.button("👁️ View Details", key=f"view_archived_{student['id']}", use_container_width=True):
+                                go_to("student_dashboard", selected_student_id=student['id'])
                             if st.button("♻️ Restore", key=f"restore_{student['id']}"):
                                 student['archived'] = False
                                 if supabase:
