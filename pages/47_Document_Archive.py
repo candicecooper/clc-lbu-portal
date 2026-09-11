@@ -198,28 +198,41 @@ with tab_browse:
 # STUDENT FOLDERS — everything for one student, grouped by document type
 # ===========================================================================
 with tab_student:
-    # Apply a pending folder-button selection BEFORE the widget is created
-    # (Streamlit forbids setting a widget's key after it's instantiated).
+    # Apply a pending folder-button selection, or a request to clear back to
+    # the directory, BEFORE the widget is created (Streamlit forbids setting
+    # a widget's key after it's instantiated).
     if "_sf_pending" in st.session_state:
         st.session_state["student_folder_initials"] = st.session_state.pop(
             "_sf_pending"
         )
-
-    st.write(
-        "Enter a student's initials to open their folder — every archived "
-        "document for that student, grouped by type."
-    )
+    if st.session_state.pop("_sf_clear", False):
+        st.session_state["student_folder_initials"] = ""
 
     _labels = _student_labels()
+    _conf_ok = _confidential_unlocked()
+    _currently_open = st.session_state.get("student_folder_initials", "").strip()
+
+    top_l, top_r = st.columns([3, 1])
+    with top_l:
+        st.write(
+            "Active students are listed below, grouped by program and term — "
+            "click a folder to open it. Search by initials, or switch to "
+            "archived students."
+        )
+    with top_r:
+        if _currently_open:
+            st.write("")
+            if st.button("⬅️ All active folders", use_container_width=True):
+                st.session_state["_sf_clear"] = True
+                st.session_state.pop("_folder_arch", None)
+                st.rerun()
 
     sc1, sc2 = st.columns([1, 3])
     with sc1:
         sf_initials = st.text_input(
-            "Student initials", max_chars=4, placeholder="e.g. JT",
+            "Or search by initials", max_chars=4, placeholder="e.g. JT",
             key="student_folder_initials",
         )
-
-    _conf_ok = _confidential_unlocked()
 
     if sf_initials.strip():
         ini = sf_initials.strip().upper()
@@ -317,6 +330,64 @@ with tab_student:
                         st.session_state["_sf_pending"] = _target
                         st.rerun()
 
+        # --- Upload straight into this folder (works for active AND
+        # archived students — nothing here is gated on register status) ---
+        with st.expander("➕ Upload a document to this folder", expanded=False):
+            with st.form(f"folder_upload_{ini}", clear_on_submit=True):
+                fu = st.file_uploader(
+                    "Document",
+                    type=["docx", "pdf", "xlsx", "pptx", "png", "jpg"],
+                    key=f"fu_file_{ini}",
+                )
+                fu1, fu2 = st.columns(2)
+                with fu1:
+                    fu_title = st.text_input("Title *", key=f"fu_title_{ini}")
+                    fu_doc_type = st.selectbox(
+                        "Document type *", DOC_TYPES, key=f"fu_type_{ini}"
+                    )
+                with fu2:
+                    fu_term = st.selectbox(
+                        "Term *", TERMS, index=1, key=f"fu_term_{ini}"
+                    )
+                    fu_year = st.selectbox(
+                        "Year *", [2026, 2025], key=f"fu_year_{ini}"
+                    )
+                fu_conf = st.checkbox(
+                    "Confidential 🔒", value=False, key=f"fu_conf_{ini}"
+                )
+                fu_notes = st.text_area(
+                    "Notes (optional)", height=68, key=f"fu_notes_{ini}"
+                )
+                fu_submit = st.form_submit_button(
+                    f"Archive to {_display}", type="primary"
+                )
+
+            if fu_submit:
+                if not fu or not fu_title.strip():
+                    st.warning("A file and a title are both required.")
+                elif fu_conf and not _conf_ok:
+                    st.warning(
+                        "Unlock the confidential section (Browse tab) before "
+                        "archiving confidential documents."
+                    )
+                else:
+                    fu_rec = archive_document(
+                        source_tool="Manual Upload",
+                        doc_type=fu_doc_type,
+                        title=fu_title.strip(),
+                        file_bytes=fu.getvalue(),
+                        filename=fu.name,
+                        student_initials=ini,
+                        term=fu_term,
+                        year=int(fu_year),
+                        confidential=fu_conf,
+                        created_by=user_email,
+                        notes=fu_notes.strip() or None,
+                    )
+                    if fu_rec:
+                        st.success(f"Archived to {_display}: {fu_rec['title']}")
+                        st.rerun()
+
         if not recs:
             st.info(f"No archived documents found for **{_display}**.")
         else:
@@ -383,13 +454,47 @@ with tab_student:
                                     st.session_state.pop("_confirm_del", None)
                                     st.rerun()
     else:
-        # Directory: every ACTIVE registered student (even with no docs
-        # yet), plus any folders that exist outside the register.
+        # Directory: every registered student (even with no docs yet),
+        # grouped by Program (JP / PY / SY) then by term, plus any folders
+        # that exist outside the register. Archived students are hidden
+        # behind an explicit toggle so the default view is always "all
+        # active" — this tab never silently reopens the last folder you
+        # had open, because sf_initials is empty every time you land here
+        # with nothing searched/selected.
         all_recs = fetch_archive(include_confidential=_conf_ok, limit=1000)
         counts: dict[str, int] = {}
+        recs_by_ini: dict[str, list] = {}
         for r in all_recs:
             if r.get("student_initials"):
                 counts[r["student_initials"]] = counts.get(r["student_initials"], 0) + 1
+                recs_by_ini.setdefault(r["student_initials"], []).append(r)
+
+        _PROGRAM_ORDER = ["JP", "PY", "SY"]
+
+        def _term_sort_key(term, year):
+            try:
+                yy = int(year) if year else 0
+            except Exception:
+                yy = 0
+            t_idx = TERMS.index(term) if term in TERMS else -1
+            return (yy, t_idx)
+
+        def _current_term_key(ini):
+            """(term, year) of this student's most recently added document,
+            used to place their folder under the right term — or None if
+            they have no documents archived yet."""
+            recs_ = recs_by_ini.get(ini, [])
+            if not recs_:
+                return None
+            best = max(recs_, key=lambda r: _term_sort_key(r.get("term"), r.get("year")))
+            t, y = best.get("term"), best.get("year")
+            return (t, y) if t else None
+
+        def _term_key_label(key):
+            if key is None:
+                return "No documents yet"
+            t, y = key
+            return f"{t} {y}" if y else t
 
         def _folder_grid(entries, key_prefix):
             cols = st.columns(4)
@@ -400,45 +505,91 @@ with tab_student:
                         st.session_state["_sf_pending"] = ini
                         st.rerun()
 
+        def _render_by_program_term(students, key_prefix, badge):
+            by_program: dict[str, list] = {}
+            for s in students:
+                prog = s.get("program") or "No program set"
+                by_program.setdefault(prog, []).append(s)
+
+            ordered_programs = sorted(
+                by_program,
+                key=lambda p: (
+                    _PROGRAM_ORDER.index(p) if p in _PROGRAM_ORDER else 99, p
+                ),
+            )
+            for prog in ordered_programs:
+                st.markdown(f"#### {prog}")
+                by_term: dict = {}
+                for s in by_program[prog]:
+                    by_term.setdefault(_current_term_key(s["initials"]), []).append(s)
+
+                term_keys = sorted(
+                    (k for k in by_term if k is not None),
+                    key=lambda k: _term_sort_key(k[0], k[1]),
+                    reverse=True,
+                )
+                if None in by_term:
+                    term_keys.append(None)
+
+                for tkey in term_keys:
+                    st.caption(_term_key_label(tkey))
+                    entries = [
+                        (
+                            s["initials"],
+                            f"{badge} {_labels.get(s['initials'], s['initials'])} "
+                            f"({counts.get(s['initials'], 0)})",
+                        )
+                        for s in by_term[tkey]
+                    ]
+                    _folder_grid(entries, f"{key_prefix}_{prog}_{_term_key_label(tkey)}")
+                st.write("")
+
         seen = set()
-
-        current_entries = []
-        for s in fetch_register("active"):
-            if s["initials"] in seen:
-                continue  # duplicate register entries — one folder button
-            n = counts.get(s["initials"], 0)
-            current_entries.append(
-                (s["initials"], f"📁 {_labels.get(s['initials'], s['initials'])} ({n})")
-            )
-            seen.add(s["initials"])
-
-        archived_entries = []
-        for s in fetch_register("archived"):
-            if s["initials"] in seen:
-                continue
-            n = counts.get(s["initials"], 0)
-            _exit = f" · exited {str(s['exit_date'])[:4]}" if s.get("exit_date") else ""
-            archived_entries.append(
-                (s["initials"], f"📦 {_labels.get(s['initials'], s['initials'])}{_exit} ({n})")
-            )
-            seen.add(s["initials"])
-
+        _active_reg = [
+            s for s in fetch_register("active")
+            if not (s["initials"] in seen or seen.add(s["initials"]))
+        ]
+        _archived_reg = [
+            s for s in fetch_register("archived")
+            if not (s["initials"] in seen or seen.add(s["initials"]))
+        ]
         other_entries = [
             (ini, f"📁 {_labels.get(ini, ini)} ({counts[ini]})")
             for ini in sorted(counts) if ini not in seen
         ]
 
-        if current_entries:
-            st.markdown("### 👥 Current students")
-            _folder_grid(current_entries, "cur")
-        if archived_entries:
-            st.markdown("### 📦 Archived students")
+        st.markdown("### 👥 Active students — by program & term")
+        if _active_reg:
+            _render_by_program_term(_active_reg, "cur", "📁")
+        else:
+            st.info(
+                "No active students yet — add them in the Student Register "
+                "when they arrive, and their folders will appear here."
+            )
+
+        st.divider()
+        _show_archived = st.session_state.get("sf_show_archived", False)
+        if st.button(
+            "📦 Hide archived folders" if _show_archived
+            else "📦 Show archived folders"
+        ):
+            st.session_state["sf_show_archived"] = not _show_archived
+            st.rerun()
+
+        if _show_archived:
+            st.markdown("### 📦 Archived students — by program & term")
             st.caption(
                 "Students who have transitioned out — every document remains "
-                "here, fully accessible."
+                "here, fully accessible, and you can still upload to their "
+                "folder."
             )
-            _folder_grid(archived_entries, "arc")
+            if _archived_reg:
+                _render_by_program_term(_archived_reg, "arc", "📦")
+            else:
+                st.info("No archived students yet.")
+
         if other_entries:
+            st.divider()
             st.markdown("### 🗂️ Folders not linked to the register")
             st.caption(
                 "Documents filed under initials with no register entry — "
@@ -446,11 +597,6 @@ with tab_student:
                 "student to the register."
             )
             _folder_grid(other_entries, "oth")
-        if not (current_entries or archived_entries or other_entries):
-            st.info(
-                "No students yet — add them in the Student Register when "
-                "they arrive, and their folders will appear here."
-            )
 
 # ===========================================================================
 # ADD DOCUMENT (manual upload — for docs created outside the portal)
@@ -462,11 +608,26 @@ with tab_add:
         "(e.g. a term report or a scanned plan)."
     )
 
-    _active_students = fetch_register("active")
     _add_labels = _student_labels()
-    _student_options = ["— Not student-linked —"] + [
-        _add_labels.get(s["initials"], s["initials"]) for s in _active_students
-    ] + ["Other (type initials manually)"]
+    _active_set = {s["initials"] for s in fetch_register("active")}
+    _archived_set = {s["initials"] for s in fetch_register("archived")}
+
+    _seen_add = set()
+    _dedup_students = [
+        s for s in fetch_register(None)
+        if not (s["initials"] in _seen_add or _seen_add.add(s["initials"]))
+    ]
+
+    _option_map = {"— Not student-linked —": None}
+    _student_options = ["— Not student-linked —"]
+    for s in _dedup_students:
+        _badge = "📦" if s["initials"] in _archived_set else "🟢"
+        _label = f"{_badge} {_add_labels.get(s['initials'], s['initials'])}"
+        if s["initials"] in _archived_set:
+            _label += " (archived)"
+        _student_options.append(_label)
+        _option_map[_label] = s["initials"]
+    _student_options.append("Other (type initials manually)")
 
     with st.form("manual_archive", clear_on_submit=True):
         up = st.file_uploader(
@@ -495,7 +656,7 @@ with tab_add:
         elif m_student.startswith("Other"):
             m_ini = m_initials_manual.strip().upper() or None
         else:
-            m_ini = m_student.split(" · ")[0].strip()
+            m_ini = _option_map.get(m_student)
 
         if not up or not m_title.strip():
             st.warning("A file and a title are both required.")
