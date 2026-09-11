@@ -54,6 +54,58 @@ GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
 # Create Supabase client with service_role key to avoid RLS issues
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
+# ── Groq token-budget guard ────────────────────────────────────────────────────
+# The Groq account is on the on_demand tier. openai/gpt-oss-120b's cap is
+# 8,000 tokens/minute total, shared across prompt + requested output.
+# A safety margin is applied on top of 8,000 cap.
+GROQ_TPM_LIMIT = 8000
+
+def _fit_to_groq_budget(text: str, max_tokens: int, prompt_overhead_tokens: int = 400,
+                        tpm_limit: int = GROQ_TPM_LIMIT) -> tuple[str, bool]:
+    """Truncate text so prompt_overhead + text + max_tokens stays under the
+    account's TPM limit, with a safety margin. Returns (possibly-truncated
+    text, was_truncated)."""
+    CHARS_PER_TOKEN = 4  # rough estimate for English text
+    SAFETY_MARGIN = 0.85  # headroom for the estimate above being approximate
+    input_token_budget = (tpm_limit - max_tokens - prompt_overhead_tokens) * SAFETY_MARGIN
+    char_budget = max(0, int(input_token_budget)) * CHARS_PER_TOKEN
+    if len(text) <= char_budget:
+        return text, False
+    return text[:char_budget], True
+
+# ── Meeting sections fixed structure ───────────────────────────────────────────
+# For Week A/B meetings: fixed sections for parsing/rebuilding organized content
+MEETING_SECTIONS = [
+    ("items_discussed", "Items Discussed"),
+    ("actions", "Actions"),
+]
+_NIL_TEXT = "Nil discussed this meeting."
+
+def _parse_meeting_sections(content: str) -> dict:
+    """Split organized content into per-section text using ===SECTION=== headers.
+    Missing sections return blank rather than erroring."""
+    import re
+    result = {key: "" for key, _ in MEETING_SECTIONS}
+    if not content:
+        return result
+    
+    for key, label in MEETING_SECTIONS:
+        pattern = rf"==={re.escape(label)}===\n(.*?)(?===\w|$)"
+        m = re.search(pattern, content, re.DOTALL | re.IGNORECASE)
+        if m:
+            val = m.group(1).strip()
+            result[key] = val if val and val != _NIL_TEXT else ""
+    return result
+
+def _build_meeting_sections(section_values: dict) -> str:
+    """Combine section fields into one organized document."""
+    parts = []
+    for key, label in MEETING_SECTIONS:
+        content = (section_values.get(key) or "").strip() or _NIL_TEXT
+        parts.append(f"==={label}===\n{content}")
+    return "\n\n".join(parts)
+
+
 # ── Programs ──────────────────────────────────────────────────────────────────
 PROGRAMS = {
     "JP":         {"label": "Junior Primary",     "color": "#2d7d4f", "light": "#d1fae5", "emoji": "🟢"},
@@ -1978,31 +2030,63 @@ To remove a meeting, click the 🗑️ Delete button and confirm.
                                 groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
                                 
                                 if groq_client:
+                                    # Apply token budget guard
+                                    adhoc_for_extract, was_truncated = _fit_to_groq_budget(
+                                        adhoc_transcript, max_tokens=1000, prompt_overhead_tokens=300
+                                    )
+                                    
+                                    if was_truncated:
+                                        st.warning(
+                                            "⚠️ This transcript is longer than the AI can read in one go "
+                                            "(Groq's 8,000 tokens/minute limit). Only "
+                                            "the first part was extracted. Paste the rest of the transcript "
+                                            "and click **AI Extract** again — the new part "
+                                            "will be added to the extracted content below rather than replacing it."
+                                        )
+                                    
                                     response = groq_client.chat.completions.create(
                                         model="openai/gpt-oss-120b",
                                         messages=[
                                             {
                                                 "role": "system",
-                                                "content": """Extract two things from this meeting transcript, keeping ALL details:
+                                                "content": """Extract items and actions from this meeting transcript, keeping ALL details.
+
+Rules:
+1. Keep ALL substantive points from the transcript
+2. Preserve exact wording and specific information (names, dates, figures)
+3. Do not invent anything that isn't in the transcript
+
+Output EXACTLY in this format:
 
 ===ITEMS DISCUSSED===
-[Write everything discussed - keep full detail and wording]
+[Keep ALL details about what was discussed - do not summarize]
 
 ===ACTIONS===
 - Who: What by When
-[Extract only clear action items with who, what, and deadline]"""
+[Extract only explicit action items with who, what, and when]
+"""
                                             },
                                             {
                                                 "role": "user",
-                                                "content": f"Meeting transcript:\n\n{adhoc_transcript}"
+                                                "content": f"Meeting transcript:\n\n{adhoc_for_extract}"
                                             }
                                         ],
+                                        temperature=0.3,
                                         max_tokens=1000
                                     )
                                     
-                                    extracted = response.choices[0].message.content
-                                    st.session_state[f"adhoc_extracted_{program}"] = extracted
-                                    st.success("✅ Extracted!")
+                                    new_extracted = response.choices[0].message.content.strip()
+                                    
+                                    # Handle incremental extraction
+                                    existing_extracted = st.session_state.get(f"adhoc_extracted_{program}", "").strip()
+                                    if existing_extracted:
+                                        combined = existing_extracted + "\n\n— continued —\n\n" + new_extracted
+                                        st.success("✅ Transcript extracted and added to the extracted content below.")
+                                    else:
+                                        combined = new_extracted
+                                        st.success("✅ Transcript extracted — review below and edit as needed.")
+                                    
+                                    st.session_state[f"adhoc_extracted_{program}"] = combined
                                 else:
                                     st.warning("Groq API not configured")
                                     
@@ -2406,6 +2490,20 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
                             groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
                             
                             if groq_client:
+                                # Apply token budget guard
+                                transcript_for_org, was_truncated = _fit_to_groq_budget(
+                                    transcript_to_org, max_tokens=2000, prompt_overhead_tokens=350
+                                )
+                                
+                                if was_truncated:
+                                    st.warning(
+                                        "⚠️ This transcript is longer than the AI can read in one go "
+                                        "(Groq's 8,000 tokens/minute limit). Only "
+                                        "the first part was organized. Paste the rest of the transcript "
+                                        "above and click **AI Organize** again — the new part "
+                                        "will be added to the organized content below rather than replacing it."
+                                    )
+                                
                                 response = groq_client.chat.completions.create(
                                     model="openai/gpt-oss-120b",
                                     messages=[
@@ -2413,31 +2511,45 @@ Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
                                             "role": "system",
                                             "content": """You are organizing a meeting transcript into two sections.
 
-IMPORTANT: Keep ALL details from the transcript. Do NOT summarize or condense. Preserve exact wording when possible.
+Rules:
+1. Keep ALL substantive details from the transcript
+2. Do NOT summarize, condense, or remove detail
+3. Preserve exact wording and specific information (names, dates, figures)
+4. Do not invent anything that isn't in the transcript
 
 Output EXACTLY in this format:
 
 ===ITEMS DISCUSSED===
-[Keep ALL details from the transcript about what was discussed. Do not summarize - preserve detail]
+[Keep ALL details about what was discussed - no summarization]
 
 ===ACTIONS===
 - Who: What by When
 - Who: What by When
-[Extract only explicit action items. If no clear actions, write "None identified"]
+[Extract only explicit action items with who, what, and when. If no clear actions, write: None identified]
 
-Do NOT use any other sections. Do NOT condense. Do NOT remove detail."""
+Use ONLY these two sections. Do NOT add other sections."""
                                         },
                                         {
                                             "role": "user",
-                                            "content": f"Organize this meeting transcript:\n\n{transcript_to_org}"
+                                            "content": f"Organize this meeting transcript:\n\n{transcript_for_org}"
                                         }
                                     ],
+                                    temperature=0.3,
                                     max_tokens=2000
                                 )
                                 
-                                organized = response.choices[0].message.content
-                                st.session_state[f"organized_transcript_{program}"] = organized
-                                st.success("✅ Transcript organized by AI!")
+                                new_organized = response.choices[0].message.content.strip()
+                                
+                                # Handle incremental organization (like STAFF Meetings synthesis)
+                                existing_org = st.session_state.get(f"organized_transcript_{program}", "").strip()
+                                if existing_org:
+                                    combined = existing_org + "\n\n— continued —\n\n" + new_organized
+                                    st.success("✅ Transcript organized and added to the organized content below.")
+                                else:
+                                    combined = new_organized
+                                    st.success("✅ Transcript organized — review below and edit as needed.")
+                                
+                                st.session_state[f"organized_transcript_{program}"] = combined
                             else:
                                 st.warning("Groq API not configured")
                                 
