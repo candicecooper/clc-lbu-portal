@@ -513,6 +513,29 @@ def normalise_term_short(raw: str) -> str:
         return f"T{m.group(1)}"
     return raw
 
+
+def _meeting_year_term_group(meeting: dict):
+    """Group/sort key for the Meeting Archive: (year, term number), newest
+    first. Falls back to 0 for anything unparseable so odd/legacy records
+    still show up (under an 'Unknown' heading) instead of erroring out."""
+    date_str = meeting.get('meeting_date') or ''
+    try:
+        year = datetime.date.fromisoformat(str(date_str)).year
+    except Exception:
+        year = 0
+    term_match = re.search(r'(\d)', normalise_term_short(meeting.get('term', '')))
+    term_num = int(term_match.group(1)) if term_match else 0
+    return (year, term_num)
+
+
+def _meeting_week_sort_key(meeting: dict):
+    """Sort key for ordering meetings within a term — by week number where
+    possible, falling back to the meeting date."""
+    try:
+        return (0, int(re.search(r'\d+', str(meeting.get('week_number', ''))).group()))
+    except Exception:
+        return (1, meeting.get('meeting_date', '') or '')
+
 # ── BSEM Icebreakers (5-minute activities) ────────────────────────────────────
 BSEM_ICEBREAKERS = [
     {
@@ -634,14 +657,24 @@ st.subheader("📅 Select Meeting")
 
 # Fetch existing meetings
 try:
-    result = supabase.table('staff_meetings').select('*').order('meeting_date', desc=True).limit(20).execute()
+    # NOTE: this used to be .limit(20) — once more than 20 meetings existed
+    # in total, the oldest ones silently stopped appearing in BOTH the
+    # "Choose a meeting" dropdown below and the Meeting Archive tab, with no
+    # error or warning. That's almost certainly why a meeting you'd worked on
+    # repeatedly seemed to vanish — it's very unlikely to be deleted, just no
+    # longer inside the most-recent-20 window this query returned. Raised the
+    # cap generously; a school year of weekly meetings is nowhere near this.
+    result = supabase.table('staff_meetings').select('*').order('meeting_date', desc=True).limit(500).execute()
     existing_meetings = result.data if result.data else []
 except Exception as e:
     st.warning(f"Could not load meetings: {e}")
     existing_meetings = []
 
 meeting_options = ["➕ New Meeting"] + [
-    f"{m['meeting_date']} - T{m.get('term', '?')} W{m.get('week_number', '?')} - {m.get('minute_taker', 'Unknown')}"
+    # normalise_term_short already returns "T3" etc — the term field itself
+    # is stored WITH the "T" prefix, so prepending another literal "T" here
+    # used to produce labels like "TT3" everywhere a meeting was listed.
+    f"{m['meeting_date']} - {normalise_term_short(m.get('term', '?'))} W{m.get('week_number', '?')} - {m.get('minute_taker', 'Unknown')}"
     for m in existing_meetings
 ]
 
@@ -703,8 +736,67 @@ with tab2:
     st.subheader("📚 Past STAFF Meetings")
     
     if existing_meetings:
-        for meeting in existing_meetings:
-            with st.expander(f"📅 {meeting['meeting_date']} - T{meeting.get('term', '?')} W{meeting.get('week_number', '?')} - {meeting.get('minute_taker', 'Unknown')}"):
+        # Group into terms instead of one long flat list — a quick-scan
+        # table is printed above each term's group (newest term first,
+        # weeks ascending within it). Full detail (minutes, actions,
+        # attachments, edit/download/delete) is still reached by opening
+        # that week's entry below its table.
+        _archive_groups = {}
+        for _m in existing_meetings:
+            _archive_groups.setdefault(_meeting_year_term_group(_m), []).append(_m)
+        _sorted_meetings = []
+        for _key in sorted(_archive_groups.keys(), reverse=True):
+            _sorted_meetings.extend(sorted(_archive_groups[_key], key=_meeting_week_sort_key))
+
+        for _idx, meeting in enumerate(_sorted_meetings):
+            _group_key = _meeting_year_term_group(meeting)
+            _is_new_group = _idx == 0 or _meeting_year_term_group(_sorted_meetings[_idx - 1]) != _group_key
+            if _is_new_group:
+                _year, _term_num = _group_key
+                _term_label = f"Term {_term_num}, {_year}" if _term_num else (str(_year) if _year else "Unknown date")
+                _term_group_meetings = _archive_groups[_group_key]
+                st.markdown(
+                    f'<div style="margin-top:26px;margin-bottom:8px;padding:8px 14px;'
+                    f'background:#{_CLC_TEAL_LIGHT};border-left:4px solid #{_CLC_TEAL};'
+                    f'border-radius:4px;font-family:&quot;Segoe UI&quot;,Arial,sans-serif;'
+                    f'font-size:16px;font-weight:700;color:#{_CLC_TEAL};">'
+                    f'🗓️ {_term_label} &nbsp;·&nbsp; {len(_term_group_meetings)} meeting(s)</div>',
+                    unsafe_allow_html=True
+                )
+                _rows_html = ""
+                for _tm in _term_group_meetings:
+                    _has_min = bool((_tm.get('minutes') or '').strip())
+                    _att_count = 0
+                    for _field in ('meeting_attachments', 'pd_attachments'):
+                        try:
+                            _raw = _tm.get(_field)
+                            _parsed = json.loads(_raw) if isinstance(_raw, str) else (_raw or [])
+                            _att_count += len(_parsed)
+                        except Exception:
+                            pass
+                    _rows_html += (
+                        '<tr>'
+                        f'<td style="padding:6px 10px;border:1px solid #{_CLC_BORDER};">Week {_tm.get("week_number", "?")}</td>'
+                        f'<td style="padding:6px 10px;border:1px solid #{_CLC_BORDER};">{_tm.get("meeting_date", "")}</td>'
+                        f'<td style="padding:6px 10px;border:1px solid #{_CLC_BORDER};">{_tm.get("minute_taker", "Unknown")}</td>'
+                        f'<td style="padding:6px 10px;border:1px solid #{_CLC_BORDER};text-align:center;">{"✅" if _has_min else "—"}</td>'
+                        f'<td style="padding:6px 10px;border:1px solid #{_CLC_BORDER};text-align:center;">{_att_count if _att_count else "—"}</td>'
+                        '</tr>'
+                    )
+                st.markdown(
+                    '<table style="width:100%;border-collapse:collapse;'
+                    'font-family:&quot;Segoe UI&quot;,Arial,sans-serif;font-size:13.5px;margin-bottom:10px;">'
+                    f'<tr style="background:#{_CLC_TEAL};color:white;">'
+                    '<th style="padding:6px 10px;text-align:left;">Week</th>'
+                    '<th style="padding:6px 10px;text-align:left;">Date</th>'
+                    '<th style="padding:6px 10px;text-align:left;">Minute Taker</th>'
+                    '<th style="padding:6px 10px;text-align:center;">Minutes</th>'
+                    '<th style="padding:6px 10px;text-align:center;">Attachments</th>'
+                    f'</tr>{_rows_html}</table>',
+                    unsafe_allow_html=True
+                )
+
+            with st.expander(f"📅 {meeting['meeting_date']} - {normalise_term_short(meeting.get('term', '?'))} W{meeting.get('week_number', '?')} - {meeting.get('minute_taker', 'Unknown')}"):
                 st.write(f"**Attendees:** {meeting.get('attendees', 'Not recorded')}")
                 st.write(f"**Apologies:** {meeting.get('apologies', 'None')}")
                 
@@ -776,7 +868,7 @@ with tab2:
                     if st.button("✏️ Edit / Add to This Meeting", key=f"edit_archived_{meeting['id']}",
                                  type="primary", use_container_width=True):
                         _edit_label = (
-                            f"{meeting['meeting_date']} - T{meeting.get('term', '?')} "
+                            f"{meeting['meeting_date']} - {normalise_term_short(meeting.get('term', '?'))} "
                             f"W{meeting.get('week_number', '?')} - {meeting.get('minute_taker', 'Unknown')}"
                         )
                         st.session_state["_pending_meeting_jump"] = _edit_label
