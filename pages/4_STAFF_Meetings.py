@@ -1098,17 +1098,27 @@ with tab1:
     _term_opts = ["T1", "T2", "T3", "T4"]
     _term_idx  = _term_opts.index(normalise_term_short(default_term)) if normalise_term_short(default_term) in _term_opts else 1
 
+    # Namespaced per meeting id — otherwise, like every other widget in this
+    # file, these only pick up a NEW meeting's date/term/week/taker the very
+    # first time they're ever rendered; every meeting opened afterwards (e.g.
+    # via "Edit / Add to This Meeting" from the Archive tab) would silently
+    # keep showing whichever meeting's values were last typed here, and
+    # clicking Save Meeting would then overwrite the correct record's real
+    # date/term/week with those stale leftover values — this is almost
+    # certainly how meetings ended up looking duplicated/wrong before.
+    _details_mkey = st.session_state.current_staff_meeting_id or "new"
+
     with col1:
-        meeting_date = st.date_input("Meeting Date", value=default_date, key="staff_date")
+        meeting_date = st.date_input("Meeting Date", value=default_date, key=f"staff_date_{_details_mkey}")
 
     with col2:
-        term = st.selectbox("Term", options=_term_opts, index=_term_idx, key="staff_term")
-    
+        term = st.selectbox("Term", options=_term_opts, index=_term_idx, key=f"staff_term_{_details_mkey}")
+
     with col3:
-        week_number = st.number_input("Week Number", min_value=1, max_value=11, value=default_week, key="staff_week")
-    
+        week_number = st.number_input("Week Number", min_value=1, max_value=11, value=default_week, key=f"staff_week_{_details_mkey}")
+
     default_minute_taker = selected_record.get('minute_taker', '') if selected_record else ''
-    minute_taker = st.text_input("Minute Taker", value=default_minute_taker, key="minute_taker")
+    minute_taker = st.text_input("Minute Taker", value=default_minute_taker, key=f"minute_taker_{_details_mkey}")
     
     st.markdown("---")
     # ══════════════════════════════════════════════════════════════════════════════
