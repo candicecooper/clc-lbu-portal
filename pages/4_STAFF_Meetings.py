@@ -355,6 +355,91 @@ supabase_ops = create_client(SUPABASE_URL_OPERATIONAL, SUPABASE_SERVICE_KEY_OPER
 
 GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
 
+# ── Staff roster (for click-to-select attendance) ──────────────────────────────
+# STAFF_NAMES is set in Render/secrets.toml as a single string shared with other
+# tools in the portal. Tolerant of comma-, semicolon- or newline-separated lists
+# since we don't control how it's formatted upstream.
+def _parse_staff_roster(raw: str) -> list:
+    if not raw:
+        return []
+    parts = re.split(r'[,;\n]+', str(raw))
+    seen = set()
+    names = []
+    for p in parts:
+        name = p.strip()
+        if name and name not in seen:
+            seen.add(name)
+            names.append(name)
+    return names
+
+STAFF_ROSTER = _parse_staff_roster(st.secrets.get("STAFF_NAMES", ""))
+
+
+def _render_roster_attendance(label_prefix: str, key_prefix: str, roster: list,
+                               seed_present: str, seed_apologies: str):
+    """Click-to-select attendance from the staff roster instead of free text.
+    key_prefix MUST already include the current meeting id — like every
+    other per-meeting widget in this file, an un-namespaced key would freeze
+    on whichever meeting first rendered it and ignore every other meeting's
+    saved data afterwards.
+    Returns (present_str, apologies_str) as comma-joined names, in the same
+    plain-string format the rest of the app (docx export, Archive display,
+    PD pre-fill) already expects — no data model changes needed downstream.
+    Seeding an existing meeting's checkboxes is a best-effort NAME MATCH
+    against its old free-text fields (this app has stored attendance as
+    free text until now), so a name typo'd differently in old data won't
+    auto-check — that's what the "Other" box below is for.
+    """
+    if not roster:
+        # No roster configured (STAFF_NAMES secret not set) — fall back to
+        # the original free-text boxes rather than showing an empty picker.
+        present = st.text_area(f"{label_prefix} Present", value=seed_present or '', height=80,
+                                key=f"{key_prefix}_present_text",
+                                placeholder="List staff members present...")
+        absent = st.text_area(f"{label_prefix} Apologies", value=seed_apologies or '', height=60,
+                               key=f"{key_prefix}_apologies_text",
+                               placeholder="List staff members with apologies...")
+        return present, absent
+
+    seed_present = seed_present or ''
+    seed_apologies = seed_apologies or ''
+    _statuses = ["—", "Present", "Apologies"]
+
+    def _seed_status(name):
+        if name in seed_present:
+            return "Present"
+        if name in seed_apologies:
+            return "Apologies"
+        return "—"
+
+    st.caption(f"Click each name's status for {label_prefix.lower()}.")
+    present_names, apology_names = [], []
+    cols = st.columns(2)
+    for i, name in enumerate(roster):
+        with cols[i % 2]:
+            status = st.radio(name, options=_statuses, index=_statuses.index(_seed_status(name)),
+                               horizontal=True, key=f"{key_prefix}_status_{name}")
+        if status == "Present":
+            present_names.append(name)
+        elif status == "Apologies":
+            apology_names.append(name)
+
+    col_extra1, col_extra2 = st.columns(2)
+    with col_extra1:
+        extra_present = st.text_input(
+            "Other present (not on the list above)", key=f"{key_prefix}_present_extra",
+            placeholder="e.g. relief staff, visitors"
+        )
+    with col_extra2:
+        extra_apologies = st.text_input(
+            "Other apologies (not on the list above)", key=f"{key_prefix}_apologies_extra"
+        )
+
+    present = ", ".join(present_names + ([extra_present.strip()] if extra_present.strip() else []))
+    apologies = ", ".join(apology_names + ([extra_apologies.strip()] if extra_apologies.strip() else []))
+    return present, apologies
+
+
 # ── Supabase Storage attachment helpers ────────────────────────────────────────
 # Attachments previously only saved file *metadata* (name/size/type) — nothing
 # was ever uploaded anywhere, so "Add All Files" looked like it worked but
@@ -736,13 +821,13 @@ with tab2:
     st.subheader("📚 Past STAFF Meetings")
     
     if existing_meetings:
-        # Group into terms instead of one long flat list. Each meeting is
-        # shown ONCE — as a single clickable entry whose own label carries
-        # the week/date/taker/minutes/attachments summary — sitting directly
-        # under its term heading, in week order. (This used to print a
-        # separate summary table above a separate list of expanders below
-        # it, so every meeting effectively appeared twice on the page —
-        # that's collapsed into one row per meeting now.)
+        # Group into terms instead of one long flat list. Each term gets a
+        # real table (aligned header + data rows via st.columns, since
+        # Streamlit's own st.table/st.dataframe can't hold a clickable
+        # button in a cell) — clicking "Open" in a row's own last column
+        # reveals that meeting's full detail directly beneath its row, so
+        # the click-to-open lives inside the table itself rather than in a
+        # separate list elsewhere on the page.
         _archive_groups = {}
         for _m in existing_meetings:
             _archive_groups.setdefault(_meeting_year_term_group(_m), []).append(_m)
@@ -762,6 +847,8 @@ with tab2:
             _wkey = (*_meeting_year_term_group(_m), str(_m.get('week_number', '')).strip())
             _week_counts[_wkey] = _week_counts.get(_wkey, 0) + 1
 
+        _archive_col_ratios = [1, 1.3, 1.8, 1.1, 1.2, 1]
+
         for _idx, meeting in enumerate(_sorted_meetings):
             _group_key = _meeting_year_term_group(meeting)
             _is_new_group = _idx == 0 or _meeting_year_term_group(_sorted_meetings[_idx - 1]) != _group_key
@@ -775,13 +862,23 @@ with tab2:
                     _term_label = "⚠️ Date/term missing on these records — check them below"
                 _term_group_meetings = _archive_groups[_group_key]
                 st.markdown(
-                    f'<div style="margin-top:26px;margin-bottom:8px;padding:8px 14px;'
-                    f'background:#{_CLC_TEAL_LIGHT};border-left:4px solid #{_CLC_TEAL};'
-                    f'border-radius:4px;font-family:&quot;Segoe UI&quot;,Arial,sans-serif;'
-                    f'font-size:16px;font-weight:700;color:#{_CLC_TEAL};">'
+                    f'<div style="margin-top:28px;margin-bottom:0;padding:8px 14px;'
+                    f'background:#{_CLC_TEAL};border-radius:6px 6px 0 0;'
+                    f'font-family:&quot;Segoe UI&quot;,Arial,sans-serif;'
+                    f'font-size:16px;font-weight:700;color:white;">'
                     f'🗓️ {_term_label} &nbsp;·&nbsp; {len(_term_group_meetings)} meeting(s)</div>',
                     unsafe_allow_html=True
                 )
+                # Header row for this term's table, column-aligned with the
+                # data rows below via the same st.columns ratios.
+                _hcols = st.columns(_archive_col_ratios, gap="small")
+                for _hc, _htext in zip(_hcols, ["Week", "Date", "Minute Taker", "Minutes", "Attachments", ""]):
+                    _hc.markdown(
+                        f'<div style="background:#{_CLC_TEAL_LIGHT};padding:6px 8px;'
+                        f'border-bottom:2px solid #{_CLC_TEAL};font-family:&quot;Segoe UI&quot;,Arial,sans-serif;'
+                        f'font-size:12.5px;font-weight:700;color:#{_CLC_TEAL};">{_htext}</div>',
+                        unsafe_allow_html=True
+                    )
 
             _has_min = bool((meeting.get('minutes') or '').strip())
             _att_count = 0
@@ -793,14 +890,32 @@ with tab2:
                 except Exception:
                     pass
             _wkey = (*_group_key, str(meeting.get('week_number', '')).strip())
-            _dup_prefix = "⚠️ MULTIPLE RECORDS THIS WEEK — " if _week_counts.get(_wkey, 1) > 1 else ""
-            _label = (
-                f"{_dup_prefix}📅 Week {meeting.get('week_number', '?')} · {meeting['meeting_date']} · "
-                f"{meeting.get('minute_taker', 'Unknown')} · "
-                f"{'✅ Minutes recorded' if _has_min else '— No minutes yet'} · "
-                f"{_att_count if _att_count else 'no'} attachment(s)"
-            )
-            with st.expander(_label):
+            _is_dup = _week_counts.get(_wkey, 1) > 1
+            _open_key = f"_archive_row_open_{meeting['id']}"
+            _is_open = st.session_state.get(_open_key, False)
+
+            _row_bg = "#FFF4E1" if _is_dup else ("#FAFBFC" if _idx % 2 else "white")
+            _cell = (f'background:{_row_bg};padding:8px;border-bottom:1px solid #{_CLC_BORDER};'
+                     f'font-family:&quot;Segoe UI&quot;,Arial,sans-serif;font-size:13.5px;')
+            _rcols = st.columns(_archive_col_ratios, gap="small")
+            _week_text = f"⚠️ Week {meeting.get('week_number', '?')}" if _is_dup else f"Week {meeting.get('week_number', '?')}"
+            _rcols[0].markdown(f'<div style="{_cell}">{_week_text}</div>', unsafe_allow_html=True)
+            _rcols[1].markdown(f'<div style="{_cell}">{meeting.get("meeting_date", "")}</div>', unsafe_allow_html=True)
+            _rcols[2].markdown(f'<div style="{_cell}">{meeting.get("minute_taker", "Unknown")}</div>', unsafe_allow_html=True)
+            _rcols[3].markdown(f'<div style="{_cell}text-align:center;">{"✅" if _has_min else "—"}</div>', unsafe_allow_html=True)
+            _rcols[4].markdown(f'<div style="{_cell}text-align:center;">{_att_count if _att_count else "—"}</div>', unsafe_allow_html=True)
+            with _rcols[5]:
+                st.markdown(
+                    f'<div style="background:{_row_bg};padding:2px 0 2px 4px;'
+                    f'border-bottom:1px solid #{_CLC_BORDER};">', unsafe_allow_html=True
+                )
+                if st.button("▾ Close" if _is_open else "▸ Open", key=f"toggle_archived_{meeting['id']}",
+                             use_container_width=True):
+                    st.session_state[_open_key] = not _is_open
+                    st.rerun()
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            if _is_open:
                 st.write(f"**Attendees:** {meeting.get('attendees', 'Not recorded')}")
                 st.write(f"**Apologies:** {meeting.get('apologies', 'None')}")
                 
@@ -1084,14 +1199,13 @@ with tab1:
     # ══════════════════════════════════════════════════════════════════════════════
     
     st.subheader("👥 Attendance")
-    
+
+    _att_mkey = st.session_state.current_staff_meeting_id or "new"
     default_attendees = selected_record.get('attendees', '') if selected_record else ''
-    attendees = st.text_area("Attendees Present", value=default_attendees, height=80, key="attendees", 
-                             placeholder="List staff members present...")
-    
     default_apologies = selected_record.get('apologies', '') if selected_record else ''
-    apologies = st.text_area("Apologies", value=default_apologies, height=60, key="apologies",
-                             placeholder="List staff members with apologies...")
+    attendees, apologies = _render_roster_attendance(
+        "Meeting", f"meeting_att_{_att_mkey}", STAFF_ROSTER, default_attendees, default_apologies
+    )
     
     st.markdown("---")
     
@@ -1842,23 +1956,17 @@ with st.expander("📚 PD Session Details", expanded=True):
 
     # PD Title
     default_pd_title = selected_record.get('pd_title', '') if selected_record else ''
-    pd_title = st.text_input("PD Session Title", value=default_pd_title, key="pd_title",
+    pd_title = st.text_input("PD Session Title", value=default_pd_title, key=f"pd_title_{_att_mkey}",
                              placeholder="e.g. Sounds-Write Introduction, Berry Street Module 3, WHS Refresher…")
 
-    st.write("**PD Attendance** (Auto-filled from meeting attendance - edit if needed)")
-    
-    col_pd1, col_pd2 = st.columns(2)
-    
-    with col_pd1:
-        # Pre-fill with meeting attendees but allow editing
-        default_pd_attendees = selected_record.get('pd_attendees', attendees) if selected_record else attendees
-        pd_attendees = st.text_area("PD Attendees", value=default_pd_attendees, height=80, key="pd_attendees",
-                                   placeholder="Staff who attended PD session...")
-    
-    with col_pd2:
-        default_pd_absent = selected_record.get('pd_absent', apologies) if selected_record else apologies
-        pd_absent = st.text_area("PD Absentees/Left Early", value=default_pd_absent, height=80, key="pd_absent",
-                                placeholder="Staff who missed PD or left early...")
+    st.write("**PD Attendance** (defaults to the meeting attendance above — click to change for this PD session)")
+
+    # Pre-fill with meeting attendees/apologies but allow editing per-person
+    default_pd_attendees = selected_record.get('pd_attendees', attendees) if selected_record else attendees
+    default_pd_absent = selected_record.get('pd_absent', apologies) if selected_record else apologies
+    pd_attendees, pd_absent = _render_roster_attendance(
+        "PD", f"pd_att_{_att_mkey}", STAFF_ROSTER, default_pd_attendees, default_pd_absent
+    )
     
     st.markdown("---")
     
