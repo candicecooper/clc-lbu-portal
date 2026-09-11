@@ -91,12 +91,50 @@ RETURN_TABLE = "credit_card_returns"
 STAFF_TABLE = "cc_staff"
 CARD_TABLE = "cc_cards"
 FUNDING_TABLE = "additional_funding_requests"
+SPEND_TABLE = "additional_funding_spend"
 BUCKET_NAME = "credit-card-receipts"
 
 REQ_PENDING, REQ_APPROVED, REQ_DECLINED = "Pending", "Approved", "Declined"
 RET_PENDING, RET_APPROVED, RET_RETURNED = "Pending", "Approved", "Needs Correction"
 BUDGET_OPTIONS = ["JP", "PY", "SY", "NIT", "ADMIN", "ADDITIONAL"]
 PROGRAM_OPTIONS = ["JP", "PY", "SY", "NIT", "ADMIN"]
+TERM_POOL = 500.0
+
+# SA DfE public school term dates. TODO: add each new year here as it's
+# published (education.sa.gov.au/teaching/term-dates) — this needs manual
+# updating annually, same as the Trade Bookings tool's Term View.
+SA_TERM_DATES = {
+    2026: [
+        (date(2026, 1, 27), date(2026, 4, 10)),
+        (date(2026, 4, 27), date(2026, 7, 3)),
+        (date(2026, 7, 20), date(2026, 9, 25)),
+        (date(2026, 10, 12), date(2026, 12, 11)),
+    ],
+}
+
+
+def get_term_for_date(d: date):
+    """Returns (label, start, end) for the SA DfE term containing date d.
+    Falls back to the closest year on file if d's year isn't mapped yet, and
+    attributes holiday-period dates to whichever term just finished (or
+    Term 1 if before the year's first term) — so the tracker always shows
+    *a* term rather than breaking over a holiday break or a missing year."""
+    year_terms = SA_TERM_DATES.get(d.year)
+    if not year_terms:
+        closest_year = min(SA_TERM_DATES.keys(), key=lambda y: abs(y - d.year))
+        year_terms = SA_TERM_DATES[closest_year]
+    for i, (start, end) in enumerate(year_terms, start=1):
+        if start <= d <= end:
+            return f"Term {i} {d.year}", start, end
+    finished = [t for t in year_terms if t[1] < d]
+    if finished:
+        idx = year_terms.index(finished[-1]) + 1
+        return f"Term {idx} {d.year}", finished[-1][0], finished[-1][1]
+    return f"Term 1 {d.year}", year_terms[0][0], year_terms[0][1]
+
+
+def get_current_term():
+    return get_term_for_date(date.today())
 
 # TODO Candice: confirm this is the right inbox for funding-request approvals —
 # it's a guess based on your SharePoint personal-site URL, not confirmed.
@@ -272,6 +310,23 @@ def update_funding_request(row_id, updates: dict):
     get_supabase().table(FUNDING_TABLE).update(updates).eq("id", row_id).execute()
 
 
+# ---- additional funding SPEND ledger (actual $ spent, tracked per term) --
+def insert_funding_spend(record: dict):
+    get_supabase().table(SPEND_TABLE).insert(record).execute()
+
+
+def fetch_funding_spend(term_label: str | None = None) -> pd.DataFrame:
+    q = get_supabase().table(SPEND_TABLE).select("*").order("entered_at", desc=True)
+    if term_label:
+        q = q.eq("term_label", term_label)
+    res = q.execute()
+    return pd.DataFrame(res.data) if res.data else pd.DataFrame()
+
+
+def delete_funding_spend(row_id):
+    get_supabase().table(SPEND_TABLE).delete().eq("id", row_id).execute()
+
+
 def build_funding_request_pdf(data: dict) -> bytes:
     """Builds the Additional Program Funding Request as a proper document —
     header fields in a table, each narrative section as a wrapped paragraph,
@@ -434,8 +489,8 @@ st.caption("Electronic Form 1 (Requesting) and Form 2 (Returning)")
 STAFF_LIST = fetch_names(STAFF_TABLE)
 CARD_LIST = fetch_names(CARD_TABLE)
 
-tab_request, tab_return, tab_funding, tab_register, tab_admin = st.tabs(
-    ["1️⃣ Request Card", "2️⃣ Return Card", "💰 Additional Funding", "📋 Register", "🔒 Admin"]
+tab_request, tab_return, tab_funding, tab_spend, tab_register, tab_admin = st.tabs(
+    ["1️⃣ Request Card", "2️⃣ Return Card", "💰 Additional Funding", "📊 Funding Spent", "📋 Register", "🔒 Admin"]
 )
 
 # ------------------------------------------------------------------ STEP 1
@@ -679,6 +734,54 @@ with tab_funding:
         )
         st.info(f"Email the downloaded PDF to your Manager at **{MANAGER_EMAIL}** to have it approved.")
 
+# -------------------------------------------------------------- SPEND TAB
+with tab_spend:
+    st.subheader("Additional Funding — Spent This Term")
+    cur_label, cur_start, cur_end = get_current_term()
+    st.caption(f"{cur_label} ({cur_start.strftime('%d/%m/%Y')} – {cur_end.strftime('%d/%m/%Y')})")
+
+    cur_df = fetch_funding_spend(cur_label)
+    total_spent = float(cur_df["amount"].sum()) if not cur_df.empty else 0.0
+    remaining = TERM_POOL - total_spent
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Term pool", f"${TERM_POOL:.2f}")
+    m2.metric("Spent so far", f"${total_spent:.2f}")
+    m3.metric("Remaining", f"${remaining:.2f}")
+    st.progress(min(total_spent / TERM_POOL, 1.0) if TERM_POOL else 0)
+
+    if cur_df.empty:
+        st.write("Nothing logged against the additional funding pool yet this term.")
+    else:
+        disp = cur_df[["program", "amount", "purchase", "entered_at"]].copy()
+        disp["entered_at"] = disp["entered_at"].apply(format_dt)
+        disp = disp.rename(columns={
+            "program": "Program", "amount": "Amount", "purchase": "Purchase", "entered_at": "Logged",
+        })
+        st.dataframe(disp, use_container_width=True, hide_index=True)
+
+    with st.expander("Previous terms (closed off automatically once their dates pass)"):
+        all_spend = fetch_funding_spend(None)
+        past_labels = (
+            [t for t in all_spend["term_label"].unique() if t != cur_label]
+            if not all_spend.empty else []
+        )
+        if not past_labels:
+            st.write("No earlier terms logged yet.")
+        else:
+            for t in past_labels:
+                t_df = all_spend[all_spend["term_label"] == t]
+                t_total = float(t_df["amount"].sum())
+                st.markdown(f"**{t}** — ${t_total:.2f} spent of ${TERM_POOL:.2f} (${TERM_POOL - t_total:.2f} remaining)")
+                t_disp = t_df[["program", "amount", "purchase", "entered_at"]].copy()
+                t_disp["entered_at"] = t_disp["entered_at"].apply(format_dt)
+                st.dataframe(
+                    t_disp.rename(columns={
+                        "program": "Program", "amount": "Amount", "purchase": "Purchase", "entered_at": "Logged",
+                    }),
+                    use_container_width=True, hide_index=True,
+                )
+
 # ------------------------------------------------------------------ STEP 3
 with tab_register:
     st.subheader("Full register")
@@ -735,7 +838,8 @@ with tab_admin:
 
     admin_section = st.radio(
         "Section",
-        ["Approve Requests", "Approve Returns", "Edit Entries", "View & Download Forms", "Manage Staff & Cards"],
+        ["Approve Requests", "Approve Returns", "Edit Entries", "View & Download Forms",
+         "Log Funding Spend", "Manage Staff & Cards"],
         horizontal=True,
     )
 
@@ -981,6 +1085,55 @@ with tab_admin:
                                 mime="application/pdf",
                                 key=f"dl_{row['id']}",
                             )
+
+    elif admin_section == "Log Funding Spend":
+        cur_label, cur_start, cur_end = get_current_term()
+        st.write(
+            f"Logging against **{cur_label}** ({cur_start.strftime('%d/%m/%Y')} – "
+            f"{cur_end.strftime('%d/%m/%Y')}) — worked out automatically from today's date, "
+            "so this closes off and rolls to the next term on its own."
+        )
+
+        with st.form("log_spend_form", clear_on_submit=True):
+            sp_program = st.selectbox("Program", PROGRAM_OPTIONS, key="sp_program")
+            sp_amount = st.number_input("Amount spent ($)", min_value=0.0, step=1.0, format="%.2f", key="sp_amount")
+            sp_purchase = st.text_area("What was purchased", key="sp_purchase")
+            sp_submitted = st.form_submit_button("Add entry", type="primary")
+
+        if sp_submitted:
+            if sp_amount <= 0:
+                st.error("Enter an amount.")
+            elif not sp_purchase.strip():
+                st.error("Describe what was purchased.")
+            else:
+                insert_funding_spend({
+                    "term_label": cur_label,
+                    "program": sp_program,
+                    "amount": sp_amount,
+                    "purchase": sp_purchase.strip(),
+                    "entered_at": now_iso(),
+                })
+                st.success("Logged.")
+                st.rerun()
+
+        st.markdown(f"**{cur_label} entries so far**")
+        term_df = fetch_funding_spend(cur_label)
+        if term_df.empty:
+            st.write("Nothing logged yet.")
+        else:
+            term_total = float(term_df["amount"].sum())
+            st.caption(f"Total spent: ${term_total:.2f} — ${TERM_POOL - term_total:.2f} remaining of ${TERM_POOL:.2f}.")
+            for _, row in term_df.iterrows():
+                c1, c2 = st.columns([5, 1])
+                with c1:
+                    st.write(
+                        f"**{row['program']}** — ${row['amount']:.2f} — {row['purchase']} "
+                        f"_(logged {format_dt(row['entered_at'])})_"
+                    )
+                with c2:
+                    if st.button("🗑️", key=f"del_spend_{row['id']}"):
+                        delete_funding_spend(row["id"])
+                        st.rerun()
 
     else:  # Manage Staff & Cards
         m1, m2 = st.columns(2)
