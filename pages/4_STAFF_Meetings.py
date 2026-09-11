@@ -305,6 +305,71 @@ def _build_minutes_docx_bytes(meeting: dict):
             for c in row:
                 _docx_cell_borders(c)
 
+    # ── Professional Development ─────────────────────────────────────────
+    pd_title_val = meeting.get('pd_title', '') or ''
+    pd_attendees_val = meeting.get('pd_attendees', '') or ''
+    pd_absent_val = meeting.get('pd_absent', '') or ''
+    pd_notes_val = meeting.get('pd_notes', '') or ''
+    raw_pd_attachments = meeting.get('pd_attachments')
+    try:
+        pd_attachments_list = json.loads(raw_pd_attachments) if isinstance(raw_pd_attachments, str) else (raw_pd_attachments or [])
+    except Exception:
+        pd_attachments_list = []
+
+    if pd_title_val.strip() or pd_attendees_val.strip() or pd_absent_val.strip() or pd_notes_val.strip() or pd_attachments_list:
+        _docx_section_heading(doc, "Professional Development")
+
+        if pd_title_val.strip():
+            sp = doc.add_paragraph()
+            sp.paragraph_format.space_after = Pt(6)
+            sr = sp.add_run("Session: ")
+            sr.bold = True
+            sp.add_run(pd_title_val.strip())
+
+        pd_details = []
+        if pd_attendees_val.strip():
+            pd_details.append(("PD Attendees", pd_attendees_val))
+        if pd_absent_val.strip():
+            pd_details.append(("PD Absent", pd_absent_val))
+        if pd_details:
+            pdtable = doc.add_table(rows=len(pd_details), cols=2)
+            pdtable.alignment = WD_TABLE_ALIGNMENT.CENTER
+            pdtable.autofit = False
+            for i, (label, value) in enumerate(pd_details):
+                cells = pdtable.rows[i].cells
+                cells[0].width = Inches(1.9)
+                cells[1].width = Inches(4.7)
+                _docx_shade_cell(cells[0], _CLC_TEAL_LIGHT)
+                _docx_set_cell_text(cells[0], label, bold=True, color=_CLC_TEAL, size=9.5)
+                _docx_set_cell_text(cells[1], str(value), size=10)
+                _docx_cell_borders(cells[0])
+                _docx_cell_borders(cells[1])
+            doc.add_paragraph()
+
+        if pd_notes_val.strip():
+            np_heading = doc.add_paragraph()
+            np_heading.paragraph_format.space_before = Pt(4)
+            nhr = np_heading.add_run("PD Notes:")
+            nhr.bold = True
+            for para in pd_notes_val.split('\n'):
+                para = para.strip()
+                if not para:
+                    continue
+                bp = doc.add_paragraph()
+                bp.paragraph_format.space_after = Pt(4)
+                if para.startswith(('- ', '• ')):
+                    bp.style = doc.styles['List Bullet']
+                    bp.add_run(para[2:].strip())
+                else:
+                    bp.add_run(para)
+
+        if pd_attachments_list:
+            ap = doc.add_paragraph()
+            ap.paragraph_format.space_before = Pt(4)
+            ar = ap.add_run("PD Attachments: ")
+            ar.bold = True
+            ap.add_run(", ".join(a.get('name', 'file') for a in pd_attachments_list))
+
     # ── Footer ────────────────────────────────────────────────────────────
     footer_p = section.footer.paragraphs[0]
     footer_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
