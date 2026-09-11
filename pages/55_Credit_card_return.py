@@ -231,13 +231,16 @@ def update_submission(row_id, updates: dict):
     get_supabase().table(RETURN_TABLE).update(updates).eq("id", row_id).execute()
 
 
-def card_tickboxes(card_list: list[str], key_prefix: str) -> list[str]:
-    """Renders one checkbox per card name and returns the ticked ones."""
+def card_tickboxes(card_list: list[str], key_prefix: str, preselected: list[str] | None = None) -> list[str]:
+    """Renders one checkbox per card name and returns the ticked ones.
+    Pass preselected to pre-tick existing choices (used by the Edit Entries
+    admin section)."""
+    preselected = preselected or []
     picked = []
     cols = st.columns(len(card_list)) if card_list else []
     for col, card in zip(cols, card_list):
         with col:
-            if st.checkbox(card, key=f"{key_prefix}_{card}"):
+            if st.checkbox(card, value=(card in preselected), key=f"{key_prefix}_{card}"):
                 picked.append(card)
     return picked
 
@@ -263,6 +266,10 @@ def fetch_funding_requests() -> pd.DataFrame:
         return pd.DataFrame(res.data) if res.data else pd.DataFrame()
     except Exception:
         return pd.DataFrame()
+
+
+def update_funding_request(row_id, updates: dict):
+    get_supabase().table(FUNDING_TABLE).update(updates).eq("id", row_id).execute()
 
 
 def build_funding_request_pdf(data: dict) -> bytes:
@@ -728,7 +735,7 @@ with tab_admin:
 
     admin_section = st.radio(
         "Section",
-        ["Approve Requests", "Approve Returns", "View & Download Forms", "Manage Staff & Cards"],
+        ["Approve Requests", "Approve Returns", "Edit Entries", "View & Download Forms", "Manage Staff & Cards"],
         horizontal=True,
     )
 
@@ -788,6 +795,152 @@ with tab_admin:
                         if st.button("↩️ Return for correction", key=f"ret_return_{row['id']}"):
                             update_submission(row["id"], {"status": RET_RETURNED})
                             st.rerun()
+
+    elif admin_section == "Edit Entries":
+        st.write(
+            "Fix a staff data-entry mistake here — e.g. the wrong budget/program "
+            "ticked, a typo in the amount, or the wrong card selected. This edits "
+            "the record directly; it doesn't change approval status."
+        )
+        edit_type = st.selectbox(
+            "What are you fixing?", ["Card Request", "Card Return", "Additional Funding Request"], key="edit_type"
+        )
+
+        if edit_type == "Card Request":
+            edit_df = fetch_requests(None)
+            if edit_df.empty:
+                st.write("No requests to edit.")
+            else:
+                options = {
+                    r["id"]: f"#{r['id']} — {r['staff_member']} — {r.get('budget', '')} — "
+                    f"${r['approx_cost']:.2f} — {r['status']} — {format_date(r['requested_at'])}"
+                    for _, r in edit_df.iterrows()
+                }
+                pick_id = st.selectbox("Select request", options.keys(), format_func=lambda i: options[i])
+                row = edit_df[edit_df["id"] == pick_id].iloc[0]
+
+                with st.form(f"edit_request_form_{pick_id}"):
+                    e_staff = st.selectbox(
+                        "Staff Member", STAFF_LIST,
+                        index=STAFF_LIST.index(row["staff_member"]) if row["staff_member"] in STAFF_LIST else 0,
+                    )
+                    e_budget = st.selectbox(
+                        "Budget", BUDGET_OPTIONS,
+                        index=BUDGET_OPTIONS.index(row.get("budget")) if row.get("budget") in BUDGET_OPTIONS else 0,
+                    )
+                    st.write("Card(s)")
+                    e_cards = card_tickboxes(CARD_LIST, f"editreq_{pick_id}", preselected=row.get("card_names") or [])
+                    e_cost = st.number_input(
+                        "Approximate cost ($)", min_value=0.0, step=0.01, format="%.2f",
+                        value=float(row["approx_cost"]),
+                    )
+                    e_explanation = st.text_area("Explanation", value=row.get("explanation") or "")
+                    e_status = st.selectbox(
+                        "Status", [REQ_PENDING, REQ_APPROVED, REQ_DECLINED, "Completed"],
+                        index=[REQ_PENDING, REQ_APPROVED, REQ_DECLINED, "Completed"].index(row["status"])
+                        if row["status"] in [REQ_PENDING, REQ_APPROVED, REQ_DECLINED, "Completed"] else 0,
+                    )
+                    if st.form_submit_button("Save corrections", type="primary"):
+                        update_request(pick_id, {
+                            "staff_member": e_staff,
+                            "budget": e_budget,
+                            "card_names": e_cards,
+                            "approx_cost": e_cost,
+                            "explanation": e_explanation,
+                            "status": e_status,
+                        })
+                        st.success(f"Request #{pick_id} updated.")
+                        st.rerun()
+
+        elif edit_type == "Card Return":
+            edit_df = fetch_submissions(None)
+            if edit_df.empty:
+                st.write("No returns to edit.")
+            else:
+                options = {
+                    r["id"]: f"#{r['id']} — {r['staff_member']} — ${r['total_amount']:.2f} — "
+                    f"{r['status']} — {format_date(r.get('receipt_date'))}"
+                    for _, r in edit_df.iterrows()
+                }
+                pick_id = st.selectbox("Select return", options.keys(), format_func=lambda i: options[i])
+                row = edit_df[edit_df["id"] == pick_id].iloc[0]
+
+                with st.form(f"edit_return_form_{pick_id}"):
+                    e_staff = st.selectbox(
+                        "Staff Member", STAFF_LIST,
+                        index=STAFF_LIST.index(row["staff_member"]) if row["staff_member"] in STAFF_LIST else 0,
+                    )
+                    st.write("Card(s)")
+                    e_cards = card_tickboxes(CARD_LIST, f"editret_{pick_id}", preselected=row.get("card_names") or [])
+                    e_receipt_date = st.date_input(
+                        "Date on receipt",
+                        value=pd.to_datetime(row["receipt_date"]).date() if row.get("receipt_date") else date.today(),
+                    )
+                    e_total = st.number_input(
+                        "Total on receipt ($)", min_value=0.0, step=0.01, format="%.2f",
+                        value=float(row["total_amount"]),
+                    )
+                    e_notes = st.text_area("Notes", value=row.get("notes") or "")
+                    e_status = st.selectbox(
+                        "Status", [RET_PENDING, RET_APPROVED, RET_RETURNED],
+                        index=[RET_PENDING, RET_APPROVED, RET_RETURNED].index(row["status"])
+                        if row["status"] in [RET_PENDING, RET_APPROVED, RET_RETURNED] else 0,
+                    )
+                    if st.form_submit_button("Save corrections", type="primary"):
+                        update_submission(pick_id, {
+                            "staff_member": e_staff,
+                            "card_names": e_cards,
+                            "receipt_date": e_receipt_date.isoformat(),
+                            "total_amount": e_total,
+                            "notes": e_notes,
+                            "status": e_status,
+                        })
+                        st.success(f"Return #{pick_id} updated.")
+                        st.rerun()
+
+        else:  # Additional Funding Request
+            edit_df = fetch_funding_requests()
+            if edit_df.empty:
+                st.write("No funding requests to edit.")
+            else:
+                options = {
+                    r["id"]: f"#{r['id']} — {r['staff_member']} — {r['program']} — "
+                    f"{r['term']} — ${r['amount']:.2f}"
+                    for _, r in edit_df.iterrows()
+                }
+                pick_id = st.selectbox("Select funding request", options.keys(), format_func=lambda i: options[i])
+                row = edit_df[edit_df["id"] == pick_id].iloc[0]
+
+                with st.form(f"edit_funding_form_{pick_id}"):
+                    e_staff = st.selectbox(
+                        "Staff Member", STAFF_LIST,
+                        index=STAFF_LIST.index(row["staff_member"]) if row["staff_member"] in STAFF_LIST else 0,
+                    )
+                    e_program = st.selectbox(
+                        "Program", PROGRAM_OPTIONS,
+                        index=PROGRAM_OPTIONS.index(row["program"]) if row["program"] in PROGRAM_OPTIONS else 0,
+                    )
+                    e_term = st.text_input("Term", value=row.get("term") or "")
+                    e_amount = st.number_input(
+                        "Requested amount ($)", min_value=0.0, step=1.0, format="%.2f", value=float(row["amount"]),
+                    )
+                    e_purpose = st.text_area("Purpose", value=row.get("purpose") or "")
+                    e_curriculum = st.text_area("Connection to curriculum", value=row.get("curriculum") or "")
+                    e_value = st.text_area("Genuine value", value=row.get("value_statement") or "")
+                    e_learning = st.text_area("Continual learning for students", value=row.get("continual_learning") or "")
+                    if st.form_submit_button("Save corrections", type="primary"):
+                        update_funding_request(pick_id, {
+                            "staff_member": e_staff,
+                            "program": e_program,
+                            "term": e_term,
+                            "amount": e_amount,
+                            "purpose": e_purpose,
+                            "curriculum": e_curriculum,
+                            "value_statement": e_value,
+                            "continual_learning": e_learning,
+                        })
+                        st.success(f"Funding request #{pick_id} updated.")
+                        st.rerun()
 
     elif admin_section == "View & Download Forms":
         dl_status = st.selectbox(
