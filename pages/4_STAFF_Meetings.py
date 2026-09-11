@@ -373,7 +373,19 @@ def _parse_staff_roster(raw: str) -> list:
             names.append(name)
     return names
 
-STAFF_ROSTER = _parse_staff_roster(st.secrets.get("STAFF_NAMES", ""))
+# Built-in fallback so attendance always shows a clickable list even if the
+# STAFF_NAMES secret isn't set (or isn't reaching this file's secrets.toml) —
+# edit this list directly here if anyone is missing, wrong, or has left; it's
+# only used when STAFF_NAMES is empty, so setting that secret in Render always
+# takes over from this list without needing a code change.
+DEFAULT_STAFF_ROSTER = [
+    "Candice Cooper", "Annette Balestrin", "Ben Selga", "Ben Sutton", "Brenton",
+    "Caitie", "Cheryl", "Jacqui", "Naomi", "Tom", "Vinnie",
+]
+
+_staff_names_secret = st.secrets.get("STAFF_NAMES", "")
+STAFF_ROSTER = _parse_staff_roster(_staff_names_secret) or DEFAULT_STAFF_ROSTER
+STAFF_ROSTER_SOURCE = "STAFF_NAMES secret" if _parse_staff_roster(_staff_names_secret) else "built-in default list"
 
 
 def _render_roster_attendance(label_prefix: str, key_prefix: str, roster: list,
@@ -959,50 +971,10 @@ with tab2:
                     else:
                         st.info("No minutes recorded for this meeting")
                 
-                    if meeting.get('actions'):
-                        st.markdown("---")
-                        st.write("**Actions:**")
-                        try:
-                            actions = json.loads(meeting['actions']) if isinstance(meeting['actions'], str) else meeting['actions']
-                            for action in actions:
-                                st.write(f"- {action.get('action', '')} - **{action.get('owner', '')}** - Due: {action.get('due_date', '')}")
-                        except:
-                            pass
-                
-                    # Show meeting attachments if present
-                    if meeting.get('meeting_attachments'):
-                        st.markdown("---")
-                        st.write("**📎 Meeting Attachments:**")
-                        try:
-                            attachments = json.loads(meeting['meeting_attachments']) if isinstance(meeting['meeting_attachments'], str) else meeting['meeting_attachments']
-                            if attachments:
-                                for att in attachments:
-                                    _render_attachment_link(att, MEETING_ATTACHMENTS_BUCKET)
-                        except:
-                            pass
-                
-                    # Show PD information if present
-                    if meeting.get('pd_notes') or meeting.get('pd_attendees') or meeting.get('pd_title'):
-                        st.markdown("---")
-                        st.write("**🎓 Professional Development:**")
-                        if meeting.get('pd_title'):
-                            st.write(f"**Session Title:** {meeting['pd_title']}")
-                        if meeting.get('pd_attendees'):
-                            st.write(f"**PD Attendees:** {meeting['pd_attendees']}")
-                        if meeting.get('pd_absent'):
-                            st.write(f"**PD Absent:** {meeting['pd_absent']}")
-                        if meeting.get('pd_notes'):
-                            st.write("**PD Notes:**")
-                            st.markdown(meeting['pd_notes'])
-                        if meeting.get('pd_attachments'):
-                            try:
-                                attachments = json.loads(meeting['pd_attachments']) if isinstance(meeting['pd_attachments'], str) else meeting['pd_attachments']
-                                if attachments:
-                                    st.write("**PD Attachments:**")
-                                    for att in attachments:
-                                        _render_attachment_link(att, PD_ATTACHMENTS_BUCKET)
-                            except:
-                                pass
+                    # Actions / Attachments / PD are intentionally NOT duplicated here —
+                    # they only ever matter in the context of editing the meeting, so
+                    # click "Edit / Add to This Meeting" below to see and work with them
+                    # rather than cluttering this quick-view card.
 
                     # ── Edit + download + delete this archived meeting ──────────────
                     st.markdown("---")
@@ -1223,6 +1195,8 @@ with tab1:
     # ══════════════════════════════════════════════════════════════════════════════
     
     st.subheader("👥 Attendance")
+    st.caption(f"Staff list loaded from: {STAFF_ROSTER_SOURCE} ({len(STAFF_ROSTER)} names). "
+               f"To fix a name, edit `DEFAULT_STAFF_ROSTER` in the code or set STAFF_NAMES in Render.")
 
     _att_mkey = st.session_state.current_staff_meeting_id or "new"
     default_attendees = selected_record.get('attendees', '') if selected_record else ''
