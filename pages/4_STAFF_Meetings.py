@@ -1446,14 +1446,6 @@ with tab1:
     else:
         agenda_data = {}
 
-    # Pre-populate the additional items text area from saved data
-    # (only if session state hasn't been set yet for this meeting)
-    _saved_additional = agenda_data.get('additional_agenda', [])
-    _ss_key = f"agenda_loaded_{st.session_state.current_staff_meeting_id}"
-    if _saved_additional and not st.session_state.get(_ss_key):
-        st.session_state['simple_agenda_items'] = "\n".join(_saved_additional)
-        st.session_state[_ss_key] = True
-    
     _agenda_mkey = st.session_state.current_staff_meeting_id or "new"
     for item in STANDING_AGENDA_ITEMS:
         with st.expander(f"📌 {item}"):
@@ -1478,10 +1470,21 @@ with tab1:
     if 'additional_agenda' not in agenda_data:
         agenda_data['additional_agenda'] = []
 
-    # Use session state as the live list so changes survive widget rerenders
+    # Use session state as the live list so changes survive widget rerenders.
+    # Normalise each entry to a plain label string here — some older records
+    # saved additional agenda items as {'item':..., 'raised_by':...} dicts
+    # rather than plain strings, which crashed downstream code that only
+    # ever expected strings (e.g. joining/rendering them directly).
+    def _normalise_agenda_item(entry):
+        if isinstance(entry, dict):
+            _text = entry.get('item') or entry.get('text') or entry.get('label') or ''
+            _by = entry.get('raised_by') or entry.get('submitted_by') or ''
+            return f"📌 {_text}  — submitted by {_by}" if _by else f"📌 {_text}"
+        return str(entry)
+
     ss_key = f"addl_items_{st.session_state.current_staff_meeting_id or 'new'}"
     if ss_key not in st.session_state:
-        st.session_state[ss_key] = list(agenda_data.get('additional_agenda', []))
+        st.session_state[ss_key] = [_normalise_agenda_item(e) for e in agenda_data.get('additional_agenda', [])]
 
     additional_items = st.session_state[ss_key]
 
