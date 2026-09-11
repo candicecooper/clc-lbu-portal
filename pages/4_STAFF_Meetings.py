@@ -305,6 +305,19 @@ def _build_minutes_docx_bytes(meeting: dict):
             for c in row:
                 _docx_cell_borders(c)
 
+    # ── Meeting Attachments (names only — files live in the portal) ──────
+    raw_meeting_attachments = meeting.get('meeting_attachments')
+    try:
+        meeting_attachments_list = json.loads(raw_meeting_attachments) if isinstance(raw_meeting_attachments, str) else (raw_meeting_attachments or [])
+    except Exception:
+        meeting_attachments_list = []
+    if meeting_attachments_list:
+        ap = doc.add_paragraph()
+        ap.paragraph_format.space_before = Pt(8)
+        ar = ap.add_run("Meeting Attachments: ")
+        ar.bold = True
+        ap.add_run(", ".join(a.get('name', 'file') for a in meeting_attachments_list))
+
     # ── Professional Development ─────────────────────────────────────────
     pd_title_val = meeting.get('pd_title', '') or ''
     pd_attendees_val = meeting.get('pd_attendees', '') or ''
@@ -369,6 +382,19 @@ def _build_minutes_docx_bytes(meeting: dict):
             ar = ap.add_run("PD Attachments: ")
             ar.bold = True
             ap.add_run(", ".join(a.get('name', 'file') for a in pd_attachments_list))
+
+    # ── Attachments note — files aren't embedded in this document ─────────
+    if meeting_attachments_list or pd_attachments_list:
+        note_p = doc.add_paragraph()
+        note_p.paragraph_format.space_before = Pt(12)
+        note_run = note_p.add_run(
+            "📎 Attached files are stored in the CLC-LBU Staff Portal, not in this document — "
+            "log in to the Staff Portal → STAFF Meetings tool to view or download them."
+        )
+        note_run.italic = True
+        note_run.font.size = Pt(9)
+        note_run.font.color.rgb = RGBColor.from_string(_CLC_GRAY)
+        note_run.font.name = "Segoe UI"
 
     # ── Footer ────────────────────────────────────────────────────────────
     footer_p = section.footer.paragraphs[0]
