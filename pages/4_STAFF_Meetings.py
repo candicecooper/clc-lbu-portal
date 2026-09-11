@@ -6,6 +6,7 @@ import json
 import os
 import re
 import time
+import uuid
 
 # For transcript upload
 try:
@@ -403,26 +404,22 @@ def _render_roster_attendance(label_prefix: str, key_prefix: str, roster: list,
 
     seed_present = seed_present or ''
     seed_apologies = seed_apologies or ''
-    _statuses = ["—", "Present", "Apologies"]
 
-    def _seed_status(name):
-        if name in seed_present:
-            return "Present"
-        if name in seed_apologies:
-            return "Apologies"
-        return "—"
+    default_present = [n for n in roster if n in seed_present]
+    default_apologies = [n for n in roster if n in seed_apologies and n not in default_present]
 
-    st.caption(f"Click each name's status for {label_prefix.lower()}.")
-    present_names, apology_names = [], []
-    cols = st.columns(2)
-    for i, name in enumerate(roster):
-        with cols[i % 2]:
-            status = st.radio(name, options=_statuses, index=_statuses.index(_seed_status(name)),
-                               horizontal=True, key=f"{key_prefix}_status_{name}")
-        if status == "Present":
-            present_names.append(name)
-        elif status == "Apologies":
-            apology_names.append(name)
+    st.caption(f"Click to add names for {label_prefix.lower()} attendance.")
+    col_p, col_a = st.columns(2)
+    with col_p:
+        present_names = st.multiselect(
+            f"{label_prefix} Present", options=roster, default=default_present,
+            key=f"{key_prefix}_present_ms"
+        )
+    with col_a:
+        apology_names = st.multiselect(
+            f"{label_prefix} Apologies", options=roster, default=default_apologies,
+            key=f"{key_prefix}_apologies_ms"
+        )
 
     col_extra1, col_extra2 = st.columns(2)
     with col_extra1:
@@ -691,6 +688,32 @@ BSEM_ICEBREAKERS = [
     }
 ]
 
+# ── BSEM activity field encoding ────────────────────────────────────────────────
+# The DB only has one "icebreaker" text column. Rather than add a new column,
+# a "different activity" choice is encoded as a small header prefix on that
+# same field, followed by any free-text notes on the next line. Old plain-text
+# values never start with this marker, so they always parse as "suggested"
+# with the notes intact — fully backward compatible.
+_BSEM_DIFFERENT_PREFIX = "[[BSEM_DIFFERENT|"
+
+def _parse_bsem_field(raw: str):
+    """Returns (mode, name, explanation, notes) from a stored icebreaker value."""
+    raw = raw or ''
+    if raw.startswith(_BSEM_DIFFERENT_PREFIX):
+        try:
+            header, rest = raw.split("]]", 1)
+            _, name, explanation = header.split("|", 2)
+            return "different", name.strip(), explanation.strip(), rest.lstrip("\n")
+        except Exception:
+            pass
+    return "suggested", "", "", raw
+
+def _build_bsem_field(mode: str, name: str, explanation: str, notes: str) -> str:
+    if mode == "different":
+        header = f"{_BSEM_DIFFERENT_PREFIX}{name}|{explanation}]]"
+        return f"{header}\n{notes}" if notes else header
+    return notes
+
 # Standing agenda items
 STANDING_AGENDA_ITEMS = [
     "Transition Coordinator Info",
@@ -916,123 +939,124 @@ with tab2:
                 st.markdown('</div>', unsafe_allow_html=True)
 
             if _is_open:
-                st.write(f"**Attendees:** {meeting.get('attendees', 'Not recorded')}")
-                st.write(f"**Apologies:** {meeting.get('apologies', 'None')}")
+                with st.container(border=True):
+                    st.write(f"**Attendees:** {meeting.get('attendees', 'Not recorded')}")
+                    st.write(f"**Apologies:** {meeting.get('apologies', 'None')}")
                 
-                st.markdown("---")
-                st.write("**📄 Minutes:**")
-                meeting_minutes = meeting.get('minutes', 'No minutes recorded')
-                if meeting_minutes and meeting_minutes != 'No minutes recorded':
-                    st.markdown('''<style>
-.clc-minutes { font-family: "Segoe UI", Arial, sans-serif !important; font-size: 14px !important; line-height: 1.7 !important; color: #1a1a1a !important; }
-.clc-minutes p, .clc-minutes li, .clc-minutes td, .clc-minutes th, .clc-minutes strong, .clc-minutes em { font-family: "Segoe UI", Arial, sans-serif !important; font-size: 14px !important; }
-.clc-minutes h1,.clc-minutes h2,.clc-minutes h3,.clc-minutes h4 { font-family: "Segoe UI", Arial, sans-serif !important; font-size: 15px !important; font-weight: 700 !important; margin-top: 1em; }
-.clc-minutes table { border-collapse: collapse; width: 100%; }
-.clc-minutes th { background: #f0f0f0; padding: 6px 10px; border: 1px solid #ddd; }
-.clc-minutes td { padding: 6px 10px; border: 1px solid #ddd; }
-</style>''', unsafe_allow_html=True)
-                    st.markdown(f'<div class="clc-minutes">' + meeting_minutes + '</div>', unsafe_allow_html=True)
-                else:
-                    st.info("No minutes recorded for this meeting")
-                
-                if meeting.get('actions'):
                     st.markdown("---")
-                    st.write("**Actions:**")
-                    try:
-                        actions = json.loads(meeting['actions']) if isinstance(meeting['actions'], str) else meeting['actions']
-                        for action in actions:
-                            st.write(f"- {action.get('action', '')} - **{action.get('owner', '')}** - Due: {action.get('due_date', '')}")
-                    except:
-                        pass
+                    st.write("**📄 Minutes:**")
+                    meeting_minutes = meeting.get('minutes', 'No minutes recorded')
+                    if meeting_minutes and meeting_minutes != 'No minutes recorded':
+                        st.markdown('''<style>
+    .clc-minutes { font-family: "Segoe UI", Arial, sans-serif !important; font-size: 14px !important; line-height: 1.7 !important; color: #1a1a1a !important; }
+    .clc-minutes p, .clc-minutes li, .clc-minutes td, .clc-minutes th, .clc-minutes strong, .clc-minutes em { font-family: "Segoe UI", Arial, sans-serif !important; font-size: 14px !important; }
+    .clc-minutes h1,.clc-minutes h2,.clc-minutes h3,.clc-minutes h4 { font-family: "Segoe UI", Arial, sans-serif !important; font-size: 15px !important; font-weight: 700 !important; margin-top: 1em; }
+    .clc-minutes table { border-collapse: collapse; width: 100%; }
+    .clc-minutes th { background: #f0f0f0; padding: 6px 10px; border: 1px solid #ddd; }
+    .clc-minutes td { padding: 6px 10px; border: 1px solid #ddd; }
+    </style>''', unsafe_allow_html=True)
+                        st.markdown(f'<div class="clc-minutes">' + meeting_minutes + '</div>', unsafe_allow_html=True)
+                    else:
+                        st.info("No minutes recorded for this meeting")
                 
-                # Show meeting attachments if present
-                if meeting.get('meeting_attachments'):
-                    st.markdown("---")
-                    st.write("**📎 Meeting Attachments:**")
-                    try:
-                        attachments = json.loads(meeting['meeting_attachments']) if isinstance(meeting['meeting_attachments'], str) else meeting['meeting_attachments']
-                        if attachments:
-                            for att in attachments:
-                                _render_attachment_link(att, MEETING_ATTACHMENTS_BUCKET)
-                    except:
-                        pass
-                
-                # Show PD information if present
-                if meeting.get('pd_notes') or meeting.get('pd_attendees') or meeting.get('pd_title'):
-                    st.markdown("---")
-                    st.write("**🎓 Professional Development:**")
-                    if meeting.get('pd_title'):
-                        st.write(f"**Session Title:** {meeting['pd_title']}")
-                    if meeting.get('pd_attendees'):
-                        st.write(f"**PD Attendees:** {meeting['pd_attendees']}")
-                    if meeting.get('pd_absent'):
-                        st.write(f"**PD Absent:** {meeting['pd_absent']}")
-                    if meeting.get('pd_notes'):
-                        st.write("**PD Notes:**")
-                        st.markdown(meeting['pd_notes'])
-                    if meeting.get('pd_attachments'):
+                    if meeting.get('actions'):
+                        st.markdown("---")
+                        st.write("**Actions:**")
                         try:
-                            attachments = json.loads(meeting['pd_attachments']) if isinstance(meeting['pd_attachments'], str) else meeting['pd_attachments']
-                            if attachments:
-                                st.write("**PD Attachments:**")
-                                for att in attachments:
-                                    _render_attachment_link(att, PD_ATTACHMENTS_BUCKET)
+                            actions = json.loads(meeting['actions']) if isinstance(meeting['actions'], str) else meeting['actions']
+                            for action in actions:
+                                st.write(f"- {action.get('action', '')} - **{action.get('owner', '')}** - Due: {action.get('due_date', '')}")
                         except:
                             pass
+                
+                    # Show meeting attachments if present
+                    if meeting.get('meeting_attachments'):
+                        st.markdown("---")
+                        st.write("**📎 Meeting Attachments:**")
+                        try:
+                            attachments = json.loads(meeting['meeting_attachments']) if isinstance(meeting['meeting_attachments'], str) else meeting['meeting_attachments']
+                            if attachments:
+                                for att in attachments:
+                                    _render_attachment_link(att, MEETING_ATTACHMENTS_BUCKET)
+                        except:
+                            pass
+                
+                    # Show PD information if present
+                    if meeting.get('pd_notes') or meeting.get('pd_attendees') or meeting.get('pd_title'):
+                        st.markdown("---")
+                        st.write("**🎓 Professional Development:**")
+                        if meeting.get('pd_title'):
+                            st.write(f"**Session Title:** {meeting['pd_title']}")
+                        if meeting.get('pd_attendees'):
+                            st.write(f"**PD Attendees:** {meeting['pd_attendees']}")
+                        if meeting.get('pd_absent'):
+                            st.write(f"**PD Absent:** {meeting['pd_absent']}")
+                        if meeting.get('pd_notes'):
+                            st.write("**PD Notes:**")
+                            st.markdown(meeting['pd_notes'])
+                        if meeting.get('pd_attachments'):
+                            try:
+                                attachments = json.loads(meeting['pd_attachments']) if isinstance(meeting['pd_attachments'], str) else meeting['pd_attachments']
+                                if attachments:
+                                    st.write("**PD Attachments:**")
+                                    for att in attachments:
+                                        _render_attachment_link(att, PD_ATTACHMENTS_BUCKET)
+                            except:
+                                pass
 
-                # ── Edit + download + delete this archived meeting ──────────────
-                st.markdown("---")
-                col_arc_edit, col_arc_dl, col_arc_del = st.columns([1.3, 1, 1])
-                with col_arc_edit:
-                    if st.button("✏️ Edit / Add to This Meeting", key=f"edit_archived_{meeting['id']}",
-                                 type="primary", use_container_width=True):
-                        _edit_label = (
-                            f"{meeting['meeting_date']} - {normalise_term_short(meeting.get('term', '?'))} "
-                            f"W{meeting.get('week_number', '?')} - {meeting.get('minute_taker', 'Unknown')}"
-                        )
-                        st.session_state["_pending_meeting_jump"] = _edit_label
-                        st.session_state.current_staff_meeting_id = meeting['id']
-                        st.success(
-                            "✅ Loaded. Click the **📝 Current Meeting** tab at the top of the page "
-                            "to continue editing this meeting — it's now pre-selected there."
-                        )
-                        st.rerun()
-                with col_arc_dl:
-                    if DOCX_AVAILABLE and (meeting.get('minutes') or '').strip():
-                        st.download_button(
-                            "📥 Download Minutes (.docx)",
-                            data=_build_minutes_docx_bytes(meeting),
-                            file_name=f"Staff_Meeting_Minutes_{meeting.get('meeting_date', '')}.docx",
-                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                            use_container_width=True,
-                            key=f"download_archived_{meeting['id']}"
-                        )
-                    else:
-                        st.button("📥 Download Minutes (.docx)", disabled=True,
-                                  use_container_width=True, key=f"download_archived_disabled_{meeting['id']}")
+                    # ── Edit + download + delete this archived meeting ──────────────
+                    st.markdown("---")
+                    col_arc_edit, col_arc_dl, col_arc_del = st.columns([1.3, 1, 1])
+                    with col_arc_edit:
+                        if st.button("✏️ Edit / Add to This Meeting", key=f"edit_archived_{meeting['id']}",
+                                     type="primary", use_container_width=True):
+                            _edit_label = (
+                                f"{meeting['meeting_date']} - {normalise_term_short(meeting.get('term', '?'))} "
+                                f"W{meeting.get('week_number', '?')} - {meeting.get('minute_taker', 'Unknown')}"
+                            )
+                            st.session_state["_pending_meeting_jump"] = _edit_label
+                            st.session_state.current_staff_meeting_id = meeting['id']
+                            st.success(
+                                "✅ Loaded. Click the **📝 Current Meeting** tab at the top of the page "
+                                "to continue editing this meeting — it's now pre-selected there."
+                            )
+                            st.rerun()
+                    with col_arc_dl:
+                        if DOCX_AVAILABLE and (meeting.get('minutes') or '').strip():
+                            st.download_button(
+                                "📥 Download Minutes (.docx)",
+                                data=_build_minutes_docx_bytes(meeting),
+                                file_name=f"Staff_Meeting_Minutes_{meeting.get('meeting_date', '')}.docx",
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                use_container_width=True,
+                                key=f"download_archived_{meeting['id']}"
+                            )
+                        else:
+                            st.button("📥 Download Minutes (.docx)", disabled=True,
+                                      use_container_width=True, key=f"download_archived_disabled_{meeting['id']}")
 
-                with col_arc_del:
-                    confirm_key = f"confirm_delete_archived_{meeting['id']}"
-                    if st.session_state.get(confirm_key):
-                        col_yes, col_no = st.columns(2)
-                        with col_yes:
-                            if st.button("⚠️ Confirm delete", key=f"confirm_del_{meeting['id']}",
-                                        type="secondary", use_container_width=True):
-                                try:
-                                    supabase.table('staff_meetings').delete().eq('id', meeting['id']).execute()
-                                    st.success("✅ Deleted.")
+                    with col_arc_del:
+                        confirm_key = f"confirm_delete_archived_{meeting['id']}"
+                        if st.session_state.get(confirm_key):
+                            col_yes, col_no = st.columns(2)
+                            with col_yes:
+                                if st.button("⚠️ Confirm delete", key=f"confirm_del_{meeting['id']}",
+                                            type="secondary", use_container_width=True):
+                                    try:
+                                        supabase.table('staff_meetings').delete().eq('id', meeting['id']).execute()
+                                        st.success("✅ Deleted.")
+                                        st.session_state[confirm_key] = False
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"⚠️ Could not delete: {e}")
+                            with col_no:
+                                if st.button("Cancel", key=f"cancel_del_{meeting['id']}", use_container_width=True):
                                     st.session_state[confirm_key] = False
                                     st.rerun()
-                                except Exception as e:
-                                    st.error(f"⚠️ Could not delete: {e}")
-                        with col_no:
-                            if st.button("Cancel", key=f"cancel_del_{meeting['id']}", use_container_width=True):
-                                st.session_state[confirm_key] = False
+                        else:
+                            if st.button("🗑️ Delete this meeting", key=f"del_{meeting['id']}", use_container_width=True):
+                                st.session_state[confirm_key] = True
                                 st.rerun()
-                    else:
-                        if st.button("🗑️ Delete this meeting", key=f"del_{meeting['id']}", use_container_width=True):
-                            st.session_state[confirm_key] = True
-                            st.rerun()
     else:
         st.info("No archived meetings yet.")
 
@@ -1244,25 +1268,47 @@ with tab1:
     st.markdown("---")
     
     # ══════════════════════════════════════════════════════════════════════════════
-    # 4. ICEBREAKER / BSEM ACTIVITY (5 mins)
+    # 4. BSEM ACTIVITY (5 mins)
     # ══════════════════════════════════════════════════════════════════════════════
-    
-    st.subheader("🎯 Icebreaker / BSEM Activity (5 mins)")
-    
-    # Get icebreaker for this week
+
+    st.subheader("🎯 BSEM Activity (5 mins)")
+
+    # Suggested icebreaker for this week
     week_idx = (int(week_number) - 1) % len(BSEM_ICEBREAKERS)
     icebreaker = BSEM_ICEBREAKERS[week_idx]
-    
-    with st.expander(f"💡 Suggested Activity: **{icebreaker['name']}**", expanded=True):
-        st.write(f"**Time:** {icebreaker['time']}")
-        st.write(f"**Instructions:** {icebreaker['instructions']}")
-    
-    icebreaker_notes = st.text_area("Icebreaker Notes (optional)", 
-                                    value=selected_record.get('icebreaker', '') if selected_record else '',
-                                    height=80, 
-                                    placeholder="Any notes about how the icebreaker went...",
-                                    key="icebreaker")
-    
+
+    _bsem_mkey = st.session_state.current_staff_meeting_id or "new"
+    _bsem_raw = selected_record.get('icebreaker', '') if selected_record else ''
+    _bsem_mode0, _bsem_name0, _bsem_expl0, _bsem_notes0 = _parse_bsem_field(_bsem_raw)
+
+    _bsem_choice_key = f"bsem_choice_{_bsem_mkey}"
+    if _bsem_choice_key not in st.session_state:
+        st.session_state[_bsem_choice_key] = "Different activity" if _bsem_mode0 == "different" else "Suggested activity"
+
+    bsem_choice = st.radio(
+        "Activity for this meeting", ["Suggested activity", "Different activity"],
+        key=_bsem_choice_key, horizontal=True
+    )
+
+    bsem_name, bsem_explanation = _bsem_name0, _bsem_expl0
+    if bsem_choice == "Suggested activity":
+        with st.expander(f"💡 Suggested Activity: **{icebreaker['name']}**", expanded=True):
+            st.write(f"**Time:** {icebreaker['time']}")
+            st.write(f"**Instructions:** {icebreaker['instructions']}")
+    else:
+        bsem_name = st.text_input("Activity name", value=_bsem_name0,
+                                   key=f"bsem_name_{_bsem_mkey}",
+                                   placeholder="e.g. Two Truths and a Lie")
+        bsem_explanation = st.text_area("Quick explanation", value=_bsem_expl0,
+                                        height=70, key=f"bsem_explanation_{_bsem_mkey}",
+                                        placeholder="Briefly explain how it works...")
+
+    icebreaker_notes = st.text_area("Activity Notes (optional)",
+                                    value=_bsem_notes0,
+                                    height=80,
+                                    placeholder="Any notes about how the activity went...",
+                                    key=f"icebreaker_{_bsem_mkey}")
+
     st.markdown("---")
     
     # ══════════════════════════════════════════════════════════════════════════════
@@ -1726,24 +1772,37 @@ MEETING SYNTHESIS:
 
 st.subheader("✅ Actions")
 
-# Load actions
-if selected_record and selected_record.get('actions'):
-    try:
-        if isinstance(selected_record['actions'], str):
-            actions = json.loads(selected_record['actions'])
-        else:
-            actions = selected_record['actions']
-    except:
-        actions = []
-else:
-    actions = []
+# Actions are kept in session_state (namespaced per meeting), the same
+# pattern used for attachments — otherwise anything extracted, added,
+# edited or deleted here is silently lost on the very next rerun (which is
+# why this section previously looked broken). Nothing is written to the
+# database until "Save Meeting" is clicked further down the page.
+_act_mkey = st.session_state.current_staff_meeting_id or "new"
+_actions_ss_key = f"meeting_actions_{_act_mkey}"
+if _actions_ss_key not in st.session_state:
+    if selected_record and selected_record.get('actions'):
+        try:
+            _seed_actions = json.loads(selected_record['actions']) if isinstance(selected_record['actions'], str) else selected_record['actions']
+        except Exception:
+            _seed_actions = []
+    else:
+        _seed_actions = []
+    # Give every action a stable id so edits/deletes track the right row
+    # even after another row is added, edited or removed.
+    for _a in _seed_actions:
+        if not _a.get('uid'):
+            _a['uid'] = uuid.uuid4().hex
+    st.session_state[_actions_ss_key] = _seed_actions
+
+actions = st.session_state[_actions_ss_key]
 
 # AI Action Extraction option (if minutes exist)
+_pending_key = f"_extracted_actions_pending_{_act_mkey}"
 if minutes and minutes.strip() and GROQ_KEY:
-    with st.expander("🤖 Extract Actions from Minutes with AI", expanded=False):
-        st.caption("AI will scan the minutes and extract action items automatically")
-        
-        if st.button("🤖 Extract Actions", type="secondary", key="extract_actions_ai"):
+    with st.expander("🤖 Extract Actions from Minutes with AI", expanded=bool(st.session_state.get(_pending_key))):
+        st.caption("AI will scan the minutes and pull out action items for you to review, amend if needed, and add below")
+
+        if st.button("🤖 Extract Actions", type="secondary", key=f"extract_actions_ai_{_act_mkey}"):
             with st.spinner("Extracting actions from minutes..."):
                 try:
                     from groq import Groq
@@ -1786,77 +1845,109 @@ JSON array of actions:"""
                         temperature=0.2,
                         max_tokens=2000
                     )
-                    
+
                     extracted_text = response.choices[0].message.content.strip()
-                    
-                    # Try to parse JSON
-                    import re
+
                     # Extract JSON array from response
                     json_match = re.search(r'\[.*\]', extracted_text, re.DOTALL)
                     if json_match:
                         extracted_actions = json.loads(json_match.group())
-                        
-                        if extracted_actions:
-                            st.success(f"✅ Found {len(extracted_actions)} action items!")
-                            
-                            # Show preview
-                            for action in extracted_actions:
-                                st.write(f"• {action.get('action', '')} - **{action.get('owner', 'Unassigned')}** - {action.get('due_date', 'No deadline')}")
-                            
-                            if st.button("➕ Add All Actions", key="add_extracted_actions"):
-                                # Add to actions list
-                                for action in extracted_actions:
-                                    actions.append({
-                                        "action": action.get('action', ''),
-                                        "owner": action.get('owner', 'Unassigned'),
-                                        "due_date": action.get('due_date', ''),
-                                        "done": False
-                                    })
-                                st.success(f"Added {len(extracted_actions)} actions!")
-                                st.rerun()
-                        else:
+                        st.session_state[_pending_key] = extracted_actions
+                        if not extracted_actions:
                             st.info("No action items found in minutes")
                     else:
+                        st.session_state[_pending_key] = []
                         st.warning("Could not parse AI response. Add actions manually below.")
-                        
                 except Exception as e:
                     st.error(f"Action extraction failed: {e}")
+            st.rerun()
 
-# Display existing actions
+        _pending = st.session_state.get(_pending_key) or []
+        if _pending:
+            st.success(f"✅ Found {len(_pending)} action item(s) — review below, then add them to Actions")
+            for _p in _pending:
+                st.write(f"• {_p.get('action', '')} — **{_p.get('owner', 'Unassigned')}** — {_p.get('due_date') or 'No deadline'}")
+            col_add_all, col_discard = st.columns(2)
+            with col_add_all:
+                if st.button("➕ Add All to Actions", key=f"add_extracted_actions_{_act_mkey}", type="primary", use_container_width=True):
+                    for _p in _pending:
+                        actions.append({
+                            "uid": uuid.uuid4().hex,
+                            "action": _p.get('action', ''),
+                            "owner": _p.get('owner', 'Unassigned'),
+                            "due_date": _p.get('due_date', ''),
+                            "done": False
+                        })
+                    st.session_state[_actions_ss_key] = actions
+                    st.session_state[_pending_key] = []
+                    st.rerun()
+            with col_discard:
+                if st.button("✖️ Discard", key=f"discard_extracted_actions_{_act_mkey}", use_container_width=True):
+                    st.session_state[_pending_key] = []
+                    st.rerun()
+
+# Display existing actions — editable in place; amend anything the AI got
+# wrong (or add manually below), then click Save Meeting to keep changes.
 if actions:
-    st.write("**Current Actions:**")
-    for idx, action in enumerate(actions):
-        col_a, col_b = st.columns([4, 1])
-        with col_a:
-            st.write(f"{idx+1}. {action.get('action', '')} - **{action.get('owner', 'Unassigned')}** - Due: {action.get('due_date', 'No date')}")
-        with col_b:
-            if st.button("🗑️", key=f"delete_action_{idx}"):
-                actions.pop(idx)
-                st.rerun()
+    st.write("**Current Actions** — edit or amend as needed, then **Save Meeting** below to keep changes:")
+    _action_uid_to_delete = None
+    for action in actions:
+        _uid = action.get('uid') or uuid.uuid4().hex
+        action['uid'] = _uid
+        with st.container(border=True):
+            col_a, col_b, col_c, col_d = st.columns([3, 2, 2, 1])
+            with col_a:
+                action['action'] = st.text_input("Action", value=action.get('action', ''),
+                                                  key=f"action_text_{_act_mkey}_{_uid}")
+            with col_b:
+                action['owner'] = st.text_input("Owner", value=action.get('owner', 'Unassigned'),
+                                                 key=f"action_owner_{_act_mkey}_{_uid}")
+            with col_c:
+                _due_seed = None
+                if action.get('due_date'):
+                    try:
+                        _due_seed = datetime.date.fromisoformat(str(action['due_date']))
+                    except Exception:
+                        _due_seed = None
+                _new_due = st.date_input("Due date", value=_due_seed,
+                                          key=f"action_due_{_act_mkey}_{_uid}")
+                action['due_date'] = str(_new_due) if _new_due else ""
+            with col_d:
+                action['done'] = st.checkbox("Done", value=action.get('done', False),
+                                              key=f"action_done_{_act_mkey}_{_uid}")
+                if st.button("🗑️", key=f"delete_action_{_act_mkey}_{_uid}"):
+                    _action_uid_to_delete = _uid
+    if _action_uid_to_delete:
+        st.session_state[_actions_ss_key] = [a for a in actions if a.get('uid') != _action_uid_to_delete]
+        st.rerun()
+    else:
+        st.session_state[_actions_ss_key] = actions
 
 st.write("**Add New Action:**")
 col_a1, col_a2, col_a3, col_a4 = st.columns([3, 2, 2, 1])
 
 with col_a1:
-    new_action = st.text_input("Action Description", key="new_action", placeholder="What needs to be done?")
+    new_action = st.text_input("Action Description", key=f"new_action_{_act_mkey}", placeholder="What needs to be done?")
 
 with col_a2:
-    new_owner = st.text_input("Assigned To", key="new_owner", placeholder="Who will do it?")
+    new_owner = st.text_input("Assigned To", key=f"new_owner_{_act_mkey}", placeholder="Who will do it?")
 
 with col_a3:
-    new_due = st.date_input("Due Date", key="new_due", value=None)
+    new_due = st.date_input("Due Date", key=f"new_due_{_act_mkey}", value=None)
 
 with col_a4:
     st.write("")  # Spacing
     st.write("")  # Spacing
-    if st.button("➕ Add", key="add_action_btn", use_container_width=True):
+    if st.button("➕ Add", key=f"add_action_btn_{_act_mkey}", use_container_width=True):
         if new_action.strip():
             actions.append({
+                "uid": uuid.uuid4().hex,
                 "action": new_action.strip(),
-                "owner": new_owner.strip(),
+                "owner": new_owner.strip() or "Unassigned",
                 "due_date": str(new_due) if new_due else "",
                 "done": False
             })
+            st.session_state[_actions_ss_key] = actions
             st.rerun()
 
 st.markdown("---")
@@ -2157,7 +2248,10 @@ meeting_data = {
     "apologies": apologies.strip(),
     "acknowledgement_done": acknowledgement_done,
     "acknowledgement_by": acknowledgement_by.strip(),
-    "icebreaker": icebreaker_notes.strip(),
+    "icebreaker": _build_bsem_field(
+        "different" if bsem_choice == "Different activity" else "suggested",
+        bsem_name.strip(), bsem_explanation.strip(), icebreaker_notes.strip()
+    ),
     "agenda_items": json.dumps(agenda_data),
     "minutes": minutes.strip() if minutes else '',
     "actions": json.dumps(actions) if actions else '[]',
