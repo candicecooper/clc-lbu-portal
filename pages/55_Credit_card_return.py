@@ -26,7 +26,9 @@ before anyone has entered the admin password.
 """
 
 import io
+import smtplib
 import urllib.request
+from email.mime.text import MIMEText
 from zoneinfo import ZoneInfo
 
 import streamlit as st
@@ -98,7 +100,49 @@ PROGRAM_OPTIONS = ["JP", "PY", "SY", "NIT", "ADMIN"]
 
 # TODO Candice: confirm this is the right inbox for funding-request approvals —
 # it's a guess based on your SharePoint personal-site URL, not confirmed.
+# Used by the Additional Funding tab, where staff email their own completed
+# PDF to the Manager — separate from the automatic alerts below.
 MANAGER_EMAIL = "candice.cooper330@schools.sa.edu.au"
+
+ALERT_EMAILS_TO = ["candice.cooper330@schools.sa.edu.au", "annette.balestrin13@schools.sa.edu.au"]
+
+
+def send_alert_email(subject: str, body: str):
+    """Best-effort email alert when a request/return is lodged. Reads SMTP
+    creds from secrets — if they're not set up yet, this silently does
+    nothing rather than blocking the staff member's submission.
+
+    Needs these added under [secrets] in Render (Environment > Secrets
+    Files, or Streamlit's secrets.toml):
+        SMTP_HOST      (optional, defaults to smtp.gmail.com)
+        SMTP_PORT      (optional, defaults to 587)
+        SMTP_USER      the sending account's address (e.g. the existing
+                       clc.digitalstaffmeeting@gmail.com)
+        SMTP_PASSWORD  an app password for that account (not its normal
+                       login password — Gmail: Google Account > Security >
+                       2-Step Verification > App passwords)
+        ALERT_EMAIL_TO (optional) comma-separated recipient override —
+                       defaults to ALERT_EMAILS_TO above if not set
+    """
+    try:
+        host = st.secrets.get("SMTP_HOST", "smtp.gmail.com")
+        port = int(st.secrets.get("SMTP_PORT", 587))
+        user = st.secrets.get("SMTP_USER", "")
+        password = st.secrets.get("SMTP_PASSWORD", "")
+        override = st.secrets.get("ALERT_EMAIL_TO", "")
+        to_addrs = [a.strip() for a in override.split(",") if a.strip()] if override else ALERT_EMAILS_TO
+        if not user or not password or not to_addrs:
+            return
+        msg = MIMEText(body)
+        msg["Subject"] = subject
+        msg["From"] = user
+        msg["To"] = ", ".join(to_addrs)
+        with smtplib.SMTP(host, port, timeout=10) as server:
+            server.starttls()
+            server.login(user, password)
+            server.sendmail(user, to_addrs, msg.as_string())
+    except Exception:
+        pass  # an alert failure should never block a staff submission
 
 
 @st.cache_resource
@@ -431,6 +475,13 @@ with tab_request:
                     "requested_at": now_iso(),
                 }
             )
+            send_alert_email(
+                "Credit Card Request — awaiting approval",
+                f"{req_staff} has requested {', '.join(req_cards)} (budget: {req_budget}) "
+                f"— approx ${req_cost:.2f}.\n\nReason given: {req_reason.strip()}\n\n"
+                "Open the portal's Credit Card Request & Return tool, Admin tab, "
+                "to approve or decline.",
+            )
             st.success(f"Request submitted for {req_staff} — awaiting admin approval.")
 
 # ------------------------------------------------------------------ STEP 2
@@ -514,6 +565,13 @@ with tab_return:
                         "submitted_at": now_iso(),
                     }
                 )
+            send_alert_email(
+                "Credit Card Return — awaiting approval",
+                f"{ret_staff} has submitted a return for {', '.join(linked_request.get('card_names') or [])} "
+                f"— ${total_amount:.2f} (receipt dated {format_date(receipt_date.isoformat())}).\n\n"
+                "Open the portal's Credit Card Request & Return tool, Admin tab, "
+                "to sight the receipt and approve.",
+            )
             st.success(f"Return submitted for {ret_staff} — awaiting admin sign-off.")
 
 # -------------------------------------------------------------- FUNDING TAB
