@@ -27,6 +27,7 @@ before anyone has entered the admin password.
 
 import io
 import smtplib
+import time
 import urllib.request
 from email.mime.text import MIMEText
 from zoneinfo import ZoneInfo
@@ -183,6 +184,25 @@ def send_alert_email(subject: str, body: str):
         pass  # an alert failure should never block a staff submission
 
 
+def _retry(fn, tries: int = 3, base_delay: float = 0.6):
+    """Retries a flaky Supabase call a couple of times before giving up.
+    Render <-> Supabase occasionally hits a transient network blip
+    (httpx.ReadError, connection reset) that clears itself within a
+    second or two — since the whole page re-runs top-to-bottom on every
+    interaction (every "with tab:" block executes regardless of which
+    tab is showing), a single unhandled blip anywhere used to take the
+    entire page down. Most of the time a short retry fixes it silently."""
+    last_exc = None
+    for attempt in range(tries):
+        try:
+            return fn()
+        except Exception as e:
+            last_exc = e
+            if attempt < tries - 1:
+                time.sleep(base_delay * (attempt + 1))
+    raise last_exc
+
+
 @st.cache_resource
 def get_supabase():
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
@@ -190,19 +210,26 @@ def get_supabase():
 
 # ---- staff & card lookup lists (admin-editable, stored in Supabase) -----
 def fetch_names(table: str) -> list[str]:
-    res = get_supabase().table(table).select("name").order("name").execute()
-    return [r["name"] for r in res.data] if res.data else []
+    try:
+        res = _retry(lambda: get_supabase().table(table).select("name").order("name").execute())
+        return [r["name"] for r in res.data] if res.data else []
+    except Exception:
+        st.warning(
+            f"Couldn't reach the database to load the {table.replace('_', ' ')} list "
+            "(temporary network issue) — try refreshing the page in a moment."
+        )
+        return []
 
 
 def add_name(table: str, name: str):
     name = name.strip()
     if not name:
         return
-    get_supabase().table(table).insert({"name": name}).execute()
+    _retry(lambda: get_supabase().table(table).insert({"name": name}).execute())
 
 
 def delete_name(table: str, name: str):
-    get_supabase().table(table).delete().eq("name", name).execute()
+    _retry(lambda: get_supabase().table(table).delete().eq("name", name).execute())
 
 
 # ---- receipts (Supabase Storage) -----------------------------------------
@@ -215,58 +242,76 @@ def upload_receipts(files, staff_name: str) -> list[str]:
     for i, file in enumerate(files):
         ext = file.name.split(".")[-1]
         path = f"{safe_name}/{datetime.now().strftime('%Y%m%d_%H%M%S')}_{i}.{ext}"
-        sb.storage.from_(BUCKET_NAME).upload(path, file.getvalue(), {"content-type": file.type})
+        _retry(lambda: sb.storage.from_(BUCKET_NAME).upload(path, file.getvalue(), {"content-type": file.type}))
         urls.append(sb.storage.from_(BUCKET_NAME).get_public_url(path))
     return urls
 
 
 # ---- requests (Form 1) ----------------------------------------------------
 def insert_request(record: dict):
-    get_supabase().table(REQUEST_TABLE).insert(record).execute()
+    _retry(lambda: get_supabase().table(REQUEST_TABLE).insert(record).execute())
 
 
 def fetch_requests(status: str | None = None) -> pd.DataFrame:
-    q = get_supabase().table(REQUEST_TABLE).select("*").order("requested_at", desc=True)
-    if status:
-        q = q.eq("status", status)
-    res = q.execute()
-    return pd.DataFrame(res.data) if res.data else pd.DataFrame()
+    def _q():
+        q = get_supabase().table(REQUEST_TABLE).select("*").order("requested_at", desc=True)
+        if status:
+            q = q.eq("status", status)
+        return q.execute()
+    try:
+        res = _retry(_q)
+        return pd.DataFrame(res.data) if res.data else pd.DataFrame()
+    except Exception:
+        st.warning("Couldn't load card requests right now (temporary network issue) — try refreshing.")
+        return pd.DataFrame()
 
 
 def update_request(row_id, updates: dict):
-    get_supabase().table(REQUEST_TABLE).update(updates).eq("id", row_id).execute()
+    _retry(lambda: get_supabase().table(REQUEST_TABLE).update(updates).eq("id", row_id).execute())
 
 
 def fetch_open_requests(staff_member: str) -> pd.DataFrame:
     """Approved requests for this staff member that haven't been closed
     out by a return yet — these are the ones a return can link against."""
-    res = (
-        get_supabase()
-        .table(REQUEST_TABLE)
-        .select("*")
-        .eq("staff_member", staff_member)
-        .eq("status", REQ_APPROVED)
-        .order("requested_at", desc=True)
-        .execute()
-    )
-    return pd.DataFrame(res.data) if res.data else pd.DataFrame()
+    def _q():
+        return (
+            get_supabase()
+            .table(REQUEST_TABLE)
+            .select("*")
+            .eq("staff_member", staff_member)
+            .eq("status", REQ_APPROVED)
+            .order("requested_at", desc=True)
+            .execute()
+        )
+    try:
+        res = _retry(_q)
+        return pd.DataFrame(res.data) if res.data else pd.DataFrame()
+    except Exception:
+        st.warning("Couldn't check outstanding requests right now (temporary network issue) — try refreshing.")
+        return pd.DataFrame()
 
 
 # ---- returns (Form 2) ------------------------------------------------------
 def insert_submission(record: dict):
-    get_supabase().table(RETURN_TABLE).insert(record).execute()
+    _retry(lambda: get_supabase().table(RETURN_TABLE).insert(record).execute())
 
 
 def fetch_submissions(status: str | None = None) -> pd.DataFrame:
-    q = get_supabase().table(RETURN_TABLE).select("*").order("submitted_at", desc=True)
-    if status:
-        q = q.eq("status", status)
-    res = q.execute()
-    return pd.DataFrame(res.data) if res.data else pd.DataFrame()
+    def _q():
+        q = get_supabase().table(RETURN_TABLE).select("*").order("submitted_at", desc=True)
+        if status:
+            q = q.eq("status", status)
+        return q.execute()
+    try:
+        res = _retry(_q)
+        return pd.DataFrame(res.data) if res.data else pd.DataFrame()
+    except Exception:
+        st.warning("Couldn't load card returns right now (temporary network issue) — try refreshing.")
+        return pd.DataFrame()
 
 
 def update_submission(row_id, updates: dict):
-    get_supabase().table(RETURN_TABLE).update(updates).eq("id", row_id).execute()
+    _retry(lambda: get_supabase().table(RETURN_TABLE).update(updates).eq("id", row_id).execute())
 
 
 def card_tickboxes(card_list: list[str], key_prefix: str, preselected: list[str] | None = None) -> list[str]:
@@ -284,8 +329,10 @@ def card_tickboxes(card_list: list[str], key_prefix: str, preselected: list[str]
 
 
 def _fetch_bytes(url: str, timeout: int = 15) -> bytes:
-    with urllib.request.urlopen(url, timeout=timeout) as resp:
-        return resp.read()
+    def _get():
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            return resp.read()
+    return _retry(_get)
 
 
 # ---- additional funding requests ------------------------------------------
@@ -293,38 +340,46 @@ def insert_funding_request(record: dict):
     """Best-effort log for the register — the actual approval happens by
     email, this table just keeps a record of what's been asked for."""
     try:
-        get_supabase().table(FUNDING_TABLE).insert(record).execute()
+        _retry(lambda: get_supabase().table(FUNDING_TABLE).insert(record).execute())
     except Exception:
         pass
 
 
 def fetch_funding_requests() -> pd.DataFrame:
     try:
-        res = get_supabase().table(FUNDING_TABLE).select("*").order("submitted_at", desc=True).execute()
+        res = _retry(
+            lambda: get_supabase().table(FUNDING_TABLE).select("*").order("submitted_at", desc=True).execute()
+        )
         return pd.DataFrame(res.data) if res.data else pd.DataFrame()
     except Exception:
         return pd.DataFrame()
 
 
 def update_funding_request(row_id, updates: dict):
-    get_supabase().table(FUNDING_TABLE).update(updates).eq("id", row_id).execute()
+    _retry(lambda: get_supabase().table(FUNDING_TABLE).update(updates).eq("id", row_id).execute())
 
 
 # ---- additional funding SPEND ledger (actual $ spent, tracked per term) --
 def insert_funding_spend(record: dict):
-    get_supabase().table(SPEND_TABLE).insert(record).execute()
+    _retry(lambda: get_supabase().table(SPEND_TABLE).insert(record).execute())
 
 
 def fetch_funding_spend(term_label: str | None = None) -> pd.DataFrame:
-    q = get_supabase().table(SPEND_TABLE).select("*").order("entered_at", desc=True)
-    if term_label:
-        q = q.eq("term_label", term_label)
-    res = q.execute()
-    return pd.DataFrame(res.data) if res.data else pd.DataFrame()
+    def _q():
+        q = get_supabase().table(SPEND_TABLE).select("*").order("entered_at", desc=True)
+        if term_label:
+            q = q.eq("term_label", term_label)
+        return q.execute()
+    try:
+        res = _retry(_q)
+        return pd.DataFrame(res.data) if res.data else pd.DataFrame()
+    except Exception:
+        st.warning("Couldn't load the funding spend ledger right now (temporary network issue) — try refreshing.")
+        return pd.DataFrame()
 
 
 def delete_funding_spend(row_id):
-    get_supabase().table(SPEND_TABLE).delete().eq("id", row_id).execute()
+    _retry(lambda: get_supabase().table(SPEND_TABLE).delete().eq("id", row_id).execute())
 
 
 def build_funding_request_pdf(data: dict) -> bytes:
