@@ -296,21 +296,30 @@ REFERENCE_DOCS = {
         "subtitle": "Cowandilla Learning Centre (LBU) • Needs-basis guide — follow when "
                     "something on-site needs repairing or replacing.",
         "sections": [
-            ("① Lodging a standard repair (portal)", [
-                "Go to the Ventia <b>Panorama</b> work zone portal — bookmark: "
-                "<b>panorama.portal.ventia.com</b>.",
-                "Log in with <b>Single Sign-On (Okta)</b> using your schools.sa.edu.au email "
-                "address.",
-                "Lodge a new job/work request, with a clear description of the fault, the "
-                "exact location, and the item/category affected.",
+            ("① Priority codes", [
+                "<b>P1</b> = within 1 hour",
+                "<b>P2</b> = within 1 day",
+                "<b>P3</b> = within 1 week",
+                "<b>P4</b> = within 4 weeks",
             ]),
-            ("② Urgent repairs (phone)", [
-                "For anything urgent, phone Ventia directly on <b>1300 903 063</b> rather than "
-                "waiting on the portal.",
-                "Have the location, the item, and the nature of the fault ready before you "
-                "call.",
+            ("② Lodging a maintenance/breakdown job (phone)", [
+                "<b>Step 1:</b> Ring Ventia on <b>1300 903 063</b>.",
+                "<b>Step 2:</b> Let them know you have a <b>NEW BREAKDOWN REQUEST</b>.",
+                "<b>Step 3:</b> Give the request/priority number — <b>P1, P2, P3 or P4</b> "
+                "(see priority codes above).",
+                "<b>Step 4:</b> They will ask for the Asset No. and Site Name — "
+                "<b>Asset No. 01514</b>, <b>Site Name: Cowandilla Learning Centre</b>.",
+                "<b>Step 5:</b> Give the details of the job and who is needed. You'll be "
+                "asked for a preferred supplier — reply <b>\"I don't have a preferred "
+                "supplier\"</b> unless it's one of the specific jobs listed below.",
+                "<b>Step 6:</b> They will give you a job number — record it against the job.",
             ]),
-            ("③ Getting it replaced, not just patched up", [
+            ("③ Specific jobs — ask for these suppliers by name", [
+                "<b>Broken window:</b> ask for <b>Unley Glass</b> (to fix the window) and "
+                "<b>Cleanscope</b> (to clean up the glass).",
+                "<b>Door lock:</b> ask for <b>Alliance Locksmith</b>.",
+            ]),
+            ("④ Getting it replaced, not just patched up", [
                 "<b>White goods:</b> always lodge as a <b>repair</b> — never as a replacement "
                 "request. A trade will attend, and once they assess it as unrepairable, that "
                 "assessment is what triggers the replacement.",
@@ -318,17 +327,29 @@ REFERENCE_DOCS = {
                 "<b>[specific electrician — details to be added]</b>, who replaces the product "
                 "for us directly rather than attempting an on-site repair.",
             ]),
-            ("④ Signing off", [
-                "Once the job is complete, sign it off in the Ventia portal.",
+            ("⑤ Tracking progress & signing off (Panorama portal)", [
+                "You can check on a lodged job's progress any time in the Ventia "
+                "<b>Panorama</b> work zone portal — bookmark: "
+                "<b>panorama.portal.ventia.com</b>.",
+                "Log in with <b>Single Sign-On (Okta)</b> using your schools.sa.edu.au email "
+                "address.",
+                "Look up the job using the job number you were given on the phone to see its "
+                "current status.",
+                "Once the job is complete, sign it off in the portal.",
             ]),
         ],
         "reminders": [
+            "<b>Codes:</b> P1 = 1 hour · P2 = 1 day · P3 = 1 week · P4 = 4 weeks.",
+            "<b>Have ready when you call:</b> Asset No. 01514, Site Name \"Cowandilla "
+            "Learning Centre\", and the job details.",
+            "<b>No preferred supplier</b> is the default answer — except broken windows "
+            "(Unley Glass / Cleanscope) and door locks (Alliance Locksmith).",
             "<b>White goods:</b> lodge as \"repair\" first — the unrepairable assessment is "
             "what gets it replaced.",
             "<b>TV/ICT:</b> lodge as \"repair\", directed to our named electrician for direct "
             "replacement (contact details: TBC).",
-            "<b>Urgent?</b> Call 1300 903 063 instead of waiting on the portal.",
-            "Always sign off completed jobs in the portal once finished.",
+            "Always record the job number — use it in the Panorama portal to check progress "
+            "and to sign off completed jobs.",
         ],
     },
 }
