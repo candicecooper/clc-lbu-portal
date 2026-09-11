@@ -736,11 +736,13 @@ with tab2:
     st.subheader("📚 Past STAFF Meetings")
     
     if existing_meetings:
-        # Group into terms instead of one long flat list — a quick-scan
-        # table is printed above each term's group (newest term first,
-        # weeks ascending within it). Full detail (minutes, actions,
-        # attachments, edit/download/delete) is still reached by opening
-        # that week's entry below its table.
+        # Group into terms instead of one long flat list. Each meeting is
+        # shown ONCE — as a single clickable entry whose own label carries
+        # the week/date/taker/minutes/attachments summary — sitting directly
+        # under its term heading, in week order. (This used to print a
+        # separate summary table above a separate list of expanders below
+        # it, so every meeting effectively appeared twice on the page —
+        # that's collapsed into one row per meeting now.)
         _archive_groups = {}
         for _m in existing_meetings:
             _archive_groups.setdefault(_meeting_year_term_group(_m), []).append(_m)
@@ -748,12 +750,29 @@ with tab2:
         for _key in sorted(_archive_groups.keys(), reverse=True):
             _sorted_meetings.extend(sorted(_archive_groups[_key], key=_meeting_week_sort_key))
 
+        # Flag weeks with more than one saved record for the same term/year —
+        # a known historical bug (autosave duplicating a record on a session
+        # reset) has left blank "stub" duplicates alongside real ones before.
+        # We never delete these automatically (a stub could turn out to hold
+        # the only copy of something); this just makes them impossible to
+        # miss so the existing per-meeting delete button below can remove
+        # the empty one with confidence.
+        _week_counts = {}
+        for _m in existing_meetings:
+            _wkey = (*_meeting_year_term_group(_m), str(_m.get('week_number', '')).strip())
+            _week_counts[_wkey] = _week_counts.get(_wkey, 0) + 1
+
         for _idx, meeting in enumerate(_sorted_meetings):
             _group_key = _meeting_year_term_group(meeting)
             _is_new_group = _idx == 0 or _meeting_year_term_group(_sorted_meetings[_idx - 1]) != _group_key
             if _is_new_group:
                 _year, _term_num = _group_key
-                _term_label = f"Term {_term_num}, {_year}" if _term_num else (str(_year) if _year else "Unknown date")
+                if _term_num:
+                    _term_label = f"Term {_term_num}, {_year}"
+                elif _year:
+                    _term_label = f"{_year} — term not recorded"
+                else:
+                    _term_label = "⚠️ Date/term missing on these records — check them below"
                 _term_group_meetings = _archive_groups[_group_key]
                 st.markdown(
                     f'<div style="margin-top:26px;margin-bottom:8px;padding:8px 14px;'
@@ -763,40 +782,25 @@ with tab2:
                     f'🗓️ {_term_label} &nbsp;·&nbsp; {len(_term_group_meetings)} meeting(s)</div>',
                     unsafe_allow_html=True
                 )
-                _rows_html = ""
-                for _tm in _term_group_meetings:
-                    _has_min = bool((_tm.get('minutes') or '').strip())
-                    _att_count = 0
-                    for _field in ('meeting_attachments', 'pd_attachments'):
-                        try:
-                            _raw = _tm.get(_field)
-                            _parsed = json.loads(_raw) if isinstance(_raw, str) else (_raw or [])
-                            _att_count += len(_parsed)
-                        except Exception:
-                            pass
-                    _rows_html += (
-                        '<tr>'
-                        f'<td style="padding:6px 10px;border:1px solid #{_CLC_BORDER};">Week {_tm.get("week_number", "?")}</td>'
-                        f'<td style="padding:6px 10px;border:1px solid #{_CLC_BORDER};">{_tm.get("meeting_date", "")}</td>'
-                        f'<td style="padding:6px 10px;border:1px solid #{_CLC_BORDER};">{_tm.get("minute_taker", "Unknown")}</td>'
-                        f'<td style="padding:6px 10px;border:1px solid #{_CLC_BORDER};text-align:center;">{"✅" if _has_min else "—"}</td>'
-                        f'<td style="padding:6px 10px;border:1px solid #{_CLC_BORDER};text-align:center;">{_att_count if _att_count else "—"}</td>'
-                        '</tr>'
-                    )
-                st.markdown(
-                    '<table style="width:100%;border-collapse:collapse;'
-                    'font-family:&quot;Segoe UI&quot;,Arial,sans-serif;font-size:13.5px;margin-bottom:10px;">'
-                    f'<tr style="background:#{_CLC_TEAL};color:white;">'
-                    '<th style="padding:6px 10px;text-align:left;">Week</th>'
-                    '<th style="padding:6px 10px;text-align:left;">Date</th>'
-                    '<th style="padding:6px 10px;text-align:left;">Minute Taker</th>'
-                    '<th style="padding:6px 10px;text-align:center;">Minutes</th>'
-                    '<th style="padding:6px 10px;text-align:center;">Attachments</th>'
-                    f'</tr>{_rows_html}</table>',
-                    unsafe_allow_html=True
-                )
 
-            with st.expander(f"📅 {meeting['meeting_date']} - {normalise_term_short(meeting.get('term', '?'))} W{meeting.get('week_number', '?')} - {meeting.get('minute_taker', 'Unknown')}"):
+            _has_min = bool((meeting.get('minutes') or '').strip())
+            _att_count = 0
+            for _field in ('meeting_attachments', 'pd_attachments'):
+                try:
+                    _raw = meeting.get(_field)
+                    _parsed = json.loads(_raw) if isinstance(_raw, str) else (_raw or [])
+                    _att_count += len(_parsed)
+                except Exception:
+                    pass
+            _wkey = (*_group_key, str(meeting.get('week_number', '')).strip())
+            _dup_prefix = "⚠️ MULTIPLE RECORDS THIS WEEK — " if _week_counts.get(_wkey, 1) > 1 else ""
+            _label = (
+                f"{_dup_prefix}📅 Week {meeting.get('week_number', '?')} · {meeting['meeting_date']} · "
+                f"{meeting.get('minute_taker', 'Unknown')} · "
+                f"{'✅ Minutes recorded' if _has_min else '— No minutes yet'} · "
+                f"{_att_count if _att_count else 'no'} attachment(s)"
+            )
+            with st.expander(_label):
                 st.write(f"**Attendees:** {meeting.get('attendees', 'Not recorded')}")
                 st.write(f"**Apologies:** {meeting.get('apologies', 'None')}")
                 
