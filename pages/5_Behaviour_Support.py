@@ -214,6 +214,173 @@ ANTECEDENTS = [
     "Other - unstructured time",
     "Other - access denied"
 ]
+
+# ══════════════════════════════════════════════════════════════════════════
+# ANTECEDENT CATEGORISATION (shared)
+# Groups a raw antecedent string into one of the six categories used
+# throughout the dashboard/analysis charts and by the BSEM recommendation
+# engine below. Matches the "Category - description" structure of
+# ANTECEDENTS first; falls back to keyword matching for free-text
+# antecedents (e.g. AI-extracted historical incidents).
+# ══════════════════════════════════════════════════════════════════════════
+def categorize_antecedent(ant) -> str | None:
+    a = str(ant).strip()
+    if not a or a.startswith("---"):
+        return None
+    _KNOWN = {"peer": "Peer", "transition": "Transition", "instructions": "Instructions",
+              "engagement": "Engagement", "sensory": "Sensory", "other": "Other"}
+    prefix = a.split(" - ")[0].strip().lower()
+    if prefix in _KNOWN:
+        return _KNOWN[prefix]
+    a_low = a.lower()
+    if "peer" in a_low: return "Peer"
+    if "transition" in a_low: return "Transition"
+    if "instruction" in a_low or "demand" in a_low or "following" in a_low: return "Instructions"
+    if any(w in a_low for w in ["engagement", "task", "wait", "routine", "interrupt", "finish",
+                                 "literacy", "maths", "learning", "work independently", "difficult"]):
+        return "Engagement"
+    if any(w in a_low for w in ["sensory", "noise", "loud", "bright", "crowded", "medication",
+                                 "hungry", "thirsty", "movement break"]):
+        return "Sensory"
+    return "Other"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# BSEM STRATEGY LIBRARY
+# Curated, trauma-informed strategies organised by antecedent category and
+# BSEM domain (Brain / Sensory / Emotional / Mind — Beacon House model).
+# This is the fixed, reviewable source of truth for "what could be
+# trialled" — the AI layer (build_bsem_recommendations, below) only ever
+# selects and explains items from this list; it never invents strategies.
+# ══════════════════════════════════════════════════════════════════════════
+BSEM_STRATEGY_LIBRARY = {
+    "Peer": [
+        {"domain": "Brain", "strategy": "A consistent seating position / work partner away from known peer-conflict pairings, so the nervous system isn't spending the lesson tracking a threat."},
+        {"domain": "Sensory", "strategy": "A peripheral or partitioned work spot during high-friction tasks (competitive games, shared resources) to reduce visual/social density."},
+        {"domain": "Emotional", "strategy": "A pre-taught, low-key 'I need space' cue (card, gesture, or phrase) agreed with the student in advance, so they have a script before dysregulation, not during."},
+        {"domain": "Mind", "strategy": "Once regulated, a brief comic-strip-conversation or social-story style debrief of a recent peer incident, building the student's own account of what happened and why."},
+    ],
+    "Transition": [
+        {"domain": "Brain", "strategy": "A visual first-then schedule with a consistent early warning (5-minute, then 2-minute) before the transition, reducing surprise."},
+        {"domain": "Sensory", "strategy": "A transition object or fidget carried between spaces; noise-reducing headphones/earphones for corridor or high-traffic transitions if auditory load seems to be a factor."},
+        {"domain": "Emotional", "strategy": "A brief regulation check-in with a trusted adult immediately before the transition begins, not only offered after dysregulation appears."},
+        {"domain": "Mind", "strategy": "Involve the student in choosing part of their own transition routine (order of steps, which door, which adult walks with them) to build a sense of control."},
+    ],
+    "Instructions": [
+        {"domain": "Brain", "strategy": "Offer instructions as a choice of order rather than a single directive ('finish the maths or start it — you choose') to reduce the perceived threat of direct demand."},
+        {"domain": "Sensory", "strategy": "Reduce instruction load to one step at a time, paired with a written or visual cue rather than verbal-only delivery."},
+        {"domain": "Emotional", "strategy": "PACE-aligned delivery (Playful, Accepting, Curious, Empathic tone) rather than a directive tone, particularly for the first instruction attempt."},
+        {"domain": "Mind", "strategy": "Build in visible processing/wait time before expecting compliance, using 'when-then' framing so the student can see the endpoint."},
+    ],
+    "Engagement": [
+        {"domain": "Brain", "strategy": "Chunk tasks into short, visibly-bounded segments with a built-in movement break before fatigue sets in, rather than after."},
+        {"domain": "Sensory", "strategy": "Offer alternative seating or a movement option (standing desk, wobble cushion, short walk) proactively during longer seated tasks."},
+        {"domain": "Emotional", "strategy": "Lead with specific, genuine connection/praise before task difficulty increases, so engagement is scaffolded by relationship rather than demand alone."},
+        {"domain": "Mind", "strategy": "Offer choice in task order or format, and link the task to a known interest area where possible, to build intrinsic motivation."},
+    ],
+    "Sensory": [
+        {"domain": "Brain", "strategy": "Reduce ambient unpredictability where identifiable (flickering lights, sudden bells/alarms, echoing spaces)."},
+        {"domain": "Sensory", "strategy": "A quiet, low-stimulation space to enter before joining the group (rather than straight into a full room); trial reducing ambient volume on entry, and noise-cancelling headphones/earphones if auditory input seems to be the driver."},
+        {"domain": "Emotional", "strategy": "Offer the sensory strategy discreetly rather than in front of peers, so support doesn't come at the cost of the student's dignity."},
+        {"domain": "Mind", "strategy": "Once regulated, collaboratively ask the student which specific inputs feel hardest — building their own sensory self-awareness and language for it over time."},
+    ],
+    "Other": [
+        {"domain": "Brain", "strategy": "Look for a predictability gap around this trigger (change of adult, change of routine, time of day) and consider what advance notice could be built in."},
+        {"domain": "Sensory", "strategy": "Check whether an unidentified sensory or physiological factor (hunger, tiredness, medication timing) coincides with these incidents."},
+        {"domain": "Emotional", "strategy": "Prioritise co-regulation and connection with a trusted adult before any expectation of cognitive engagement or compliance."},
+        {"domain": "Mind", "strategy": "Because this antecedent doesn't fit a clear category yet, a closer look at the incident narratives themselves may surface a more specific pattern to target."},
+    ],
+}
+
+
+def _top_categories(full_df, n: int = 2) -> list[str]:
+    """Return the n most frequent antecedent categories present in
+    full_df, computing the category column if it isn't already there."""
+    if full_df is None or full_df.empty or "antecedent" not in full_df.columns:
+        return []
+    if "_ant_cat" in full_df.columns:
+        cats = full_df["_ant_cat"].dropna()
+    else:
+        cats = full_df["antecedent"].apply(categorize_antecedent).dropna()
+    if cats.empty:
+        return []
+    return list(cats.value_counts().head(n).index)
+
+
+def build_bsem_recommendations(
+    full_df, top_beh, top_ant, top_loc, top_session, student_name: str,
+    context: str = "dashboard",
+) -> str:
+    """Curated-library + AI-framing recommendations: picks 2 relevant
+    antecedent categories from full_df, pulls their BSEM-tagged strategies
+    from BSEM_STRATEGY_LIBRARY (fixed, never AI-invented), and asks the
+    AI layer only to write natural, specific framing around them —
+    referencing the student's actual hotspot/peak-time pattern.
+
+    context="dashboard": short, practical, "things to trial this week"
+      framing for CLC-LBU's small, highly structured setting.
+    context="analysis": framing oriented toward what should travel with
+      the student into a mainstream school placement — what a receiving
+      school would need to know and put in place.
+    """
+    cats = _top_categories(full_df, n=2)
+    if not cats:
+        return ""
+
+    picked = []
+    for cat in cats:
+        for item in BSEM_STRATEGY_LIBRARY.get(cat, []):
+            picked.append({"category": cat, **item})
+
+    _library_text = "\n".join(
+        f"- [{p['category']} / {p['domain']}] {p['strategy']}" for p in picked
+    )
+
+    if context == "analysis":
+        _framing = (
+            "Write this for a transition/handover audience: staff preparing to support "
+            "this student's move into a mainstream school setting. Frame each strategy "
+            "in terms of what the receiving school would need to know and put in place, "
+            "since a mainstream classroom won't have CLC-LBU's small, highly structured "
+            "environment by default. Where relevant, note what CLC-LBU currently provides "
+            "that a receiving school should be told about or asked to replicate."
+        )
+    else:
+        _framing = (
+            "Write this for CLC-LBU staff to use directly, day to day, in our small, "
+            "highly structured setting. Frame each strategy as something concrete to "
+            "trial this week, not a long-term policy."
+        )
+
+    prompt = (
+        "You are a trauma-informed behaviour support specialist writing for school staff, "
+        "using the BSEM model (Brain, Sensory, Emotional, Mind). "
+        f"Student pattern — primary behaviour: {top_beh}; primary trigger: {top_ant}; "
+        f"location hotspot: {top_loc}; peak time: {top_session}.\n\n"
+        "Here is a fixed, pre-approved list of strategies to draw from. "
+        "Do NOT invent new strategies or add anything not in this list — only select from "
+        "and explain these, grouped by BSEM domain:\n"
+        f"{_library_text}\n\n"
+        f"{_framing}\n"
+        "Select the 4-6 most relevant strategies from the list above given the student's "
+        "pattern (you do not need to use all of them). For each, briefly connect it to the "
+        "specific hotspot/time pattern above rather than writing generically. "
+        "Group your output under BSEM domain subheadings (Brain, Sensory, Emotional, Mind) "
+        "using markdown ####. Keep the whole response under 300 words. "
+        "Do not mention the student's name. Return markdown only, no preamble."
+    )
+
+    try:
+        return groq_ai_call(prompt, max_tokens=700, temperature=0.3)
+    except Exception:
+        # Safe fallback: show the curated library items directly, ungrouped
+        # by AI framing, so a Groq outage never removes the feature entirely.
+        lines = ["*(AI framing unavailable — showing curated strategies directly)*", ""]
+        for p in picked:
+            lines.append(f"- **[{p['domain']}]** {p['strategy']}")
+        return "\n".join(lines)
+
+
 # ── Location normalisation ────────────────────────────────────────────────────
 LOCATION_ALIASES = {
     "JP Classroom": "JP Room", "JP classroom": "JP Room", "Junior Primary": "JP Room",
@@ -5280,19 +5447,7 @@ def render_student_analysis_page():
     st.markdown("### 📂 Antecedent Category Analysis")
     st.caption("Incidents grouped by antecedent category to identify the primary trigger domain.")
 
-    def _cat(ant):
-        a = str(ant).lower()
-        if a.startswith("---"): return None
-        if "peer" in a: return "Peer"
-        if "transition" in a: return "Transition"
-        if "instruction" in a or "demand" in a or "following" in a: return "Instructions"
-        if any(w in a for w in ["engagement","task","wait","routine","interrupt","finish",
-                                  "literacy","maths","learning","work independently","difficult"]): return "Engagement"
-        if any(w in a for w in ["sensory","noise","loud","bright","crowded","medication",
-                                  "hungry","thirsty","movement break"]): return "Sensory"
-        return "Other"
-
-    full_df["_ant_cat"] = full_df["antecedent"].apply(_cat)
+    full_df["_ant_cat"] = full_df["antecedent"].apply(categorize_antecedent)
     quick_cat  = full_df[full_df.get("incident_type", "Quick") == "Quick"]["_ant_cat"].dropna() if "incident_type" in full_df.columns else full_df["_ant_cat"].dropna()
     crit_cat   = full_df[full_df.get("incident_type", "Quick") == "Critical"]["_ant_cat"].dropna() if "incident_type" in full_df.columns else pd.Series(dtype=str)
 
@@ -5878,6 +6033,27 @@ def render_student_analysis_page():
                         st.error("❌ Failed to save — please try again.")
 
     st.markdown("---")
+    st.markdown("### 🎒 Supports for Transition to a Mainstream Setting")
+    st.caption(
+        "BSEM-informed strategies (Brain · Sensory · Emotional · Mind), matched to this "
+        "student's actual incident pattern, framed for handover to a receiving school."
+    )
+    _bsem_key = f"bsem_analysis_{student_id}"
+    _bsem_sig = f"{top_beh}|{top_ant}|{top_loc}|{top_session}"
+    if (st.session_state.get(f"{_bsem_key}_sig") != _bsem_sig
+            or st.button("🔄 Regenerate", key=f"{_bsem_key}_regen")):
+        with st.spinner("Drawing up BSEM-aligned recommendations..."):
+            st.session_state[_bsem_key] = build_bsem_recommendations(
+                full_df, top_beh, top_ant, top_loc, top_session,
+                student["name"], context="analysis")
+            st.session_state[f"{_bsem_key}_sig"] = _bsem_sig
+    _bsem_text = st.session_state.get(_bsem_key, "")
+    if _bsem_text:
+        st.markdown(_bsem_text)
+    else:
+        st.info("Not enough antecedent data yet to generate recommendations.")
+
+    st.markdown("---")
     st.markdown("### 📄 Export Data & Reports")
     col1, col2 = st.columns(2)
     with col1:
@@ -6128,13 +6304,28 @@ def render_student_dashboard():
                 emoji = "🔴" if inc.get("incident_type") == "Critical" else "🟡" if sev >= 3 else "🟢"
                 st.markdown(f"{emoji} **{date_str}** - Sev {sev}")
     st.markdown("---")
-    st.markdown("### 💡 Quick Recommendations")
-    if risk_level == "HIGH":
-        st.error("**⚠️ HIGH RISK**\n- Schedule urgent case review\n- Update safety plan\n- Daily check-ins")
-    elif risk_level == "MODERATE":
-        st.warning("**⚠️ MODERATE RISK**\n- Weekly review\n- Enhanced monitoring\n- Proactive strategies")
+    st.markdown("### 💡 Recommendations to Trial")
+    _risk_line = {"HIGH": "🔴 **HIGH RISK** — daily check-ins recommended alongside the strategies below.",
+                  "MODERATE": "🟡 **MODERATE RISK** — weekly review alongside the strategies below.",
+                  "LOW": "🟢 **LOW RISK** — maintain current supports."}[risk_level]
+    st.caption(_risk_line)
+    if not full_df.empty:
+        _bsem_key_d = f"bsem_dash_{student_id}"
+        _bsem_sig_d = f"{top_beh}|{top_ant}|{top_loc}|{top_session}"
+        if (st.session_state.get(f"{_bsem_key_d}_sig") != _bsem_sig_d
+                or st.button("🔄 Regenerate", key=f"{_bsem_key_d}_regen")):
+            with st.spinner("Drawing up BSEM-aligned recommendations..."):
+                st.session_state[_bsem_key_d] = build_bsem_recommendations(
+                    full_df, top_beh, top_ant, top_loc, top_session,
+                    student["name"], context="dashboard")
+                st.session_state[f"{_bsem_key_d}_sig"] = _bsem_sig_d
+        _bsem_text_d = st.session_state.get(_bsem_key_d, "")
+        if _bsem_text_d:
+            st.markdown(_bsem_text_d)
+        else:
+            st.info("Not enough antecedent data yet to generate recommendations.")
     else:
-        st.success("**✅ LOW RISK**\n- Maintain supports\n- Continue monitoring\n- Celebrate progress")
+        st.info("Log some incidents to generate BSEM-aligned recommendations.")
     st.markdown("---")
     col1, col2, col3 = st.columns(3)
     with col1:
