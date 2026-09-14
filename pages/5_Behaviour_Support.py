@@ -391,7 +391,11 @@ def build_bsem_recommendations(
 
 def render_bsem_recommendations(items: list[dict], key_prefix: str):
     """Render structured BSEM recommendations as clickable, colour-coded
-    cards — click a strategy to reveal why it fits and how to trial it."""
+    cards — click a strategy to reveal why it fits and how to trial it.
+    Uses only button + session_state toggling (not st.expander's `key=`
+    argument, which isn't supported on all Streamlit versions) so the
+    click-to-expand behaviour is guaranteed to work regardless of the
+    exact Streamlit version deployed."""
     if not items:
         return
     _domain_style = {
@@ -402,6 +406,9 @@ def render_bsem_recommendations(items: list[dict], key_prefix: str):
     }
     for i, item in enumerate(items):
         style = _domain_style.get(item["domain"], {"icon": "•", "color": "#64748b", "bg": "#f8fafc"})
+        _open_key = f"{key_prefix}_open_{i}"
+        if _open_key not in st.session_state:
+            st.session_state[_open_key] = False
         with st.container(border=True):
             st.markdown(
                 f"<span style='background:{style['bg']};color:{style['color']};"
@@ -409,7 +416,11 @@ def render_bsem_recommendations(items: list[dict], key_prefix: str):
                 f"text-transform:uppercase;letter-spacing:.03em;'>{style['icon']} {item['domain']}</span>",
                 unsafe_allow_html=True,
             )
-            with st.expander(item["strategy"], key=f"{key_prefix}_exp_{i}"):
+            _arrow = "🔽" if st.session_state[_open_key] else "▶️"
+            if st.button(f"{_arrow}  {item['strategy']}", key=f"{key_prefix}_btn_{i}", use_container_width=True):
+                st.session_state[_open_key] = not st.session_state[_open_key]
+                st.rerun()
+            if st.session_state[_open_key]:
                 if item.get("why"):
                     st.markdown(f"**Why this fits:** {item['why']}")
                 if item.get("how"):
@@ -882,10 +893,14 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             pic_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
             pic_para.paragraph_format.space_before = Pt(2)
             pic_para.paragraph_format.space_after  = Pt(0)
+            # Keep the image glued to its caption — never split across a page break
+            pic_para.paragraph_format.keep_together = True
+            pic_para.paragraph_format.keep_with_next = True
             cap = doc.add_paragraph()
             cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
             cap.paragraph_format.space_before = Pt(1)
             cap.paragraph_format.space_after  = Pt(6)
+            cap.paragraph_format.keep_together = True
             run = cap.add_run(caption_text)
             run.font.size = Pt(10)   # increased for print readability
             run.font.italic = True
@@ -1656,6 +1671,14 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         doc.add_paragraph().paragraph_format.space_after = Pt(5)
 
         # Sign-off section removed — BAP approved via portal workflow
+
+        # Prevent any table row (Student Details, Key Findings, Risk banner,
+        # recommendation tables, etc.) from splitting across a page break
+        for _tbl in doc.tables:
+            for _row in _tbl.rows:
+                _trPr = _row._tr.get_or_add_trPr()
+                _cant_split = OxmlElement('w:cantSplit')
+                _trPr.append(_cant_split)
 
         file_stream = BytesIO()
         doc.save(file_stream)
