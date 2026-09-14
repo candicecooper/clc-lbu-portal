@@ -372,10 +372,24 @@ def build_bsem_recommendations(
     )
 
     try:
-        raw = groq_ai_call(prompt, max_tokens=900, temperature=0.3)
+        raw = groq_ai_call(prompt, max_tokens=2200, temperature=0.3)
         raw = raw.strip()
         raw = re.sub(r'^```(?:json)?\s*|\s*```\s*$', '', raw, flags=re.IGNORECASE).strip()
-        ai_items = json.loads(raw)
+        try:
+            ai_items = json.loads(raw)
+        except json.JSONDecodeError:
+            # Response likely got truncated by the token limit before the
+            # JSON could close properly — salvage whatever complete
+            # {"id":...,"why":...,"how":...} objects we can from the
+            # partial array instead of discarding the whole response.
+            ai_items = []
+            for _om in re.findall(r'\{[^{}]*\}', raw):
+                try:
+                    ai_items.append(json.loads(_om))
+                except json.JSONDecodeError:
+                    continue
+            if not ai_items:
+                raise
         if isinstance(ai_items, dict):
             # Model may have wrapped the array in an object, e.g. {"recommendations": [...]}
             for _v in ai_items.values():
