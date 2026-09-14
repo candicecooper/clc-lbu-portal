@@ -395,11 +395,16 @@ def build_bsem_recommendations(
             result.append({**picked[idx], "why": a.get("why", ""), "how": a.get("how", "")})
         if result:
             return result
-    except Exception:
-        pass
-    # Safe fallback: curated items with no AI why/how, so a Groq outage
-    # never removes the feature entirely.
-    return [{**p, "why": "", "how": ""} for p in picked[:6]]
+        # TEMP DIAGNOSTIC: the call succeeded and returned valid JSON, but no
+        # item matched a known strategy id — surface why instead of a silent
+        # generic fallback, so the actual cause is visible in the app.
+        _debug = (f"[DEBUG] AI returned {len(ai_items) if isinstance(ai_items, list) else 'non-list'} "
+                  f"item(s), none matched. Raw response (first 400 chars): {raw[:400]}")
+        return [{**p, "why": "", "how": _debug if i == 0 else ""} for i, p in enumerate(picked[:6])]
+    except Exception as _e:
+        # TEMP DIAGNOSTIC: surface the actual exception instead of swallowing it.
+        _debug = f"[DEBUG] AI call/parsing failed: {type(_e).__name__}: {_e}"
+        return [{**p, "why": "", "how": _debug if i == 0 else ""} for i, p in enumerate(picked[:6])]
 
 
 def render_bsem_recommendations(items: list[dict], key_prefix: str):
