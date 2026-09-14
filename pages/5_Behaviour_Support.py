@@ -419,7 +419,11 @@ def render_bsem_recommendations(items: list[dict], key_prefix: str):
             _arrow = "🔽" if st.session_state[_open_key] else "▶️"
             if st.button(f"{_arrow}  {item['strategy']}", key=f"{key_prefix}_btn_{i}", use_container_width=True):
                 st.session_state[_open_key] = not st.session_state[_open_key]
-                st.rerun()
+                # No explicit st.rerun() — Streamlit already reruns the script
+                # automatically after any button click, and the state check
+                # below runs immediately in that same pass. A manual rerun()
+                # here was redundant and could interrupt the click before the
+                # updated state was rendered.
             if st.session_state[_open_key]:
                 if item.get("why"):
                     st.markdown(f"**Why this fits:** {item['why']}")
