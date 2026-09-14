@@ -458,7 +458,7 @@ def render_bsem_recommendations(items: list[dict], key_prefix: str):
         with st.container(border=True):
             st.markdown(
                 f"<span style='background:{style['bg']};color:{style['color']};"
-                f"padding:0.15rem 0.6rem;border-radius:6px;font-size:0.72rem;font-weight:700;"
+                f"padding:0.2rem 0.75rem;border-radius:999px;font-size:0.72rem;font-weight:700;"
                 f"text-transform:uppercase;letter-spacing:.03em;'>{style['icon']} {item['domain']}</span>",
                 unsafe_allow_html=True,
             )
@@ -5832,7 +5832,8 @@ def render_student_analysis_page():
     # ══════════════════════════════════════════════════════════════════════════
     st.markdown(
         "<div style='background:linear-gradient(135deg,#1A7A7A 0%,#134e4e 100%);"
-        "border-radius:10px;padding:0.9rem 1.2rem;margin-bottom:0.6rem;'>"
+        "border-radius:14px;padding:1.1rem 1.4rem;margin-bottom:0.7rem;"
+        "box-shadow:0 4px 14px rgba(19,78,78,0.25);'>"
         "<span style='color:white;font-size:1.15rem;font-weight:700;'>🎒 Supports for Transition to a Mainstream Setting</span><br>"
         "<span style='color:#d1fae5;font-size:0.85rem;'>BSEM-informed strategies (Brain · Sensory · Emotional · Mind), "
         "matched to this student's actual pattern, framed for handover to a receiving school. "
@@ -6699,7 +6700,8 @@ def render_student_dashboard():
     st.markdown("---")
     st.markdown(
         "<div style='background:linear-gradient(135deg,#1A7A7A 0%,#134e4e 100%);"
-        "border-radius:10px;padding:0.9rem 1.2rem;margin-bottom:0.6rem;'>"
+        "border-radius:14px;padding:1.1rem 1.4rem;margin-bottom:0.7rem;"
+        "box-shadow:0 4px 14px rgba(19,78,78,0.25);'>"
         "<span style='color:white;font-size:1.15rem;font-weight:700;'>💡 Recommendations to Trial</span><br>"
         "<span style='color:#d1fae5;font-size:0.85rem;'>BSEM-informed strategies matched to this "
         "student's actual pattern. Click a strategy for why it fits and how to trial it.</span></div>",
@@ -8002,7 +8004,89 @@ def render_quick_incident_log():
     st.caption("CLC-LBU Portal · Quick Incident Log · For critical incidents use the full Behaviour Support Tool")
 
 
+def _inject_modern_css():
+    """One shared, modern visual layer for the whole Behaviour Support
+    tool — rounded cards, soft shadows, smoother buttons/expanders/tabs,
+    tighter typography. Pure CSS targeting Streamlit's own component
+    selectors, so if a selector doesn't match on a given Streamlit
+    version it simply has no effect — it can't break functionality the
+    way a Python API mismatch would."""
+    st.markdown("""
+    <style>
+    /* Typography */
+    h1, h2, h3, h4 {
+        letter-spacing: -0.01em;
+        font-weight: 700 !important;
+    }
+    p, li, .stMarkdown { line-height: 1.55; }
+
+    /* Buttons */
+    div[data-testid="stButton"] button, div[data-testid="stDownloadButton"] button {
+        border-radius: 10px !important;
+        border: 1px solid rgba(0,0,0,0.06) !important;
+        transition: transform 0.08s ease, box-shadow 0.15s ease !important;
+        font-weight: 600 !important;
+    }
+    div[data-testid="stButton"] button:hover, div[data-testid="stDownloadButton"] button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 10px rgba(0,0,0,0.08);
+    }
+
+    /* Bordered containers (BSEM recommendation cards, etc.) */
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        border-radius: 12px !important;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        transition: box-shadow 0.15s ease;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"]:hover {
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    }
+
+    /* Expanders */
+    div[data-testid="stExpander"] {
+        border-radius: 10px !important;
+        overflow: hidden;
+    }
+    div[data-testid="stExpander"] summary {
+        font-weight: 600 !important;
+    }
+
+    /* Metrics */
+    div[data-testid="stMetric"] {
+        background: #f8fafc;
+        border-radius: 12px;
+        padding: 0.9rem 1rem;
+        border: 1px solid #e2e8f0;
+    }
+    div[data-testid="stMetricValue"] {
+        font-weight: 700 !important;
+    }
+
+    /* Tabs */
+    div[data-testid="stTabs"] button[role="tab"] {
+        border-radius: 8px 8px 0 0 !important;
+        font-weight: 600 !important;
+    }
+
+    /* Dataframes / tables */
+    div[data-testid="stDataFrame"] {
+        border-radius: 10px;
+        overflow: hidden;
+        border: 1px solid #e2e8f0;
+    }
+
+    /* Text inputs / text areas / selects */
+    div[data-testid="stTextArea"] textarea,
+    div[data-testid="stTextInput"] input,
+    div[data-baseweb="select"] > div {
+        border-radius: 8px !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+
 def main():
+    _inject_modern_css()
     # ── Quick Incident Log — no login required ────────────────────────────
     # Accessible at ?mode=quicklog (tile URL: /Behaviour_Support?mode=quicklog)
     try:
