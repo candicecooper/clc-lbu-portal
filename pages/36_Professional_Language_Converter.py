@@ -57,10 +57,6 @@ st.markdown(f"""
     margin:0 0 .75rem; font-size:1rem; font-weight:800; color:{TEAL};
 }}
 
-.starter-btn-wrap {{
-    display:flex; flex-wrap:wrap; gap:.5rem;
-}}
-
 .output-box {{
     background:{TEAL_L}; border:1px solid {TEAL}; border-radius:10px;
     padding:1rem 1.25rem; white-space:pre-wrap; font-size:.9rem;
@@ -97,54 +93,30 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# -- System prompt ------------------------------------------------------------
-SYSTEM_PROMPT = """You are a professional education support writer for an Australian alternative education setting (Cowandilla Learning Centre — Learning and Behaviour Unit). You work with students who have experienced trauma, disengagement, and exclusion from mainstream schooling. Staff will describe student behaviour and support strategies in informal plain language. Your job is to rewrite these descriptions in professional, appropriate, and clinically informed language.
+# -- Shared context prompt (injected into both calls) -------------------------
+SHARED_CONTEXT = """You are a professional education support writer for an Australian alternative education setting (Cowandilla Learning Centre — Learning and Behaviour Unit). You work with students who have experienced trauma, disengagement, and exclusion from mainstream schooling. Staff will describe student behaviour and support strategies in informal plain language. Your job is to rewrite these descriptions in professional, appropriate, and clinically informed language.
 
 Your writing must be grounded in the following frameworks — weave their language, concepts, and rationale naturally through all descriptions:
 
-BERRY STREET EDUCATION MODEL (BSEM):
-- Reference the five BSEM domains where relevant: Regulation, Relationships, Resilience, Engagement, and Character.
-- Frame behaviour through the lens of stress response, trauma history, and unmet needs rather than defiance or non-compliance.
-- Use BSEM language: regulation, co-regulation, felt safety, relational trust, restorative practice, proactive strategies, the stress-behaviour-learning connection.
-- Describe student strengths as assets within the BSEM framework (e.g. relational motivation, desire for connection, emerging capacity for reflection).
+BERRY STREET EDUCATION MODEL (BSEM): Reference the five BSEM domains where relevant: Regulation, Relationships, Resilience, Engagement, and Character. Frame behaviour through the lens of stress response, trauma history, and unmet needs rather than defiance or non-compliance. Use BSEM language: regulation, co-regulation, felt safety, relational trust, restorative practice, proactive strategies, the stress-behaviour-learning connection. Describe student strengths as assets within the BSEM framework.
 
-TRAUMA-INFORMED PRACTICE:
-- Apply the core principles: safety, trustworthiness, choice, collaboration, empowerment, cultural sensitivity.
-- Frame escalating behaviour as a stress response, not a character flaw or deliberate disruption.
-- Reference the Regulate–Relate–Reason sequence where appropriate (a student must be regulated before they can access reasoning or learning).
-- Where relevant, reference the Window of Tolerance, neuroception, and the role of predictability and routine in felt safety.
-- Describe all adult responses as intentional, co-regulatory, and proactive.
+TRAUMA-INFORMED PRACTICE: Apply the core principles: safety, trustworthiness, choice, collaboration, empowerment. Frame escalating behaviour as a stress response, not a character flaw or deliberate disruption. Reference the Regulate-Relate-Reason sequence where appropriate. Describe all adult responses as intentional, co-regulatory, and proactive.
 
-PBIS (POSITIVE BEHAVIOURAL INTERVENTIONS AND SUPPORTS):
-- Frame strategies within a tiered support model where appropriate (Tier 1 universal, Tier 2 targeted, Tier 3 intensive).
-- Use PBIS language: clearly defined expectations, positive reinforcement, consistent prompting, data-informed decision-making, least restrictive response, planned consequences.
-- Describe visual systems, prompts, and structured consequences using PBIS framing — as proactive tools that increase predictability and reduce ambiguity for the student.
-- Refer to consequences as planned, non-punitive responses designed to teach, not punish.
+PBIS: Frame strategies within a tiered support model where appropriate. Use PBIS language: clearly defined expectations, positive reinforcement, consistent prompting, data-informed decision-making, least restrictive response, planned consequences. Refer to consequences as planned, non-punitive responses designed to teach, not punish.
 
-BEHAVIOUR ANALYSIS (Applied Behaviour Analysis / Functional Behaviour Assessment):
-- Describe behaviour in terms of its function where possible: sensory, escape/avoidance, attention-seeking, access to tangibles/activities.
-- Use antecedent-behaviour-consequence (ABC) framing where relevant.
-- Identify the likely communicative function of the behaviour (e.g. "the behaviour appears to serve a function of seeking social connection and sensory stimulation").
-- Describe strategies in terms of antecedent modifications, teaching replacement behaviours, and consequence strategies.
-- Reference reinforcement, extinction, prompting hierarchies, and generalisation where applicable.
+BEHAVIOUR ANALYSIS: Describe behaviour in terms of its function where possible: sensory, escape/avoidance, attention-seeking, access to activities. Use ABC framing where relevant. Describe strategies in terms of antecedent modifications and teaching replacement behaviours.
 
-SMART / SMARTAR GOALS:
-- Where strategies or goals are described, frame them as Specific, Measurable, Achievable, Relevant, and Time-bound.
-- Where the description includes targets or outcomes, reframe these in SMARTAR language.
-- Reference data collection, progress monitoring, and review cycles where relevant.
+SMARTAR: Where strategies or goals are described, frame them in measurable, time-bound, reviewable language.
 
-Always produce TWO versions:
-1. STANDARD VERSION — professional language for team meetings, parent communication, or general documentation. Clear and accessible. Uses bullet points where describing a multi-step strategy. Label this section clearly with: --- STANDARD VERSION ---
-2. FORMAL VERSION — more clinical and structured, suitable for official documentation, DfE records, Individual Education Plans, or Behaviour Support Plans. Uses the frameworks above more explicitly. Label this section clearly with: --- FORMAL VERSION ---
+In all writing: use person-first, strengths-based language. Avoid deficit or punitive framing. Do not invent clinical labels not mentioned. Use Australian English spelling. Refer to the student as "the student" or "they", not by name."""
 
-In BOTH versions:
-- Use person-first, strengths-based language throughout
-- Reflect the student's motivation, relational capacity, and strengths alongside their challenges
-- Avoid deficit, pathologising, or punitive framing
-- Do not invent clinical diagnoses or labels not mentioned by the staff member
-- Use Australian English spelling (e.g. behaviour, organisation, recognise, programme)
-- Do not use the student's name — refer to "the student" or "they"
-- Keep content accurate to what was described — expand the professional framing but do not fabricate details"""
+SYSTEM_STANDARD = SHARED_CONTEXT + """
+
+Write a STANDARD VERSION only — professional language suitable for team meetings, parent communication, or general documentation. Clear, accessible prose. Use bullet points where describing a multi-step strategy. Keep it concise and practical. Do not include headings or labels — just write the description directly."""
+
+SYSTEM_FORMAL = SHARED_CONTEXT + """
+
+Write a FORMAL VERSION only — clinical and structured language suitable for official documentation, DfE records, Individual Education Plans, or Behaviour Support Plans. Use the frameworks above more explicitly and precisely. More formal in tone and structure. Do not include headings or labels — just write the description directly."""
 
 # -- Prompt starters ----------------------------------------------------------
 STARTERS = {
@@ -202,41 +174,46 @@ with col_clear:
         st.session_state.plc_formal = ""
         st.rerun()
 
-# -- Conversion ---------------------------------------------------------------
+# -- Conversion — two separate calls, each under 800 tokens ------------------
+def call_groq(system_prompt, user_text):
+    client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+    response = client.chat.completions.create(
+        model="qwen/qwen3.6-27b",
+        max_tokens=800,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_text},
+        ],
+    )
+    return (response.choices[0].message.content or "").strip()
+
 if convert:
     if not user_input.strip():
         st.warning("Please enter a description first.")
     else:
-        with st.spinner("Converting — this may take a moment..."):
+        text = user_input.strip()
+        error = None
+        standard = ""
+        formal = ""
+
+        with st.spinner("Generating standard version..."):
             try:
-                client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-                response = client.chat.completions.create(
-                    model="qwen/qwen3.6-27b",
-                    max_tokens=1800,
-                    messages=[
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": user_input.strip()},
-                    ],
-                )
-                raw = response.choices[0].message.content or ""
-
-                # Split on section markers
-                standard = ""
-                formal = ""
-                if "--- STANDARD VERSION ---" in raw and "--- FORMAL VERSION ---" in raw:
-                    parts = raw.split("--- FORMAL VERSION ---")
-                    standard = parts[0].replace("--- STANDARD VERSION ---", "").strip()
-                    formal = parts[1].strip() if len(parts) > 1 else ""
-                else:
-                    # Fallback: put everything in standard
-                    standard = raw.strip()
-                    formal = ""
-
-                st.session_state.plc_standard = standard
-                st.session_state.plc_formal = formal
-
+                standard = call_groq(SYSTEM_STANDARD, text)
             except Exception as e:
-                st.error(f"Something went wrong: {e}")
+                error = str(e)
+
+        if not error:
+            with st.spinner("Generating formal version..."):
+                try:
+                    formal = call_groq(SYSTEM_FORMAL, text)
+                except Exception as e:
+                    error = str(e)
+
+        if error:
+            st.error(f"Something went wrong: {error}")
+        else:
+            st.session_state.plc_standard = standard
+            st.session_state.plc_formal = formal
 
 # -- Output -------------------------------------------------------------------
 if st.session_state.plc_standard:
@@ -262,21 +239,20 @@ if st.session_state.plc_standard:
             data=st.session_state.plc_standard,
             file_name="professional_description_standard.txt",
             mime="text/plain",
+            key="dl_standard",
         )
 
     with tab2:
-        if st.session_state.plc_formal:
-            st.markdown('<div class="section-card"><h3>Formal / documentation version</h3>', unsafe_allow_html=True)
-            st.markdown(
-                f'<div class="output-box">{st.session_state.plc_formal}</div>',
-                unsafe_allow_html=True,
-            )
-            st.markdown("</div>", unsafe_allow_html=True)
-            st.download_button(
-                label="⬇️ Download formal version",
-                data=st.session_state.plc_formal,
-                file_name="professional_description_formal.txt",
-                mime="text/plain",
-            )
-        else:
-            st.info("Formal version not available for this output. Check the Standard version tab.")
+        st.markdown('<div class="section-card"><h3>Formal / documentation version</h3>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="output-box">{st.session_state.plc_formal}</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.download_button(
+            label="⬇️ Download formal version",
+            data=st.session_state.plc_formal,
+            file_name="professional_description_formal.txt",
+            mime="text/plain",
+            key="dl_formal",
+        )
