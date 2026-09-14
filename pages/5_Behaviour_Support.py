@@ -544,6 +544,125 @@ def build_considerations(full_df, top_ant, top_loc, top_session) -> list[str]:
     return considerations
 
 
+def find_combined_patterns(full_df, min_count: int = 3, min_pct: float = 0.2) -> list[dict]:
+    """Find where antecedent category, location, and session genuinely
+    intersect — a combination that concentrates a disproportionate share
+    of incidents is a far stronger, more actionable signal than any single
+    axis viewed alone (e.g. 'Peer-triggered incidents in the Yard during
+    Middle session' vs three separate top-3 lists that happen to share a
+    student in common).
+
+    Returns up to 2 combinations, each accounting for at least min_count
+    incidents and at least min_pct of the total, sorted by count desc.
+    """
+    if full_df is None or full_df.empty:
+        return []
+    required = {"location", "session"}
+    if not required.issubset(full_df.columns):
+        return []
+    _df = full_df.copy()
+    if "_ant_cat" not in _df.columns:
+        if "antecedent" not in _df.columns:
+            return []
+        _df["_ant_cat"] = _df["antecedent"].apply(categorize_antecedent)
+    _df = _df.dropna(subset=["_ant_cat"])
+    if _df.empty:
+        return []
+    total = len(full_df)
+    _grp = _df.groupby(["_ant_cat", "location", "session"]).size().sort_values(ascending=False)
+    combos = []
+    for (cat, loc, sess), count in _grp.items():
+        pct = count / total
+        if count >= min_count and pct >= min_pct:
+            combos.append({"category": cat, "location": loc, "session": sess,
+                            "count": int(count), "pct": pct})
+        if len(combos) >= 2:
+            break
+    return combos
+
+
+def render_combined_patterns(full_df):
+    """Streamlit UI for find_combined_patterns — a callout box on the
+    Analysis page."""
+    combos = find_combined_patterns(full_df)
+    if not combos:
+        return
+    st.markdown(
+        "<div style='background:#f0f9ff;border-left:4px solid #0284c7;border-radius:8px;"
+        "padding:.75rem 1.1rem;margin:.5rem 0;'>",
+        unsafe_allow_html=True,
+    )
+    st.markdown("**🔗 Combined Pattern** — stronger than any single chart above on its own:")
+    for c in combos:
+        st.markdown(
+            f"- **{int(c['pct']*100)}% of all incidents** ({c['count']} of {len(full_df)}) share "
+            f"all three conditions: **{c['category']}**-triggered, in **{normalise_location(c['location'])}**, "
+            f"during the **{c['session']}** session."
+        )
+    st.caption("This is the intersection of trigger, location, and time — worth checking as a single, "
+               "specific scenario rather than three separate factors.")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def compute_before_after(full_df, trial_date) -> dict | None:
+    """Compare incident rate and severity before vs after a given date —
+    when a support/strategy was noted as trialled — to check whether it
+    actually appears to have made a difference, rather than just
+    recording that it was tried. Returns None if trial_date isn't set;
+    returns {"insufficient": True} if there isn't enough data on both
+    sides to compare yet."""
+    if full_df is None or full_df.empty or trial_date is None or "date_parsed" not in full_df.columns:
+        return None
+    _df = full_df.dropna(subset=["date_parsed"])
+    if _df.empty:
+        return None
+    _trial_ts = pd.Timestamp(trial_date)
+    before = _df[_df["date_parsed"] < _trial_ts]
+    after  = _df[_df["date_parsed"] >= _trial_ts]
+    if len(before) == 0 or len(after) == 0:
+        return {"insufficient": True}
+    _min_date, _max_date = _df["date_parsed"].min(), _df["date_parsed"].max()
+    weeks_before = max((_trial_ts - _min_date).days / 7, 0.1)
+    weeks_after  = max((_max_date - _trial_ts).days / 7, 0.1)
+    rate_before, rate_after = len(before) / weeks_before, len(after) / weeks_after
+    sev_before = float(before["severity"].mean()) if "severity" in before.columns else None
+    sev_after  = float(after["severity"].mean())  if "severity" in after.columns  else None
+    pct_rate_change = ((rate_after - rate_before) / rate_before * 100) if rate_before > 0 else None
+    return {
+        "insufficient": False,
+        "n_before": len(before), "n_after": len(after),
+        "weeks_before": round(weeks_before, 1), "weeks_after": round(weeks_after, 1),
+        "rate_before": rate_before, "rate_after": rate_after,
+        "sev_before": sev_before, "sev_after": sev_after,
+        "pct_rate_change": pct_rate_change,
+    }
+
+
+def render_before_after(ba: dict):
+    """Streamlit UI for compute_before_after."""
+    if not ba:
+        return
+    if ba.get("insufficient"):
+        st.info("Not enough incidents logged on both sides of the trial date yet to compare — "
+                "check back once more data has been recorded.")
+        return
+    _rate_dir = "fewer" if ba["pct_rate_change"] is not None and ba["pct_rate_change"] < 0 else "more"
+    st.markdown(
+        f"**Before ({ba['weeks_before']:.1f} wks, {ba['n_before']} incidents):** "
+        f"{ba['rate_before']:.1f}/week"
+        + (f", avg severity {ba['sev_before']:.1f}" if ba['sev_before'] is not None else "")
+    )
+    st.markdown(
+        f"**After ({ba['weeks_after']:.1f} wks, {ba['n_after']} incidents):** "
+        f"{ba['rate_after']:.1f}/week"
+        + (f", avg severity {ba['sev_after']:.1f}" if ba['sev_after'] is not None else "")
+    )
+    if ba["pct_rate_change"] is not None:
+        _icon = "🟢" if ba["pct_rate_change"] < -10 else "🔴" if ba["pct_rate_change"] > 10 else "🟡"
+        st.markdown(f"{_icon} **{abs(ba['pct_rate_change']):.0f}% {_rate_dir} incidents per week** since the trial date.")
+    st.caption("A short 'after' window is a preliminary read, not a conclusion — treat it as an early signal.")
+
+
 # ── Location normalisation ────────────────────────────────────────────────────
 LOCATION_ALIASES = {
     "JP Classroom": "JP Room", "JP classroom": "JP Room", "Junior Primary": "JP Room",
@@ -832,7 +951,7 @@ Critical Incident Form completed and saved.
 
 
 def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, top_loc, top_session, risk_score, risk_level,
-                                           supports_trialled: str = "", supports_success: str = ""):
+                                           supports_trialled: str = "", supports_success: str = "", before_after: dict = None):
     """Generate professional BAP — fixed chart sizing and page layout."""
     try:
         from docx import Document
@@ -1025,18 +1144,10 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
 
         doc.add_paragraph().paragraph_format.space_after = Pt(4)
 
-        # ── AT A GLANCE: risk level + hypothesis summary + top strategies ──
+        # ── AT A GLANCE: hypothesis summary + top strategies ──
         # (front-page condensed view — full detail follows after the page break)
         hyp_data_front = generate_strong_clinical_hypothesis(
             full_df, top_ant, top_beh, top_loc, top_session, student["name"])
-        _risk_hex = {"LOW": "16A34A", "MODERATE": "D97706", "HIGH": "DC2626"}.get(risk_level, "64748B")
-
-        rk = doc.add_table(rows=1, cols=1); rk.style = 'Table Grid'
-        rk_c = rk.rows[0].cells[0]
-        set_bg(rk_c, _risk_hex); set_borders(rk_c, _risk_hex)
-        rk_c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-        arun(rk_c.paragraphs[0], f"RISK LEVEL: {risk_level}  ({risk_score}/100)", bold=True, size=17, color=WHITE)
-        doc.add_paragraph().paragraph_format.space_after = Pt(3)
 
         if hyp_data_front.get("summary"):
             fh = doc.add_table(rows=1, cols=1); fh.style = 'Table Grid'
@@ -1070,7 +1181,7 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
                 arun(p_more, "See Support Lens and Teaching Lens sections (below) for the full set.",
                      italic=True, size=13, color=GREY_DARK)
 
-        if (supports_trialled or "").strip() or (supports_success or "").strip():
+        if (supports_trialled or "").strip() or (supports_success or "").strip() or (before_after and not before_after.get("insufficient")):
             doc.add_paragraph().paragraph_format.space_after = Pt(3)
             tr = doc.add_table(rows=1, cols=1); tr.style = 'Table Grid'
             tr_c = tr.rows[0].cells[0]
@@ -1089,6 +1200,16 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
                 p2.paragraph_format.space_before = Pt(2); p2.paragraph_format.space_after = Pt(3)
                 arun(p2, "Outcome:  ", bold=True, size=14, color=GREY_DARK)
                 arun(p2, supports_success.strip(), size=14)
+            if before_after and not before_after.get("insufficient"):
+                p3 = tr_c.add_paragraph()
+                p3.paragraph_format.space_before = Pt(3); p3.paragraph_format.space_after = Pt(2)
+                arun(p3, "Before/After:  ", bold=True, size=14, color=GREY_DARK)
+                _rate_dir = "fewer" if before_after["pct_rate_change"] is not None and before_after["pct_rate_change"] < 0 else "more"
+                _txt = (f"Before ({before_after['weeks_before']:.1f} wks): {before_after['rate_before']:.1f}/week. "
+                        f"After ({before_after['weeks_after']:.1f} wks): {before_after['rate_after']:.1f}/week.")
+                if before_after["pct_rate_change"] is not None:
+                    _txt += f" ({abs(before_after['pct_rate_change']):.0f}% {_rate_dir} incidents per week since the trial date — preliminary read.)"
+                arun(p3, _txt, size=14)
 
         doc.add_page_break()
 
@@ -1489,6 +1610,24 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
                 f"Incidents grouped by trigger domain. '{_top_cat}' is the primary domain "
                 f"({_top_cat_pct}% of categorised incidents) — this is where preventive "
                 f"effort is likely to have the most impact.")
+
+        _combos = find_combined_patterns(full_df)
+        if _combos:
+            cb = doc.add_table(rows=1, cols=1); cb.style = 'Table Grid'
+            cb_c = cb.rows[0].cells[0]
+            set_bg(cb_c, "EFF6FF"); set_borders(cb_c, "0284C7")
+            cb_c.paragraphs[0].clear()
+            p_cb = cb_c.paragraphs[0]
+            p_cb.paragraph_format.space_before = Pt(3)
+            arun(p_cb, "COMBINED PATTERN", bold=True, size=15, color="0284C7")
+            for _c in _combos:
+                p = cb_c.add_paragraph()
+                p.paragraph_format.space_before = Pt(2); p.paragraph_format.space_after = Pt(2)
+                arun(p, f"{int(_c['pct']*100)}% of all incidents ", bold=True, size=14)
+                arun(p, f"({_c['count']} of {len(full_df)}) share all three conditions: "
+                        f"{_c['category']}-triggered, in {normalise_location(_c['location'])}, "
+                        f"during the {_c['session']} session.", size=14)
+            doc.add_paragraph().paragraph_format.space_after = Pt(4)
 
         section_header(doc, "FUNCTIONAL HYPOTHESIS")
         p_sp3 = doc.add_paragraph(); p_sp3.paragraph_format.space_after = Pt(4)
@@ -4582,13 +4721,13 @@ def render_student_analysis_page():
                     "Behaviour": beh, "Total (n)": total, "Regular": total-crit, "Critical": crit,
                     "Escalation %": f"{pct:.0f}%", "Mean Sev": f"{sev_m:.1f}",
                     "Sev StDev": f"{std:.1f}" if std > 0 else "—",
-                    "Risk Level": f"{risk_icon} {risk_lbl}",
+                    "Escalation Tier": f"{risk_icon} {risk_lbl}",
                 })
             else:
                 _risk_rows.append({
                     "Behaviour": beh, "Total (n)": total, "Regular": total-crit, "Critical": crit,
                     "Escalation %": "⚠️ Insufficient", "Mean Sev": f"{sev_m:.1f}" if total > 0 else "—",
-                    "Sev StDev": "—", "Risk Level": "⚪ Limited data",
+                    "Sev StDev": "—", "Escalation Tier": "⚪ Limited data",
                 })
         if _risk_rows:
             st.dataframe(
@@ -4601,7 +4740,7 @@ def render_student_analysis_page():
                     "Escalation %": st.column_config.TextColumn("Escalation %", width="medium"),
                     "Mean Sev":     st.column_config.TextColumn("Mean Sev", width="small"),
                     "Sev StDev":    st.column_config.TextColumn("Sev StDev", help="Higher = more variable severity; lower = more consistent", width="small"),
-                    "Risk Level":   st.column_config.TextColumn("Risk Level", width="medium"),
+                    "Escalation Tier": st.column_config.TextColumn("Escalation Tier", width="medium"),
                 }
             )
             st.caption(
@@ -4610,8 +4749,8 @@ def render_student_analysis_page():
                 "not a data error, just means more observations are needed before a reliable rate can be calculated  ·  "
                 "Sev StDev: spread of severity scores (higher = more variable)"
             )
-            _pch = [r for r in _risk_rows if r.get("Risk Level","").startswith("🔴")]
-            _pcm = [r for r in _risk_rows if r.get("Risk Level","").startswith("🟡")]
+            _pch = [r for r in _risk_rows if r.get("Escalation Tier","").startswith("🔴")]
+            _pcm = [r for r in _risk_rows if r.get("Escalation Tier","").startswith("🟡")]
             _pcp = []
             if _pch: _pcp.append(f"{len(_pch)} behaviour(s) carry high escalation risk "
                 f"({", ".join(get_clinical_behaviour(r['Behaviour']) for r in _pch[:2])}). "
@@ -5565,7 +5704,7 @@ def render_student_analysis_page():
         )
     _card(dc1, "Behavioural Function",    detail.get("Behavioural Function","—"),    "#eff6ff","#3b82f6","#1d4ed8")
     _card(dc2, "BSEM Domain Priority",    detail.get("BSEM Domain Priority","—"),    "#fef9c3","#eab308","#a16207")
-    _card(dc3, "Risk Level",              f"{risk_level} ({risk_score}/100)",         f"{risk_color}22",risk_color,risk_color)
+    _card(dc3, "Incidents Logged",        f"{len(full_df)} total",                    "#f1f5f9","#64748b","#475569")
 
     st.markdown("<div style='height:.4rem'></div>", unsafe_allow_html=True)
     dc4, dc5, dc6 = st.columns(3)
@@ -5634,6 +5773,8 @@ def render_student_analysis_page():
         top_cat_pct = int(all_cats.value_counts().iloc[0] / len(all_cats) * 100)
         st.caption(f"📌 **{top_cat}** is the dominant antecedent category ({top_cat_pct}% of all incidents) — "
                    f"this is the highest-priority domain for proactive, antecedent-stage intervention.")
+
+    render_combined_patterns(full_df)
 
     # Hypothesis function bar
     st.markdown("#### 🎯 Behavioural Function Distribution")
@@ -6222,8 +6363,17 @@ def render_student_analysis_page():
             placeholder="e.g. Quiet entry space reduced morning incidents significantly; movement "
                         "breaks had mixed results...",
         )
+    st.date_input(
+        "When did this trial start? (optional — enables a before/after comparison below)",
+        value=None, key=f"supports_trial_date_{student_id}",
+    )
     _supports_trialled = st.session_state.get(f"supports_trialled_{student_id}", "")
     _supports_success  = st.session_state.get(f"supports_success_{student_id}", "")
+    _trial_date = st.session_state.get(f"supports_trial_date_{student_id}")
+    _before_after = compute_before_after(full_df, _trial_date) if _trial_date else None
+    if _before_after:
+        st.markdown("**📈 Before / After Comparison**")
+        render_before_after(_before_after)
 
     st.markdown("---")
     st.markdown("### 📄 Export Data & Reports")
@@ -6237,7 +6387,8 @@ def render_student_analysis_page():
         with st.spinner("Generating Behaviour Summary..."):
             docx_file = generate_behaviour_analysis_plan_docx(
                 student, full_df, top_ant, top_beh, top_loc, top_session, risk_score, risk_level,
-                supports_trialled=_supports_trialled, supports_success=_supports_success)
+                supports_trialled=_supports_trialled, supports_success=_supports_success,
+                before_after=_before_after)
         if docx_file:
             _bs_date = datetime.now().strftime("%Y%m%d")
             _bs_local_name = f"BehaviourSummary_{student['name'].replace(' ', '_')}_{_bs_date}.docx"
@@ -6263,7 +6414,7 @@ def render_student_analysis_page():
                         filename=f"BehaviourSummary_{_bs_initials}_{_bs_date}.docx",
                         student_initials=_bs_initials,
                         created_by=_bs_creator,
-                        notes=f"Auto-archived on download. Risk level: {risk_level}.",
+                        notes="Auto-archived on download.",
                     ),
                 )
             st.download_button("📄 Behaviour Summary (Word)", docx_file,
