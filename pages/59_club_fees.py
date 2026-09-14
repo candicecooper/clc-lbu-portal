@@ -32,21 +32,27 @@ SETUP NEEDED BEFORE THIS WILL RUN
      swap the init block below for that import instead — just keep the
      variable name `supabase`.
 
-  3. Password gate: this file has its own lightweight password check using
-        st.secrets["STAFF_PASSWORD"]
-     so it works standalone. If you'd rather it use the shared staff_auth.py
-     module like your other staff-level tools, replace the `check_password()`
-     function with:
+  3. Password gate: this file has its own lightweight password check that
+     looks for STAFF_PASSWORD in Streamlit secrets first, then in a plain
+     OS environment variable (covers both how Render's dashboard sets
+     things and a secrets.toml approach). If you'd rather it use the
+     shared staff_auth.py module like your other staff-level tools,
+     replace check_password()/get_staff_password() with:
         from staff_auth import check_staff_password
-     and call that instead — send me the function's exact name/signature and
-     I'll wire it in to match exactly.
+     and call that instead — send me the function's exact name/signature
+     and I'll wire it in to match exactly.
 
-  4. Rename this file to whatever page number fits your sidebar ordering
-     (it's currently `59_Club_Fees.py` as a placeholder).
+     In Render: Service > Environment tab > Environment Variables > add
+     key STAFF_PASSWORD with your chosen value, then trigger a manual
+     deploy/restart so the running service picks it up.
 
-  5. Point the existing "Club Fees" tile link (or add a new one) to this page.
+  4. File is named 59_club_fees.py to match the existing repo.
+
+  5. Tile link already added in the portal launcher (Social Club section)
+     pointing to /club_fees.
 """
 
+import os
 import streamlit as st
 from datetime import datetime
 from supabase import create_client
@@ -70,14 +76,37 @@ TABLE = "club_fees"
 FREQUENCY_OPTIONS = ["per term", "per year", "one-off", "per week", "other"]
 
 
+def get_staff_password() -> str:
+    """
+    Look for the admin password in Streamlit secrets first, then fall back
+    to a plain OS environment variable. Render's dashboard "Environment"
+    tab sets the latter, not the former — the two are not the same thing
+    unless you've specifically wired one into the other, so checking both
+    means it works whichever way you've configured it in Render.
+    """
+    try:
+        return st.secrets["STAFF_PASSWORD"]
+    except (KeyError, FileNotFoundError, st.errors.StreamlitAPIException):
+        pass
+    return os.environ.get("STAFF_PASSWORD", "")
+
+
 def check_password() -> bool:
     """Lightweight staff-level password gate for the Admin tab."""
     if st.session_state.get("club_fees_admin_ok"):
         return True
 
+    configured_password = get_staff_password()
+    if not configured_password:
+        st.warning(
+            "No admin password is configured yet. Add a `STAFF_PASSWORD` "
+            "value in Render (Environment tab) or in this app's Streamlit "
+            "secrets, then redeploy/restart the service."
+        )
+
     pwd = st.text_input("Admin password", type="password", key="club_fees_pwd_input")
     if st.button("Unlock admin section"):
-        if pwd == st.secrets.get("STAFF_PASSWORD", ""):
+        if configured_password and pwd == configured_password:
             st.session_state["club_fees_admin_ok"] = True
             st.rerun()
         else:
