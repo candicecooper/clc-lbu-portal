@@ -1,10 +1,9 @@
 # =============================================================================
 # 23_Professional_Language_Converter.py  -  CLC-LBU Portal
-# Convert informal behaviour / strategy descriptions into professional,
-# trauma-informed, BSEM-aligned documentation language using Groq AI.
 # =============================================================================
 
 import streamlit as st
+import time
 from groq import Groq
 
 st.set_page_config(
@@ -13,7 +12,6 @@ st.set_page_config(
     layout="wide",
 )
 
-# -- Brand colours ------------------------------------------------------------
 TEAL   = "#1A7A7A"
 TEAL_L = "#e6f4f4"
 TEAL_D = "#115555"
@@ -21,11 +19,9 @@ AMBER  = "#C8760A"
 AMB_B  = "#fef3e2"
 CREAM  = "#F7F9FB"
 
-# -- CSS ----------------------------------------------------------------------
 st.markdown(f"""
 <style>
 [data-testid="stAppViewContainer"] {{ background:{CREAM}; }}
-
 .plc-header {{
     background:linear-gradient(135deg,{TEAL} 0%,{TEAL_D} 100%);
     color:#fff; padding:1rem 1.5rem; border-radius:12px;
@@ -34,44 +30,31 @@ st.markdown(f"""
 .plc-header .icon {{ font-size:2.2rem; }}
 .plc-header h1 {{ margin:0; font-size:1.35rem; font-weight:800; }}
 .plc-header p  {{ margin:.1rem 0 0; opacity:.8; font-size:.82rem; }}
-
-.framework-bar {{
-    display:flex; flex-wrap:wrap; gap:.4rem; margin-bottom:1.25rem;
-}}
-.fw-badge {{
-    padding:.2rem .65rem; border-radius:20px; font-size:.72rem;
-    font-weight:700; letter-spacing:.3px;
-}}
-.fw-bsem   {{ background:#dbeafe; color:#1e40af; }}
-.fw-ti     {{ background:#dcfce7; color:#166534; }}
-.fw-pbis   {{ background:#fef3c7; color:#92400e; }}
-.fw-ba     {{ background:#ede9fe; color:#5b21b6; }}
-.fw-smart  {{ background:#fce7f3; color:#9d174d; }}
-
+.framework-bar {{ display:flex; flex-wrap:wrap; gap:.4rem; margin-bottom:1.25rem; }}
+.fw-badge {{ padding:.2rem .65rem; border-radius:20px; font-size:.72rem; font-weight:700; letter-spacing:.3px; }}
+.fw-bsem  {{ background:#dbeafe; color:#1e40af; }}
+.fw-ti    {{ background:#dcfce7; color:#166534; }}
+.fw-pbis  {{ background:#fef3c7; color:#92400e; }}
+.fw-ba    {{ background:#ede9fe; color:#5b21b6; }}
+.fw-smart {{ background:#fce7f3; color:#9d174d; }}
 .section-card {{
     background:#fff; border-radius:12px; border:1px solid #dde6ee;
     padding:1.1rem 1.3rem; margin-bottom:1rem;
     box-shadow:0 2px 8px rgba(0,0,0,.05);
 }}
-.section-card h3 {{
-    margin:0 0 .75rem; font-size:1rem; font-weight:800; color:{TEAL};
-}}
-
+.section-card h3 {{ margin:0 0 .75rem; font-size:1rem; font-weight:800; color:{TEAL}; }}
 .output-box {{
     background:{TEAL_L}; border:1px solid {TEAL}; border-radius:10px;
     padding:1rem 1.25rem; white-space:pre-wrap; font-size:.9rem;
     line-height:1.75; color:#1c2320;
 }}
-
 .amber-note {{
     background:{AMB_B}; border:1px solid {AMBER}; border-radius:8px;
-    padding:.55rem .9rem; font-size:.78rem; color:#7a4a08;
-    margin-bottom:1rem;
+    padding:.55rem .9rem; font-size:.78rem; color:#7a4a08; margin-bottom:1rem;
 }}
 </style>
 """, unsafe_allow_html=True)
 
-# -- Header -------------------------------------------------------------------
 st.markdown("""
 <div class="plc-header">
   <div class="icon">✍️</div>
@@ -82,7 +65,6 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# -- Framework badges ---------------------------------------------------------
 st.markdown("""
 <div class="framework-bar">
   <span class="fw-badge fw-bsem">Berry Street Education Model</span>
@@ -93,32 +75,37 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# -- Shared context prompt (injected into both calls) -------------------------
-SHARED_CONTEXT = """You are a professional education support writer for an Australian alternative education setting (Cowandilla Learning Centre — Learning and Behaviour Unit). You work with students who have experienced trauma, disengagement, and exclusion from mainstream schooling. Staff will describe student behaviour and support strategies in informal plain language. Your job is to rewrite these descriptions in professional, appropriate, and clinically informed language.
+# ---------------------------------------------------------------------------
+# Model — openai/gpt-oss-20b has higher OTPM limits than qwen/qwen3.6-27b
+# and is Groq's recommended fast replacement model
+# ---------------------------------------------------------------------------
+MODEL = "openai/gpt-oss-20b"
+MAX_TOKENS = 800
 
-Your writing must be grounded in the following frameworks — weave their language, concepts, and rationale naturally through all descriptions:
+SHARED_CONTEXT = """You are a professional education support writer for an Australian alternative education setting (Cowandilla Learning Centre — Learning and Behaviour Unit). You work with students who have experienced trauma, disengagement, and exclusion from mainstream schooling.
 
-BERRY STREET EDUCATION MODEL (BSEM): Reference the five BSEM domains where relevant: Regulation, Relationships, Resilience, Engagement, and Character. Frame behaviour through the lens of stress response, trauma history, and unmet needs rather than defiance or non-compliance. Use BSEM language: regulation, co-regulation, felt safety, relational trust, restorative practice, proactive strategies, the stress-behaviour-learning connection. Describe student strengths as assets within the BSEM framework.
+Ground all writing in these frameworks:
 
-TRAUMA-INFORMED PRACTICE: Apply the core principles: safety, trustworthiness, choice, collaboration, empowerment. Frame escalating behaviour as a stress response, not a character flaw or deliberate disruption. Reference the Regulate-Relate-Reason sequence where appropriate. Describe all adult responses as intentional, co-regulatory, and proactive.
+BERRY STREET EDUCATION MODEL (BSEM): Reference the five domains: Regulation, Relationships, Resilience, Engagement, and Character. Frame behaviour through stress response, trauma history, and unmet needs — not defiance. Use BSEM language: co-regulation, felt safety, relational trust, restorative practice, stress-behaviour-learning connection. Describe student strengths as assets.
 
-PBIS: Frame strategies within a tiered support model where appropriate. Use PBIS language: clearly defined expectations, positive reinforcement, consistent prompting, data-informed decision-making, least restrictive response, planned consequences. Refer to consequences as planned, non-punitive responses designed to teach, not punish.
+TRAUMA-INFORMED PRACTICE: Apply safety, trustworthiness, choice, collaboration, empowerment. Frame escalation as stress response. Reference the Regulate-Relate-Reason sequence. All adult responses are intentional, co-regulatory, and proactive.
 
-BEHAVIOUR ANALYSIS: Describe behaviour in terms of its function where possible: sensory, escape/avoidance, attention-seeking, access to activities. Use ABC framing where relevant. Describe strategies in terms of antecedent modifications and teaching replacement behaviours.
+PBIS: Use tiered support framing. Use PBIS language: clearly defined expectations, positive reinforcement, consistent prompting, least restrictive response, planned consequences. Consequences are non-punitive and designed to teach.
 
-SMARTAR: Where strategies or goals are described, frame them in measurable, time-bound, reviewable language.
+BEHAVIOUR ANALYSIS: Describe behaviour function: sensory, escape/avoidance, attention-seeking, access to activities. Use ABC framing. Reference antecedent modifications and replacement behaviour teaching.
 
-In all writing: use person-first, strengths-based language. Avoid deficit or punitive framing. Do not invent clinical labels not mentioned. Use Australian English spelling. Refer to the student as "the student" or "they", not by name."""
+SMARTAR: Where goals or targets are described, frame them as measurable, time-bound, and reviewable.
+
+Rules: person-first strengths-based language; avoid deficit framing; do not invent clinical labels; Australian English spelling; refer to "the student" or "they"; stay accurate to what was described."""
 
 SYSTEM_STANDARD = SHARED_CONTEXT + """
 
-Write a STANDARD VERSION only — professional language suitable for team meetings, parent communication, or general documentation. Clear, accessible prose. Use bullet points where describing a multi-step strategy. Keep it concise and practical. Do not include headings or labels — just write the description directly."""
+Write a STANDARD VERSION only — clear professional language for team meetings, parent communication, or general documentation. Accessible prose. Bullet points for multi-step strategies. Be concise and practical. Output the description directly with no headings or labels."""
 
 SYSTEM_FORMAL = SHARED_CONTEXT + """
 
-Write a FORMAL VERSION only — clinical and structured language suitable for official documentation, DfE records, Individual Education Plans, or Behaviour Support Plans. Use the frameworks above more explicitly and precisely. More formal in tone and structure. Do not include headings or labels — just write the description directly."""
+Write a FORMAL VERSION only — clinical and structured language for official documentation, DfE records, Individual Education Plans, or Behaviour Support Plans. Use the frameworks explicitly and precisely. Formal in tone. Output the description directly with no headings or labels."""
 
-# -- Prompt starters ----------------------------------------------------------
 STARTERS = {
     "Describe the student's behaviour": "The student's behaviour includes: ",
     "Explain your support strategy": "The strategy I use to support this student is: ",
@@ -132,21 +119,16 @@ STARTERS = {
     "Describe transitions / routine": "During transitions or changes in routine, this student: ",
 }
 
-# -- Session state ------------------------------------------------------------
-if "plc_input" not in st.session_state:
-    st.session_state.plc_input = ""
-if "plc_standard" not in st.session_state:
-    st.session_state.plc_standard = ""
-if "plc_formal" not in st.session_state:
-    st.session_state.plc_formal = ""
+if "plc_input"    not in st.session_state: st.session_state.plc_input    = ""
+if "plc_standard" not in st.session_state: st.session_state.plc_standard = ""
+if "plc_formal"   not in st.session_state: st.session_state.plc_formal   = ""
 
-# -- Input section ------------------------------------------------------------
+# -- Prompt starters ----------------------------------------------------------
 with st.container():
     st.markdown('<div class="section-card"><h3>Prompt starters</h3>', unsafe_allow_html=True)
     cols = st.columns(5)
     for i, (label, prefix) in enumerate(STARTERS.items()):
-        col = cols[i % 5]
-        with col:
+        with cols[i % 5]:
             if st.button(label, key=f"starter_{i}", use_container_width=True):
                 st.session_state.plc_input = prefix
                 st.rerun()
@@ -161,7 +143,7 @@ user_input = st.text_area(
     label_visibility="collapsed",
     key="plc_textarea",
 )
-st.caption(f"{len(user_input)} characters — write as you normally would, no need for formal language.")
+st.caption(f"{len(user_input)} characters — write as you normally would.")
 st.markdown("</div>", unsafe_allow_html=True)
 
 col_btn, col_clear, _ = st.columns([2, 1, 4])
@@ -169,20 +151,20 @@ with col_btn:
     convert = st.button("✍️ Convert to professional language", type="primary", use_container_width=True)
 with col_clear:
     if st.button("Clear", use_container_width=True):
-        st.session_state.plc_input = ""
+        st.session_state.plc_input    = ""
         st.session_state.plc_standard = ""
-        st.session_state.plc_formal = ""
+        st.session_state.plc_formal   = ""
         st.rerun()
 
-# -- Conversion — two separate calls, each under 800 tokens ------------------
+# -- API call -----------------------------------------------------------------
 def call_groq(system_prompt, user_text):
     client = Groq(api_key=st.secrets["GROQ_API_KEY"])
     response = client.chat.completions.create(
-        model="qwen/qwen3.6-27b",
-        max_tokens=800,
+        model=MODEL,
+        max_tokens=MAX_TOKENS,
         messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_text},
+            {"role": "user",   "content": user_text},
         ],
     )
     return (response.choices[0].message.content or "").strip()
@@ -192,36 +174,41 @@ if convert:
         st.warning("Please enter a description first.")
     else:
         text = user_input.strip()
-        error = None
-        standard = ""
-        formal = ""
+        standard_err = None
+        formal_err   = None
+        standard     = ""
+        formal       = ""
 
         with st.spinner("Generating standard version..."):
             try:
                 standard = call_groq(SYSTEM_STANDARD, text)
             except Exception as e:
-                error = str(e)
+                standard_err = str(e)
 
-        if not error:
-            with st.spinner("Generating formal version..."):
-                try:
-                    formal = call_groq(SYSTEM_FORMAL, text)
-                except Exception as e:
-                    error = str(e)
+        # Small pause between calls to avoid hitting the per-minute OTPM cap
+        time.sleep(2)
 
-        if error:
-            st.error(f"Something went wrong: {error}")
-        else:
+        with st.spinner("Generating formal version..."):
+            try:
+                formal = call_groq(SYSTEM_FORMAL, text)
+            except Exception as e:
+                formal_err = str(e)
+
+        # Only update session state if at least standard succeeded
+        if not standard_err:
             st.session_state.plc_standard = standard
-            st.session_state.plc_formal = formal
+            st.session_state.plc_formal   = formal
+            if formal_err:
+                st.warning(f"Standard version generated successfully, but the formal version failed: {formal_err}")
+        else:
+            st.error(f"Standard version failed: {standard_err}")
 
 # -- Output -------------------------------------------------------------------
 if st.session_state.plc_standard:
     st.markdown("---")
     st.markdown(f"""
     <div class="amber-note">
-      ⚠️ AI-generated output — review before use in official documentation.
-      Ensure accuracy reflects your knowledge of the student.
+      ⚠️ AI-generated — review before use in official documentation.
     </div>
     """, unsafe_allow_html=True)
 
@@ -229,10 +216,7 @@ if st.session_state.plc_standard:
 
     with tab1:
         st.markdown('<div class="section-card"><h3>Standard version</h3>', unsafe_allow_html=True)
-        st.markdown(
-            f'<div class="output-box">{st.session_state.plc_standard}</div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(f'<div class="output-box">{st.session_state.plc_standard}</div>', unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
         st.download_button(
             label="⬇️ Download standard version",
@@ -243,16 +227,16 @@ if st.session_state.plc_standard:
         )
 
     with tab2:
-        st.markdown('<div class="section-card"><h3>Formal / documentation version</h3>', unsafe_allow_html=True)
-        st.markdown(
-            f'<div class="output-box">{st.session_state.plc_formal}</div>',
-            unsafe_allow_html=True,
-        )
-        st.markdown("</div>", unsafe_allow_html=True)
-        st.download_button(
-            label="⬇️ Download formal version",
-            data=st.session_state.plc_formal,
-            file_name="professional_description_formal.txt",
-            mime="text/plain",
-            key="dl_formal",
-        )
+        if st.session_state.plc_formal:
+            st.markdown('<div class="section-card"><h3>Formal / documentation version</h3>', unsafe_allow_html=True)
+            st.markdown(f'<div class="output-box">{st.session_state.plc_formal}</div>', unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+            st.download_button(
+                label="⬇️ Download formal version",
+                data=st.session_state.plc_formal,
+                file_name="professional_description_formal.txt",
+                mime="text/plain",
+                key="dl_formal",
+            )
+        else:
+            st.warning("The formal version wasn't generated — click **Convert** again and it will retry.")
