@@ -596,8 +596,17 @@ def parse_phases(timeline_text):
         extras = []
         if fields.get("CPI Level"):
             extras.append(f"CPI Level: {fields['CPI Level']}")
-        if fields.get("Response"):
-            extras.append(f"Response: {fields['Response']}")
+        response_val = fields.get("Response", "")
+        # CLC-LBU doesn't use physical intervention, and doesn't want its
+        # absence noted either ("No physical intervention used" would
+        # otherwise appear in every single report) — drop that specific
+        # negative statement as a safety net even if an older-format
+        # report still carries it. This only suppresses the ABSENCE
+        # statement — if a report ever genuinely describes physical
+        # intervention being used, that's safety-critical and must never
+        # be silently hidden by a formatting tool, so it's left visible.
+        if response_val and not re.search(r"\bno\b.{0,15}physical intervention", response_val, re.IGNORECASE):
+            extras.append(f"Response: {response_val}")
         if extras:
             extra_text = "\n".join(extras)
             consequence = f"{consequence}\n{extra_text}".strip() if consequence else extra_text
