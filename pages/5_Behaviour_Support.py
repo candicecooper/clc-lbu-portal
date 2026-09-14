@@ -310,75 +310,190 @@ def _top_categories(full_df, n: int = 2) -> list[str]:
 def build_bsem_recommendations(
     full_df, top_beh, top_ant, top_loc, top_session, student_name: str,
     context: str = "dashboard",
-) -> str:
-    """Curated-library + AI-framing recommendations: picks 2 relevant
-    antecedent categories from full_df, pulls their BSEM-tagged strategies
-    from BSEM_STRATEGY_LIBRARY (fixed, never AI-invented), and asks the
-    AI layer only to write natural, specific framing around them —
-    referencing the student's actual hotspot/peak-time pattern.
+) -> list[dict]:
+    """Curated-library + AI-framing recommendations, returned as structured
+    items so the UI can render them as clickable cards with a short "why
+    this fits" and "how to implement" — rather than one static paragraph.
+
+    The curated BSEM_STRATEGY_LIBRARY supplies the domain + strategy
+    (fixed, never AI-invented); the AI layer only writes the "why" and
+    "how" for each, grounded in the student's actual pattern.
 
     context="dashboard": short, practical, "things to trial this week"
       framing for CLC-LBU's small, highly structured setting.
     context="analysis": framing oriented toward what should travel with
       the student into a mainstream school placement — what a receiving
       school would need to know and put in place.
+
+    Returns a list of dicts: {"category","domain","strategy","why","how"}.
     """
     cats = _top_categories(full_df, n=2)
     if not cats:
-        return ""
+        return []
 
     picked = []
     for cat in cats:
         for item in BSEM_STRATEGY_LIBRARY.get(cat, []):
             picked.append({"category": cat, **item})
 
-    _library_text = "\n".join(
-        f"- [{p['category']} / {p['domain']}] {p['strategy']}" for p in picked
+    _library_json = "\n".join(
+        f'{i}. [{p["domain"]}] {p["strategy"]}' for i, p in enumerate(picked)
     )
 
     if context == "analysis":
         _framing = (
-            "Write this for a transition/handover audience: staff preparing to support "
-            "this student's move into a mainstream school setting. Frame each strategy "
-            "in terms of what the receiving school would need to know and put in place, "
-            "since a mainstream classroom won't have CLC-LBU's small, highly structured "
-            "environment by default. Where relevant, note what CLC-LBU currently provides "
-            "that a receiving school should be told about or asked to replicate."
+            "Write for a transition/handover audience: staff preparing to support this "
+            "student's move into a mainstream school setting. Frame 'how' in terms of what "
+            "the receiving school would need to know and put in place, since a mainstream "
+            "classroom won't have CLC-LBU's small, highly structured environment by default."
         )
     else:
         _framing = (
-            "Write this for CLC-LBU staff to use directly, day to day, in our small, "
-            "highly structured setting. Frame each strategy as something concrete to "
-            "trial this week, not a long-term policy."
+            "Write for CLC-LBU staff to use directly, day to day, in our small, highly "
+            "structured setting. Frame 'how' as something concrete to trial this week."
         )
 
     prompt = (
-        "You are a trauma-informed behaviour support specialist writing for school staff, "
-        "using the BSEM model (Brain, Sensory, Emotional, Mind). "
+        "You are a trauma-informed behaviour support specialist, using the BSEM model "
+        "(Brain, Sensory, Emotional, Mind).\n"
         f"Student pattern — primary behaviour: {top_beh}; primary trigger: {top_ant}; "
         f"location hotspot: {top_loc}; peak time: {top_session}.\n\n"
-        "Here is a fixed, pre-approved list of strategies to draw from. "
-        "Do NOT invent new strategies or add anything not in this list — only select from "
-        "and explain these, grouped by BSEM domain:\n"
-        f"{_library_text}\n\n"
+        "Here is a numbered, fixed, pre-approved list of strategies. Do NOT invent new "
+        "strategies or add anything not in this list:\n"
+        f"{_library_json}\n\n"
         f"{_framing}\n"
-        "Select the 4-6 most relevant strategies from the list above given the student's "
-        "pattern (you do not need to use all of them). For each, briefly connect it to the "
-        "specific hotspot/time pattern above rather than writing generically. "
-        "Group your output under BSEM domain subheadings (Brain, Sensory, Emotional, Mind) "
-        "using markdown ####. Keep the whole response under 300 words. "
-        "Do not mention the student's name. Return markdown only, no preamble."
+        "Select the 4-6 most relevant items given the student's pattern. For each, write:\n"
+        '"why" — one short sentence connecting it to this student\'s specific hotspot/time '
+        "pattern (not generic).\n"
+        '"how" — 2-3 concrete, practical implementation steps a staff member could follow.\n\n'
+        "Return ONLY a JSON array, no markdown fences, no preamble, in this exact form: "
+        '[{"id": <number from the list above>, "why": "...", "how": "..."}]'
     )
 
     try:
-        return groq_ai_call(prompt, max_tokens=700, temperature=0.3)
+        raw = groq_ai_call(prompt, max_tokens=900, temperature=0.3)
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        ai_items = json.loads(raw)
+        result = []
+        for a in ai_items:
+            idx = a.get("id")
+            if not isinstance(idx, int) or not (0 <= idx < len(picked)):
+                continue
+            result.append({**picked[idx], "why": a.get("why", ""), "how": a.get("how", "")})
+        if result:
+            return result
     except Exception:
-        # Safe fallback: show the curated library items directly, ungrouped
-        # by AI framing, so a Groq outage never removes the feature entirely.
-        lines = ["*(AI framing unavailable — showing curated strategies directly)*", ""]
-        for p in picked:
-            lines.append(f"- **[{p['domain']}]** {p['strategy']}")
-        return "\n".join(lines)
+        pass
+    # Safe fallback: curated items with no AI why/how, so a Groq outage
+    # never removes the feature entirely.
+    return [{**p, "why": "", "how": ""} for p in picked[:6]]
+
+
+def render_bsem_recommendations(items: list[dict], key_prefix: str):
+    """Render structured BSEM recommendations as clickable, colour-coded
+    cards — click a strategy to reveal why it fits and how to trial it."""
+    if not items:
+        return
+    _domain_style = {
+        "Brain":     {"icon": "🧠", "color": "#8b5cf6", "bg": "#faf5ff"},
+        "Sensory":   {"icon": "🎧", "color": "#10b981", "bg": "#f0fdf4"},
+        "Emotional": {"icon": "💛", "color": "#f59e0b", "bg": "#fffbeb"},
+        "Mind":      {"icon": "💭", "color": "#3b82f6", "bg": "#eff6ff"},
+    }
+    for i, item in enumerate(items):
+        style = _domain_style.get(item["domain"], {"icon": "•", "color": "#64748b", "bg": "#f8fafc"})
+        st.markdown(
+            f"<div style='border-left:4px solid {style['color']};background:{style['bg']};"
+            f"border-radius:6px;padding:0.15rem 0.9rem;margin-bottom:0.4rem;'>",
+            unsafe_allow_html=True,
+        )
+        with st.expander(f"{style['icon']}  **{item['domain']}**  ·  {item['strategy']}"):
+            if item.get("why"):
+                st.markdown(f"**Why this fits:** {item['why']}")
+            if item.get("how"):
+                st.markdown(f"**How to trial it:** {item['how']}")
+            if not item.get("why") and not item.get("how"):
+                st.caption("Implementation detail unavailable right now — the strategy above is still valid to trial.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+def build_considerations(full_df, top_ant, top_loc, top_session) -> list[str]:
+    """Deterministic 'things to consider' prompts — alternative or
+    structural explanations to weigh before treating a data pattern as
+    purely behavioural (e.g. a morning cluster that's actually a modified
+    timetable, or a yard cluster that's actually where the student goes
+    to self-regulate). Rule-based rather than AI-generated, since this is
+    a fixed checklist of things worth ruling out, not a personalised
+    narrative."""
+    considerations = []
+    if full_df is None or full_df.empty:
+        return considerations
+    total = len(full_df)
+
+    if total < 6:
+        considerations.append(
+            f"Only {total} incident(s) recorded so far — the pattern below is an early "
+            "signal, not yet a robust trend. Treat any hypothesis as provisional."
+        )
+
+    if "session" in full_df.columns and total > 0:
+        _sess_counts = full_df["session"].value_counts()
+        if not _sess_counts.empty:
+            _pct = _sess_counts.iloc[0] / total
+            if _pct >= 0.5:
+                considerations.append(
+                    f"Incidents cluster heavily in the {_sess_counts.index[0]} session "
+                    f"({int(_pct*100)}%). Before treating this as purely behavioural, check for a "
+                    "structural explanation — a modified timetable, a specific specialist/NIT "
+                    "session, medication timing, or an arrival/transport routine that only "
+                    "happens at that time."
+                )
+
+    if "location" in full_df.columns and total > 0:
+        _loc_counts = full_df["location"].value_counts()
+        if not _loc_counts.empty:
+            _pct = _loc_counts.iloc[0] / total
+            if _pct >= 0.5:
+                considerations.append(
+                    f"Incidents cluster heavily in {_loc_counts.index[0]} ({int(_pct*100)}%). This "
+                    "may be what's triggering there — or it may be where the student moves to when "
+                    "seeking regulation (a destination, not a trigger), or simply the space they "
+                    "spend the most time in. Check where the student was immediately beforehand, "
+                    "not only where the incident occurred."
+                )
+
+    if "date_parsed" in full_df.columns and total >= 4:
+        _dow = full_df["date_parsed"].dt.day_name().value_counts()
+        if not _dow.empty:
+            _pct = _dow.iloc[0] / total
+            if _pct >= 0.4:
+                considerations.append(
+                    f"A notable share of incidents fall on {_dow.index[0]}s ({int(_pct*100)}%). "
+                    "Check the roster and timetable for that day — a TRT, a changed specialist, a "
+                    "different transport arrangement, or a weekend-transition effect (e.g. Mondays) "
+                    "can produce a day-of-week pattern that looks behavioural but is structural."
+                )
+
+    if "behaviour_type" in full_df.columns and total > 0:
+        _beh = full_df["behaviour_type"].dropna()
+        _beh = _beh[_beh.str.strip() != ""].value_counts()
+        if not _beh.empty:
+            _pct = _beh.iloc[0] / total
+            if _pct >= 0.6:
+                considerations.append(
+                    f"One behaviour ('{_beh.index[0]}') accounts for {int(_pct*100)}% of records. "
+                    "Consider whether this is genuinely the dominant presentation, or whether it's "
+                    "simply the most visible behaviour for staff to notice and log — quieter "
+                    "presentations (withdrawal, shutdown) can be under-recorded by comparison."
+                )
+
+    if not considerations:
+        considerations.append(
+            "No single pattern in the data is dominant enough to flag a specific structural "
+            "explanation — the hypothesis is reasonably well-supported by the spread of "
+            "recorded incidents."
+        )
+    return considerations
 
 
 # ── Location normalisation ────────────────────────────────────────────────────
@@ -692,10 +807,10 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         WHITE      = "FFFFFF"
         LIGHT_GREY = "F2F6F6"
 
-        FIG_W    = 16.5   # wider — fills the page
-        FIG_H    = 4.2    # taller — more readable when printed
-        FIG_DPI  = 150    # sharper for printing
-        DOC_W    = Cm(18.5)  # stretch to near full page width
+        FIG_W    = 14.0   # wide, but a saner aspect ratio once scaled to page width
+        FIG_H    = 6.5    # taller — was 4.2, which read as a thin illegible strip once shrunk to fit the page
+        FIG_DPI  = 170    # sharper for printing
+        DOC_W    = Cm(17.0)  # stays inside the printable area (21cm page − 1.8cm margins each side = 17.4cm)
         MAX_LABEL_CHARS = 42
 
         def wrap_labels(labels, width=MAX_LABEL_CHARS):
@@ -780,7 +895,7 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             ax.spines['right'].set_visible(False)
             ax.spines['left'].set_color('#cbd5e1')
             ax.spines['bottom'].set_color('#cbd5e1')
-            ax.tick_params(colors='#334155', labelsize=9)
+            ax.tick_params(colors='#334155', labelsize=10)
             ax.grid(True, alpha=0.25, linestyle='--', color='#94a3b8')
 
         doc = Document()
@@ -860,14 +975,16 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         section_header(doc, "VISUAL ANALYTICS — FREQUENCY PATTERNS")
         p_sp = doc.add_paragraph(); p_sp.paragraph_format.space_after = Pt(4)
 
-        # Show ALL days in range (not just incident days) so zero-incident days are visible
+        # Show all SCHOOL days in range (weekends excluded) so gaps reflect
+        # actual attendance days, not calendar days
         import datetime as _bdt
         _b_start = full_df["date_parsed"].min().date()
         _b_end   = full_df["date_parsed"].max().date()
         _b_all_days = []
         _b_d = _b_start
         while _b_d <= _b_end:
-            _b_all_days.append(_b_d)
+            if _b_d.weekday() < 5:
+                _b_all_days.append(_b_d)
             _b_d += _bdt.timedelta(days=1)
         _b_counts_map = full_df.groupby(full_df["date_parsed"].dt.date).size().to_dict()
         daily_all = [(_b_d, _b_counts_map.get(_b_d, 0)) for _b_d in _b_all_days]
@@ -878,7 +995,6 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         # Compute summary stats for chart 1 caption
         _fi_total_days_bap    = len(_b_all_days)
         _fi_incident_days_bap = sum(1 for v in daily.count if v > 0)
-        _fi_zero_days_bap     = sum(1 for v in daily.count if v == 0)
         _fi_max_day_bap       = max(daily.count) if daily.count else 0
         _fi_avg_per_day_bap   = sum(daily.count) / max(_fi_incident_days_bap, 1)
         _fi_high_days_bap     = sum(1 for v in daily.count if v >= 3)
@@ -897,7 +1013,7 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         ax.set_xticklabels([d.strftime("%a %d/%m") for d in daily.date_parsed],
                            fontsize=7, rotation=35, ha='right')
         ax.set_ylabel("Incidents", fontsize=10, fontweight='bold', color='#334155')
-        ax.set_title("1.  Daily Incident Frequency  —  teal = 1–2 incidents,  red = 3+",
+        ax.set_title("1.  Daily Incident Frequency",
                      fontsize=11.5, fontweight='bold', color='#0f172a', pad=8, loc='left')
         ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True))
         for bar, v in zip(bars, daily.count):
@@ -907,22 +1023,14 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         base_ax_style(ax)
         plt.tight_layout(pad=0.4)
         add_chart(doc, fig,
-            f"Daily totals across {_fi_total_days_bap} school days. "
-            f"Incidents occurred on {_fi_incident_days_bap} days ({_fi_zero_days_bap} incident-free). "
-            f"On days with incidents, average was {_fi_avg_per_day_bap:.1f} per day "
-            f"(peak: {_fi_max_day_bap}). "
-            + (f"{_fi_high_days_bap} day(s) had 3 or more incidents — "
-               "these are high-demand days requiring retrospective review: what was different about "
-               "the environment, staffing, timetable, or demands on those days? "
+            f"{_fi_incident_days_bap} of {_fi_total_days_bap} school days had at least one incident "
+            f"(weekends excluded), averaging {_fi_avg_per_day_bap:.1f} per active day (peak: {_fi_max_day_bap}). "
+            + (f"{_fi_high_days_bap} spike day(s) had 3 or more incidents — worth reviewing what was "
+               "different about staffing, timetable, or demands that day. "
                if _fi_high_days_bap > 0 else "") +
-            (f"There are {_fi_consec_bap} instance(s) of consecutive incident days — "
-             "consecutive high-incident days indicate the student did not have sufficient recovery time "
-             "between episodes, or a systemic stressor was sustained across multiple days. "
-             "Proactive regulation support at the start of each day is strongly indicated. "
-             if _fi_consec_bap >= 2 else "") +
-            f"Incident-free days ({_fi_zero_days_bap}) are equally important — "
-            "what proactive conditions were in place on those days? Replicating them on high-risk days "
-            "is one of the most effective preventive strategies available.")
+            (f"{_fi_consec_bap} instance(s) of consecutive high-incident days — may point to insufficient "
+             "recovery time between episodes, or a sustained stressor across multiple days."
+             if _fi_consec_bap >= 2 else ""))
 
         beh_counts = full_df["behaviour_type"].value_counts().head(6)
         # Use clinical terminology and filter out raw ABCH narratives (>80 chars)
@@ -1112,13 +1220,13 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             "Also note whether this hotspot coincides with the peak time of day — "
             "if so, the combination creates a compounding risk window requiring an immediate targeted plan.")
 
-        # WoT for incidents: yellow/orange=coping (L1-3), red=outside window (L4-5)
+        # WoT for incidents: yellow/orange=coping (severity 1–3), red=outside window (severity 4–5)
         sev_colours = {1:'#eab308',2:'#eab308',3:'#f97316',4:'#ef4444',5:'#7f1d1d'}
-        sev_level_names = {1:'Level 1 (Minor)',2:'Level 2 (Low)',3:'Level 3 (Moderate)',
-                           4:'Level 4 (Serious)',5:'Level 5 (Critical)'}
+        sev_level_names = {1:'Severity 1 (Minor)',2:'Severity 2 (Low)',3:'Severity 3 (Moderate)',
+                           4:'Severity 4 (Serious)',5:'Severity 5 (Critical)'}
         fig, ax = plt.subplots(figsize=(FIG_W, FIG_H), dpi=FIG_DPI)
-        ax.axhspan(0.5, 3.5,  color='#fef9c3', alpha=0.35, zorder=0)  # yellow — coping zone L1-3
-        ax.axhspan(3.5, 5.5,  color='#fee2e2', alpha=0.30, zorder=0)  # red — outside window L4-5
+        ax.axhspan(0.5, 3.5,  color='#fef9c3', alpha=0.35, zorder=0)  # yellow — coping zone severity 1–3
+        ax.axhspan(3.5, 5.5,  color='#fee2e2', alpha=0.30, zorder=0)  # red — outside window severity 4–5
         for y, lbl, col in [(1.5,'Within window (regulated)','#16a34a'),
                             (3.0,'Coping','#ca8a04'),
                             (4.5,'Outside window','#dc2626')]:
@@ -1186,7 +1294,7 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
                    "(family changes, transitions, health factors) are contributing."
                ),
               }.get(direction, "")) +
-            " Yellow zone (L1–L3) = Coping. Red zone (L4–L5) = Outside window. "
+            " Yellow zone (severity 1–3) = Coping. Red zone (severity 4–5) = Outside window. "
             "A critical incident does not automatically mean outside the window. "
             "All episodes in the red zone require post-incident relational repair before re-engaging with learning.")
 
@@ -1303,8 +1411,8 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
                     if b and len(str(b)) <= 80 and not str(b).startswith("---")]
         if _sv_behs and len(full_df) >= 4:
             _WOT_COLS_BAP = {1:"#eab308",2:"#eab308",3:"#f97316",4:"#ef4444",5:"#7f1d1d"}
-            _WOT_LBLS_BAP = {1:"L1 Coping",2:"L2 Coping",3:"L3 Approaching edge",
-                             4:"L4 Outside window",5:"L5 Crisis"}
+            _WOT_LBLS_BAP = {1:"severity 1 Coping",2:"severity 2 Coping",3:"severity 3 Approaching edge",
+                             4:"severity 4 Outside window",5:"severity 5 Crisis"}
             fig, ax = plt.subplots(figsize=(FIG_W, FIG_H), dpi=FIG_DPI)
             _bar_bottom = [0] * len(_sv_behs)
             _sv_labels_bap = [get_clinical_behaviour(b)[:40] + ("…" if len(get_clinical_behaviour(b)) > 40 else "")
@@ -1337,18 +1445,18 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             _outside_n = int((full_df["severity"] > 3).sum())
             _c_pct = int(_coping_n / len(full_df) * 100) if len(full_df) else 0
             add_chart(doc, fig,
-                f"{_c_pct}% of all incidents ({_coping_n} of {len(full_df)}) occurred within the Coping zone (L1–L3). "
+                f"{_c_pct}% of all incidents ({_coping_n} of {len(full_df)}) occurred within the Coping zone (severity 1–3). "
                 "This chart shows how each behaviour type is distributed across Window of Tolerance zones. "
-                "Colour key: yellow = L1-2 Coping (low-level behaviour, student managing); "
-                "orange = L3 Coping, approaching edge; red = L4-5 Outside window (significant dysregulation). "
+                "Colour key: yellow = severity 1–2 Coping (low-level behaviour, student managing); "
+                "orange = severity 3 Coping, approaching edge; red = severity 4–5 Outside window (significant dysregulation). "
                 "Behaviours with a high proportion of yellow/orange are being managed within the Coping zone — "
                 "these are responsive to proactive supports and de-escalation strategies. "
                 "Behaviours with a high proportion of red indicate the student is regularly moving "
                 "outside their window with this specific behaviour — these require urgent antecedent intervention, "
                 "a robust safety plan, and a clear post-incident relational repair protocol. "
                 "Important: a critical incident classification does not automatically mean outside the window — "
-                "many critical incidents are logged at L3 (Coping, approaching edge). "
-                + (f"The remaining {100-_c_pct}% ({_outside_n} incidents) reached the outside-window zone (L4-5). "
+                "many critical incidents are logged at severity 3 (Coping, approaching edge). "
+                + (f"The remaining {100-_c_pct}% ({_outside_n} incidents) reached the outside-window zone (severity 4–5). "
                    "Post-incident repair — re-establishing relational safety before returning to learning — "
                    "is essential after every outside-window episode. "
                    "Review what proactive conditions were absent on those days. "
@@ -1356,6 +1464,35 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
                    "All logged incidents remained within the Coping zone — a strong positive indicator. "
                    "Current staff responses are successfully preventing escalation to full dysregulation. "
                    "Document and sustain current proactive strategies explicitly. "))
+
+        # ── Chart 10: Antecedent Category Breakdown (also shown in-app) ──
+        full_df["_ant_cat"] = full_df["antecedent"].apply(categorize_antecedent)
+        _cat_counts = full_df["_ant_cat"].dropna().value_counts()
+        if not _cat_counts.empty:
+            _cat_order  = ["Peer", "Transition", "Instructions", "Engagement", "Sensory", "Other"]
+            _cat_colors = {"Peer": "#3b82f6", "Transition": "#f59e0b", "Instructions": "#ef4444",
+                           "Engagement": "#8b5cf6", "Sensory": "#10b981", "Other": "#64748b"}
+            _cat_present = [c for c in _cat_order if c in _cat_counts.index]
+            _cat_vals = [int(_cat_counts[c]) for c in _cat_present]
+            fig, ax = plt.subplots(figsize=(FIG_W, FIG_H), dpi=FIG_DPI)
+            bars = ax.bar(_cat_present, _cat_vals,
+                          color=[_cat_colors[c] for c in _cat_present],
+                          edgecolor='white', linewidth=0.6, width=0.6)
+            ax.set_ylabel("Number of incidents", fontsize=10, fontweight='bold', color='#334155')
+            ax.set_title("10.  Antecedent Category Breakdown",
+                         fontsize=11.5, fontweight='bold', color='#0f172a', pad=8, loc='left')
+            ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True))
+            for bar, v in zip(bars, _cat_vals):
+                ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.05,
+                        str(v), ha='center', va='bottom', fontsize=9, fontweight='bold', color='#0f172a')
+            base_ax_style(ax)
+            plt.tight_layout(pad=0.4)
+            _top_cat = _cat_present[_cat_vals.index(max(_cat_vals))]
+            _top_cat_pct = int(max(_cat_vals) / sum(_cat_vals) * 100) if sum(_cat_vals) else 0
+            add_chart(doc, fig,
+                f"Incidents grouped by trigger domain. '{_top_cat}' is the primary domain "
+                f"({_top_cat_pct}% of categorised incidents) — this is where preventive "
+                f"effort is likely to have the most impact.")
 
         section_header(doc, "FUNCTIONAL HYPOTHESIS")
         p_sp3 = doc.add_paragraph(); p_sp3.paragraph_format.space_after = Pt(4)
@@ -1533,7 +1670,7 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
                 f"Incorporate a sensory diet before the {top_session} session — movement break, heavy work, or proprioceptive input to prepare the nervous system.",
                 "Co-regulate with a key adult using CPI Supportive Stance (low, slow, sideways) as the default interaction posture.",
                 f"Develop a personalised Window of Tolerance profile for {student['name']} — document early warning signs, escalation cues, and effective de-escalation strategies.",
-                "Teach and embed regulation tools during calm states; cue their use proactively at Level 2 before escalation occurs.",
+                "Teach and embed regulation tools during calm states; cue their use proactively at early warning signs, before escalation occurs.",
                 "Monitor medication timing and note correlations with incident frequency in the peak session.",
             ]),
             ("🛡️ Antecedent Prevention", [
@@ -1541,12 +1678,12 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
                 "Implement pre-correction immediately before high-risk contexts — calm reminder of expectations and available supports.",
                 f"Conduct Functional Communication Training (FCT) — teach a socially appropriate replacement behaviour serving the same function as {get_clinical_behaviour(top_beh).lower()}.",
                 "Apply structured peer interaction protocols — pre-assign groupings and roles; avoid unstructured proximity where peer triggers are present.",
-                "Develop a Crisis Safety Plan with Level 3+ protocols, staff roles, and a post-incident restorative repair sequence.",
+                "Develop a Crisis Safety Plan with Critical Incident protocols, staff roles, and a post-incident restorative repair sequence.",
             ]),
             ("🔄 Post-Incident Repair", [
                 "Restore the relationship before re-engaging with academic demands — never return to tasks while the student remains dysregulated.",
                 "Conduct a brief, non-punitive restorative conversation once regulated — focus on impact and repair.",
-                "Complete a structured staff debrief after every Level 3+ incident.",
+                "Complete a structured staff debrief after every Critical Incident.",
                 "Maintain proactive, strengths-focused communication with parent/carer — not solely incident-driven contact.",
             ]),
             ("📅 Case Management", [
@@ -3745,9 +3882,13 @@ def render_student_analysis_page():
     st.plotly_chart(fig1, use_container_width=True)
     # ── Daily frequency insight ───────────────────────────────────────────
     if not full_df.empty:
-        _fi_total_days  = (full_df["date_parsed"].max() - full_df["date_parsed"].min()).days + 1
+        _fi_start_d = full_df["date_parsed"].min().date()
+        _fi_end_d   = full_df["date_parsed"].max().date()
+        _fi_total_days = sum(
+            1 for _n in range((_fi_end_d - _fi_start_d).days + 1)
+            if (_fi_start_d + timedelta(days=_n)).weekday() < 5
+        )  # school days only — weekends excluded
         _fi_incident_days = full_df["date_parsed"].dt.date.nunique()
-        _fi_zero_days   = _fi_total_days - _fi_incident_days
         _fi_day_counts  = full_df.groupby(full_df["date_parsed"].dt.date).size()
         _fi_max_day     = int(_fi_day_counts.max())
         _fi_avg_per_day = len(full_df) / max(_fi_incident_days, 1)
@@ -3756,35 +3897,24 @@ def render_student_analysis_page():
         _fi_dates_sorted = sorted(_fi_day_counts.index)
         _fi_consec = 0
         if len(_fi_dates_sorted) >= 2:
-            import datetime as _fdt
             for _dx in range(1, len(_fi_dates_sorted)):
                 if (_fi_dates_sorted[_dx] - _fi_dates_sorted[_dx-1]).days == 1:
                     _fi_consec += 1
         _fi_insight = (
-            f"<b>{_fi_incident_days} of {_fi_total_days} school days</b> had at least one incident "
-            f"({_fi_zero_days} day(s) incident-free). "
-            f"When incidents occurred, the average was <b>{_fi_avg_per_day:.1f} per day</b> "
-            f"(highest single day: {_fi_max_day}). "
+            f"<b>{_fi_incident_days} of {_fi_total_days} school days</b> had at least one incident, "
+            f"averaging <b>{_fi_avg_per_day:.1f} per active day</b> (highest single day: {_fi_max_day}). "
         )
-        if _fi_high_days >= 2:
+        if _fi_high_days >= 1:
             _fi_insight += (
-                f"<b>{_fi_high_days} day(s) had 3 or more incidents</b> — these are high-demand days "
-                "that warrant retrospective review: what was different about the environment, "
-                "staffing, timetable, or demands on those days? "
+                f"<b>{_fi_high_days} spike day(s)</b> had 3 or more incidents — worth reviewing what was "
+                "different about staffing, timetable, or demands that day. "
             )
         if _fi_consec >= 2:
             _fi_insight += (
-                f"There are <b>{_fi_consec} instance(s) of consecutive incident days</b>. "
-                "Consecutive high-incident days are a significant indicator — they suggest the student "
-                "did not have sufficient recovery time between events, or that a systemic stressor "
-                "(e.g. a transition, staffing change, or curriculum demand) was sustained across multiple days. "
-                "Proactive regulation support at the start of each day is strongly indicated. "
+                f"<b>{_fi_consec} instance(s) of consecutive high-incident days</b> — may point to "
+                "insufficient recovery time between events, or a sustained stressor (transition, "
+                "staffing change, curriculum demand) across multiple days."
             )
-        _fi_insight += (
-            f"Incident-free days ({_fi_zero_days}) are equally important data — "
-            "what proactive conditions, routines, or environmental factors were in place on those days? "
-            "Replicating those conditions on high-risk days is one of the most effective preventive strategies."
-        )
         st.markdown(
             f"<div style='background:#f8fafc;border-left:4px solid #1A7A7A;border-radius:8px;"
             f"padding:.75rem 1.1rem;margin:.5rem 0;font-size:.84rem;color:#1e293b;line-height:1.65;'>"
@@ -3881,7 +4011,7 @@ def render_student_analysis_page():
                     f"padding:.75rem 1.1rem;margin:.4rem 0;font-size:.84rem;color:#1e293b;line-height:1.65;'>"
                     f"<b>⚠️ Absences following escalation:</b> "
                     f"<b>{len(_post_escalation_abs)} instance(s)</b> where a recorded absence followed "
-                    "a high-severity incident (Level 4–5) within 1–2 days. "
+                    "a high-severity incident (severity 4–5) within 1–2 days. "
                     "<br><br>"
                     "Post-escalation absences are a significant clinical indicator. They may reflect: "
                     "the student being too dysregulated to return, a family decision to keep the student home "
@@ -4058,7 +4188,7 @@ def render_student_analysis_page():
     _MIN_N      = 4
     _MIN_TREND  = 3
     _CRIT_SEV   = 3.0
-    _SEV_LABELS = ["L1 Minor", "L2 Low", "L3 Moderate", "L4 Serious", "L5 Critical"]
+    _SEV_LABELS = ["severity 1 Minor", "severity 2 Low", "severity 3 Moderate", "severity 4 Serious", "severity 5 Critical"]
 
     all_behaviours = full_df["behaviour_type"].value_counts().head(8).index.tolist()
     all_behaviours = [
@@ -4211,14 +4341,14 @@ def render_student_analysis_page():
         st.caption(
             "Incident distribution by severity. All logged behaviours occur in the Coping zone or beyond — "
             "if a student is within their Window of Tolerance (green), no incidents are being logged. "
-            "🟡 Yellow (L1–2) = Coping — behaviour present but student managing  ·  "
-            "🟠 Orange (L3) = Coping, approaching edge  ·  "
-            "🔴 Red (L4–5) = Outside window — significant dysregulation. "
+            "🟡 Yellow (severity 1–2) = Coping — behaviour present but student managing  ·  "
+            "🟠 Orange (severity 3) = Coping, approaching edge  ·  "
+            "🔴 Red (severity 4–5) = Outside window — significant dysregulation. "
             "Critical incident status alone does not place a student outside their window."
         )
         # WoT zone colour map
         # Clinical framework: if incident logged, student NOT in green.
-        # Yellow = Coping (L1-L3), Red = Outside window (L4-L5)
+        # Yellow = Coping (severity 1–3), Red = Outside window (severity 4–5)
         _WOT_COLS = {
             1: "#eab308",   # yellow — coping (low level behaviour)
             2: "#eab308",   # yellow — coping
@@ -4227,11 +4357,11 @@ def render_student_analysis_page():
             5: "#7f1d1d",   # dark red — crisis
         }
         _WOT_NAMES = {
-            1: "L1 — Coping",
-            2: "L2 — Coping",
-            3: "L3 — Coping, approaching edge",
-            4: "L4 — Outside window",
-            5: "L5 — Crisis",
+            1: "severity 1 — Coping",
+            2: "severity 2 — Coping",
+            3: "severity 3 — Coping, approaching edge",
+            4: "severity 4 — Outside window",
+            5: "severity 5 — Crisis",
         }
         # Build count matrix: behaviour × severity level
         _sev_matrix = {}  # {beh: {sv: count}}
@@ -4314,7 +4444,7 @@ def render_student_analysis_page():
             _pb_l5_n = sum(_sev_matrix[b][5] for b in all_behaviours)
             _pb_insight = (
                 f"<b>{_pb_coping_pct}% of all incidents ({_pb_coping_n}/{_n_total}) occurred within the Coping zone</b> "
-                f"(L1–L3: low-level {_pb_l1_n}, escalating {_pb_l2_n}, approaching edge {_pb_l3_n}). "
+                f"(severity 1–3: low-level {_pb_l1_n}, escalating {_pb_l2_n}, approaching edge {_pb_l3_n}). "
                 "This is clinically significant — it means the student is exhibiting behaviour as a way of "
                 "managing or communicating distress, rather than being fully dysregulated. "
                 "The Coping zone is where staff intervention is most effective: "
@@ -4340,7 +4470,7 @@ def render_student_analysis_page():
                 )
             _pb_insight += (
                 "The mean severity diamond markers show the average level for each behaviour type. "
-                "Where the mean approaches L3 or above, consider whether current antecedent strategies "
+                "Where the mean approaches severity 3 or above, consider whether current antecedent strategies "
                 "are sufficiently proactive — the student may need wider-window supports before that behaviour emerges."
             )
             st.markdown(
@@ -4371,12 +4501,12 @@ def render_student_analysis_page():
                     rt = [str(n) if n > 0 else "" for n in rz]
                     _heat_z.append(rz); _heat_text.append(rt)
                 # Severity spread — grouped bar chart, coloured by WoT zone
-                # Green (L1-2) = coping/within window, Amber (L3) = elevated,
-                # Red (L4-5) = outside window. Count drives bar length, not colour.
+                # Green (severity 1–2) = coping/within window, Amber (severity 3) = elevated,
+                # Red (severity 4–5) = outside window. Count drives bar length, not colour.
                 # WoT colour scheme (per CLC-LBU framework):
-                # Green  = Within window (L1-2) — student regulated and engaged
-                # Yellow = Coping (L3)          — managing but approaching edge
-                # Red    = Outside window (L4-5) — dysregulated / crisis
+                # Green  = Within window (severity 1–2) — student regulated and engaged
+                # Yellow = Coping (severity 3)          — managing but approaching edge
+                # Red    = Outside window (severity 4–5) — dysregulated / crisis
                 _SEV_COLOURS_WOT = {
                     1: "#22c55e",  # green  — within window
                     2: "#22c55e",  # green  — within window
@@ -4385,11 +4515,11 @@ def render_student_analysis_page():
                     5: "#7f1d1d",  # dark red — crisis zone
                 }
                 _sev_names_wot = {
-                    1: "L1 Within window (regulated)",
-                    2: "L2 Within window (low concern)",
-                    3: "L3 Coping (approaching edge)",
-                    4: "L4 Outside window (serious)",
-                    5: "L5 Outside window (crisis)",
+                    1: "severity 1 Within window (regulated)",
+                    2: "severity 2 Within window (low concern)",
+                    3: "severity 3 Coping (approaching edge)",
+                    4: "severity 4 Outside window (serious)",
+                    5: "severity 5 Outside window (crisis)",
                 }
                 fig_b2 = go.Figure()
                 for sv in [1, 2, 3, 4, 5]:
@@ -4425,9 +4555,9 @@ def render_student_analysis_page():
                 )
                 st.plotly_chart(fig_b2, use_container_width=True)
                 st.caption(
-                    "🟢 Green (L1–2) = Within window — student is regulated and engaged effectively  ·  "
-                    "🟡 Yellow (L3) = Coping — managing, but approaching the edge of the window  ·  "
-                    "🔴 Red (L4–5) = Outside window — dysregulated / crisis zone. "
+                    "🟢 Green (severity 1–2) = Within window — student is regulated and engaged effectively  ·  "
+                    "🟡 Yellow (severity 3) = Coping — managing, but approaching the edge of the window  ·  "
+                    "🔴 Red (severity 4–5) = Outside window — dysregulated / crisis zone. "
                     "Green bars are a positive indicator: the student is within their Window of Tolerance."
                 )
 
@@ -5145,10 +5275,10 @@ def render_student_analysis_page():
     # Logged incidents = student is not in green. All start from Coping (yellow).
     # Critical incident alone does NOT mean outside window.
     fig4.add_hrect(y0=0, y1=3.5, fillcolor="#fef9c3", opacity=0.25,
-                   annotation_text="Coping zone (L1–L3) — behaviour present, student managing", annotation_position="top left", line_width=0)
+                   annotation_text="Coping zone (severity 1–3) — behaviour present, student managing", annotation_position="top left", line_width=0)
     fig4.add_hrect(y0=3.5, y1=5.5, fillcolor="#fee2e2", opacity=0.25,
-                   annotation_text="Outside window (L4–L5) — significant dysregulation", annotation_position="top left", line_width=0)
-    # WoT for incidents: yellow=coping (L1-3), red=outside window (L4-5)
+                   annotation_text="Outside window (severity 4–5) — significant dysregulation", annotation_position="top left", line_width=0)
+    # WoT for incidents: yellow=coping (severity 1–3), red=outside window (severity 4–5)
     sev_colours = {1: '#eab308', 2: '#eab308', 3: '#f97316', 4: '#ef4444', 5: '#7f1d1d'}
     for sev_level in [1, 2, 3, 4, 5]:
         sev_data = full_df[full_df['severity'] == sev_level]
@@ -5170,8 +5300,8 @@ def render_student_analysis_page():
         yaxis=dict(
             range=[0, 5.5], tickmode='array',
             tickvals=[1, 2, 3, 4, 5],
-            ticktext=['L1<br>Coping', 'L2<br>Coping', 'L3<br>Approaching<br>edge',
-                      'L4<br>Outside<br>window', 'L5<br>Crisis'],
+            ticktext=['severity 1<br>Coping', 'severity 2<br>Coping', 'severity 3<br>Approaching<br>edge',
+                      'severity 4<br>Outside<br>window', 'severity 5<br>Crisis'],
             gridcolor='#e2e8f0', showline=True, linewidth=2, linecolor='#cbd5e1'
         ),
         xaxis=dict(showline=True, linewidth=2, linecolor='#cbd5e1', gridcolor='#e2e8f0', tickformat='%a %d/%m'),
@@ -5232,8 +5362,8 @@ def render_student_analysis_page():
             f"{_traj_advice[_traj_dir]}<br><br>"
             "<b>Reading the chart:</b> Each dot represents one incident, positioned on the date it occurred "
             "and the severity level recorded. The dashed trend line shows the overall direction. "
-            "Yellow zone = Coping (L1–L3, behaviour present but student managing). "
-            "Red zone = Outside window (L4–L5, significant dysregulation). "
+            "Yellow zone = Coping (severity 1–3, behaviour present but student managing). "
+            "Red zone = Outside window (severity 4–5, significant dysregulation). "
             "Any dot in the red zone marks an episode that required intensive de-escalation "
             "and post-incident relational repair before the student could re-engage with learning.</div>",
             unsafe_allow_html=True
@@ -5439,6 +5569,16 @@ def render_student_analysis_page():
     _card(dc5, "Primary Antecedent",        detail.get("Primary Antecedent","—"),       "#fdf4ff","#8b5cf6","#7c3aed")
     _card(dc6, "Risk Indicator",            detail.get("Risk Indicator","—"),           "#fff7ed","#f97316","#c2410c")
 
+    st.markdown("<div style='height:.5rem'></div>", unsafe_allow_html=True)
+    _considerations = build_considerations(full_df, top_ant, top_loc, top_session)
+    with st.expander("🤔 Considerations — before settling on this hypothesis"):
+        st.caption(
+            "Alternative or structural explanations worth ruling out before treating the "
+            "pattern above as purely behavioural."
+        )
+        for _c in _considerations:
+            st.markdown(f"- {_c}")
+
     st.markdown("---")
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -5529,6 +5669,34 @@ def render_student_analysis_page():
     _so_triggers   = _so_data.get("triggers", []) if _so_data else []
 
     # ══════════════════════════════════════════════════════════════════════════
+    # SUPPORTS FOR TRANSITION TO A MAINSTREAM SETTING
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown(
+        "<div style='background:linear-gradient(135deg,#1A7A7A 0%,#134e4e 100%);"
+        "border-radius:10px;padding:0.9rem 1.2rem;margin-bottom:0.6rem;'>"
+        "<span style='color:white;font-size:1.15rem;font-weight:700;'>🎒 Supports for Transition to a Mainstream Setting</span><br>"
+        "<span style='color:#d1fae5;font-size:0.85rem;'>BSEM-informed strategies (Brain · Sensory · Emotional · Mind), "
+        "matched to this student's actual pattern, framed for handover to a receiving school. "
+        "Click a strategy for why it fits and how to implement it.</span></div>",
+        unsafe_allow_html=True,
+    )
+    _bsem_key = f"bsem_analysis_{student_id}"
+    _bsem_sig = f"{top_beh}|{top_ant}|{top_loc}|{top_session}"
+    if (st.session_state.get(f"{_bsem_key}_sig") != _bsem_sig
+            or st.button("🔄 Regenerate", key=f"{_bsem_key}_regen")):
+        with st.spinner("Drawing up BSEM-aligned recommendations..."):
+            st.session_state[_bsem_key] = build_bsem_recommendations(
+                full_df, top_beh, top_ant, top_loc, top_session,
+                student["name"], context="analysis")
+            st.session_state[f"{_bsem_key}_sig"] = _bsem_sig
+    _bsem_items = st.session_state.get(_bsem_key, [])
+    if _bsem_items:
+        render_bsem_recommendations(_bsem_items, key_prefix=_bsem_key)
+    else:
+        st.info("Not enough antecedent data yet to generate recommendations.")
+    st.markdown("---")
+
+    # ══════════════════════════════════════════════════════════════════════════
     # TEACHING LENS
     # ══════════════════════════════════════════════════════════════════════════
     st.markdown("### 🎓 Teaching Lens — Recommendations")
@@ -5613,7 +5781,7 @@ def render_student_analysis_page():
             f"<li><strong>Sensory diet</strong> incorporated before the {top_session} session — movement break, heavy work activity, or proprioceptive input to prepare the nervous system</li>"
             "<li><strong>Co-regulation with a key adult</strong> — calm, attuned, predictable adult presence; CPI Supportive Stance (low, slow, sideways) as the default posture</li>"
             f"<li>Develop a personalised <strong>Window of Tolerance profile</strong> for {student['name']} — document early warning signs, escalation cues, and effective de-escalation strategies</li>"
-            "<li><strong>Teach and embed regulation tools</strong> during calm states; cue their use proactively at Yellow/Level 2 — before escalation to Level 3+</li>"
+            "<li><strong>Teach and embed regulation tools</strong> during calm states; cue their use proactively at early warning signs — before escalation occurs</li>"
             "<li>Monitor <strong>medication timing</strong> if relevant and note correlations with incident frequency</li>"
             + _sc1_seeking_items + _sc1_strat_items +
             "</ul></div>",
@@ -5630,7 +5798,7 @@ def render_student_analysis_page():
             "<li><strong>Pre-correction</strong> immediately before known high-risk contexts — brief, calm reminder of expectations and available supports prior to entering the trigger environment</li>"
             f"<li><strong>Functional Communication Training (FCT)</strong> — teach an efficient, socially appropriate replacement behaviour that serves the same function as {top_beh_clinical.lower()}, explicitly and systematically</li>"
             "<li><strong>Structured peer interaction protocols</strong> — pre-assign groupings and roles where peer triggers are identified; avoid unstructured proximity</li>"
-            "<li>Develop a <strong>Crisis Safety Plan</strong> with Level 3+ protocols, designated staff roles, de-escalation sequence, and post-incident restorative repair procedure</li>"
+            "<li>Develop a <strong>Crisis Safety Plan</strong> with Critical Incident protocols, designated staff roles, de-escalation sequence, and post-incident restorative repair procedure</li>"
             "</ul></div>",
             unsafe_allow_html=True
         )
@@ -5646,7 +5814,7 @@ def render_student_analysis_page():
             "<ul style='margin:0;padding-left:1.2rem;font-size:.84rem;color:#1e293b;line-height:1.85;'>"
             "<li><strong>Restore the relationship before re-engaging</strong> with academic demands — never return to learning tasks while the student remains dysregulated</li>"
             "<li>Conduct a <strong>brief, non-punitive restorative conversation</strong> once fully regulated — focus on what happened, who was affected, and how to repair</li>"
-            "<li>Complete a structured <strong>staff debrief</strong> after every Level 3+ incident — review antecedents, early warning signs, and response effectiveness</li>"
+            "<li>Complete a structured <strong>staff debrief</strong> after every Critical Incident — review antecedents, early warning signs, and response effectiveness</li>"
             "<li>Maintain <strong>proactive, strengths-focused communication</strong> with parent/carer — not solely incident-driven contact</li>"
             "</ul></div>",
             unsafe_allow_html=True
@@ -6033,27 +6201,6 @@ def render_student_analysis_page():
                         st.error("❌ Failed to save — please try again.")
 
     st.markdown("---")
-    st.markdown("### 🎒 Supports for Transition to a Mainstream Setting")
-    st.caption(
-        "BSEM-informed strategies (Brain · Sensory · Emotional · Mind), matched to this "
-        "student's actual incident pattern, framed for handover to a receiving school."
-    )
-    _bsem_key = f"bsem_analysis_{student_id}"
-    _bsem_sig = f"{top_beh}|{top_ant}|{top_loc}|{top_session}"
-    if (st.session_state.get(f"{_bsem_key}_sig") != _bsem_sig
-            or st.button("🔄 Regenerate", key=f"{_bsem_key}_regen")):
-        with st.spinner("Drawing up BSEM-aligned recommendations..."):
-            st.session_state[_bsem_key] = build_bsem_recommendations(
-                full_df, top_beh, top_ant, top_loc, top_session,
-                student["name"], context="analysis")
-            st.session_state[f"{_bsem_key}_sig"] = _bsem_sig
-    _bsem_text = st.session_state.get(_bsem_key, "")
-    if _bsem_text:
-        st.markdown(_bsem_text)
-    else:
-        st.info("Not enough antecedent data yet to generate recommendations.")
-
-    st.markdown("---")
     st.markdown("### 📄 Export Data & Reports")
     col1, col2 = st.columns(2)
     with col1:
@@ -6304,7 +6451,14 @@ def render_student_dashboard():
                 emoji = "🔴" if inc.get("incident_type") == "Critical" else "🟡" if sev >= 3 else "🟢"
                 st.markdown(f"{emoji} **{date_str}** - Sev {sev}")
     st.markdown("---")
-    st.markdown("### 💡 Recommendations to Trial")
+    st.markdown(
+        "<div style='background:linear-gradient(135deg,#1A7A7A 0%,#134e4e 100%);"
+        "border-radius:10px;padding:0.9rem 1.2rem;margin-bottom:0.6rem;'>"
+        "<span style='color:white;font-size:1.15rem;font-weight:700;'>💡 Recommendations to Trial</span><br>"
+        "<span style='color:#d1fae5;font-size:0.85rem;'>BSEM-informed strategies matched to this "
+        "student's actual pattern. Click a strategy for why it fits and how to trial it.</span></div>",
+        unsafe_allow_html=True,
+    )
     _risk_line = {"HIGH": "🔴 **HIGH RISK** — daily check-ins recommended alongside the strategies below.",
                   "MODERATE": "🟡 **MODERATE RISK** — weekly review alongside the strategies below.",
                   "LOW": "🟢 **LOW RISK** — maintain current supports."}[risk_level]
@@ -6319,9 +6473,9 @@ def render_student_dashboard():
                     full_df, top_beh, top_ant, top_loc, top_session,
                     student["name"], context="dashboard")
                 st.session_state[f"{_bsem_key_d}_sig"] = _bsem_sig_d
-        _bsem_text_d = st.session_state.get(_bsem_key_d, "")
-        if _bsem_text_d:
-            st.markdown(_bsem_text_d)
+        _bsem_items_d = st.session_state.get(_bsem_key_d, [])
+        if _bsem_items_d:
+            render_bsem_recommendations(_bsem_items_d, key_prefix=_bsem_key_d)
         else:
             st.info("Not enough antecedent data yet to generate recommendations.")
     else:
@@ -7132,8 +7286,8 @@ def render_admin_portal():
         st.markdown("### 🎚️ Correct Critical Incident Severity")
         st.caption(
             "Fix the severity level on a specific critical incident. "
-            "Remember: a critical incident does not automatically mean L4/L5 — "
-            "most incidents sit in the Coping zone (L1–L3)."
+            "Remember: a critical incident does not automatically mean severity 4/severity 5 — "
+            "most incidents sit in the Coping zone (severity 1–3)."
         )
         _sv_students = {s["id"]: s["name"] for s in st.session_state.students}
         _sv_stu = st.selectbox(
