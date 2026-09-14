@@ -85,8 +85,12 @@ def get_staff_password() -> str:
     means it works whichever way you've configured it in Render.
     """
     try:
-        return st.secrets["STAFF_PASSWORD"]
-    except (KeyError, FileNotFoundError, st.errors.StreamlitAPIException):
+        value = st.secrets.get("STAFF_PASSWORD")
+        if value:
+            return value
+    except Exception:
+        # No secrets.toml at all, or st.secrets unavailable in this
+        # environment — fall through to the environment variable check.
         pass
     return os.environ.get("STAFF_PASSWORD", "")
 
@@ -103,6 +107,8 @@ def check_password() -> bool:
             "value in Render (Environment tab) or in this app's Streamlit "
             "secrets, then redeploy/restart the service."
         )
+    else:
+        st.caption(f"Admin password is configured ({len(configured_password)} characters).")
 
     pwd = st.text_input("Admin password", type="password", key="club_fees_pwd_input")
     if st.button("Unlock admin section"):
