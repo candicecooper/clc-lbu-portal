@@ -421,6 +421,20 @@ def build_bsem_recommendations(
         return [{**p, "why": "", "how": _debug if i == 0 else ""} for i, p in enumerate(picked[:6])]
 
 
+def plotly_chart_with_selection(fig, key: str, **kwargs):
+    """st.plotly_chart with click-to-select (a clicked bar/point is
+    returned so the caller can drill into it), falling back to a plain,
+    non-interactive chart if the installed Streamlit version doesn't
+    support on_select yet — so this can never silently break the chart
+    itself, only the click feature."""
+    try:
+        event = st.plotly_chart(fig, key=key, on_select="rerun", selection_mode="points", **kwargs)
+        return (event.get("selection", {}) or {}).get("points", []) if isinstance(event, dict) else []
+    except TypeError:
+        st.plotly_chart(fig, **kwargs)
+        return []
+
+
 def render_bsem_recommendations(items: list[dict], key_prefix: str):
     """Render structured BSEM recommendations as clickable, colour-coded
     cards — click a strategy to reveal why it fits and how to trial it.
@@ -1406,8 +1420,8 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         ax.axhspan(0.5, 3.5,  color='#fef9c3', alpha=0.35, zorder=0)  # yellow — coping zone severity 1–3
         ax.axhspan(3.5, 5.5,  color='#fee2e2', alpha=0.30, zorder=0)  # red — outside window severity 4–5
         for y, lbl, col in [(1.5,'Within window (regulated)','#16a34a'),
-                            (3.0,'Coping','#ca8a04'),
-                            (4.5,'Outside window','#dc2626')]:
+                            (3.0,'Coping','#f97316'),
+                            (4.5,'Outside window','#ef4444')]:
             ax.text(full_df['date_parsed'].min(), y, lbl,
                     fontsize=6.5, color=col, alpha=0.6, va='center', style='italic')
         for sev in [1,2,3,4,5]:
@@ -6490,6 +6504,43 @@ def render_student_dashboard():
         if not quick_df.empty or not crit_df.empty
         else pd.DataFrame()
     )
+
+    # ── Filters: applied to everything below (metrics, charts, patterns, recommendations) ──
+    if not full_df.empty:
+        with st.expander("🔎 Filters", expanded=False):
+            _fcol1, _fcol2, _fcol3 = st.columns(3)
+            _min_d = full_df["date_parsed"].min()
+            _max_d = full_df["date_parsed"].max()
+            with _fcol1:
+                _date_range = st.date_input(
+                    "Date range", value=(_min_d.date(), _max_d.date()),
+                    min_value=_min_d.date(), max_value=_max_d.date(),
+                    key=f"dash_filter_dates_{student_id}",
+                )
+            with _fcol2:
+                _beh_opts = sorted(full_df["behaviour_type"].dropna().unique().tolist()) if "behaviour_type" in full_df.columns else []
+                _beh_filter = st.multiselect("Behaviour type", _beh_opts, key=f"dash_filter_beh_{student_id}")
+            with _fcol3:
+                _loc_opts = sorted(full_df["location"].dropna().unique().tolist()) if "location" in full_df.columns else []
+                _loc_filter = st.multiselect("Location", _loc_opts, key=f"dash_filter_loc_{student_id}")
+            if st.button("Clear filters", key=f"dash_filter_clear_{student_id}"):
+                for _k in [f"dash_filter_dates_{student_id}", f"dash_filter_beh_{student_id}", f"dash_filter_loc_{student_id}"]:
+                    st.session_state.pop(_k, None)
+                st.rerun()
+
+        if isinstance(_date_range, tuple) and len(_date_range) == 2:
+            _d_start, _d_end = _date_range
+            full_df = full_df[
+                (full_df["date_parsed"].dt.date >= _d_start) & (full_df["date_parsed"].dt.date <= _d_end)
+            ]
+        if _beh_filter:
+            full_df = full_df[full_df["behaviour_type"].isin(_beh_filter)]
+        if _loc_filter:
+            full_df = full_df[full_df["location"].isin(_loc_filter)]
+        _filters_active = bool(_beh_filter or _loc_filter or (isinstance(_date_range, tuple) and _date_range != (_min_d.date(), _max_d.date())))
+        if _filters_active:
+            st.caption(f"🔎 Filters applied — showing {len(full_df)} incident(s). Everything below reflects this filtered view.")
+
     total_incidents = len(full_df)
     critical_count = len(full_df[full_df.get("incident_type", pd.Series(dtype=str)) == "Critical"]) if "incident_type" in full_df.columns else len(crit_df)
     avg_severity = full_df["severity"].mean() if "severity" in full_df.columns else 0
@@ -6562,8 +6613,16 @@ def render_student_dashboard():
                         title=dict(text="Incidents", font=dict(size=11, color="#334155")),
                     ),
                 )
-                st.plotly_chart(fig, use_container_width=True)
-                st.caption("🟥 Red = 3+ incidents that day  ·  🟦 Teal = 1–2 incidents")
+                _daily_pts = plotly_chart_with_selection(fig, key=f"dash_daily_chart_{student_id}", use_container_width=True)
+                st.caption("🟥 Red = 3+ incidents that day  ·  🟦 Teal = 1–2 incidents  ·  Click a bar to see that day's incidents.")
+                if _daily_pts:
+                    _sel_idx = _daily_pts[0].get("point_index")
+                    if _sel_idx is not None and 0 <= _sel_idx < len(daily):
+                        _sel_date = daily.iloc[_sel_idx]["_d"]
+                        _day_incidents = full_df[full_df["date_parsed"].dt.date == _sel_date]
+                        with st.expander(f"📋 Incidents on {_sel_date.strftime('%A %d %B')} ({len(_day_incidents)})", expanded=True):
+                            _show_cols = [c for c in ["date_parsed", "time", "behaviour_type", "antecedent", "location", "session", "severity"] if c in _day_incidents.columns]
+                            st.dataframe(_day_incidents[_show_cols], use_container_width=True, hide_index=True)
         else:
             st.info("No incident data to display.")
     with col2:
@@ -6605,7 +6664,17 @@ def render_student_dashboard():
                         automargin=True,
                     ),
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                _beh_pts = plotly_chart_with_selection(fig, key=f"dash_beh_chart_{student_id}", use_container_width=True)
+                st.caption("Click a bar to see incidents of that behaviour.")
+                if _beh_pts:
+                    _sel_idx = _beh_pts[0].get("point_index")
+                    _beh_labels_rev = list(beh_counts.index[::-1])
+                    if _sel_idx is not None and 0 <= _sel_idx < len(_beh_labels_rev):
+                        _sel_beh = _beh_labels_rev[_sel_idx]
+                        _beh_incidents = full_df[full_df["behaviour_type"] == _sel_beh]
+                        with st.expander(f"📋 Incidents — {_sel_beh} ({len(_beh_incidents)})", expanded=True):
+                            _show_cols = [c for c in ["date_parsed", "time", "antecedent", "location", "session", "severity"] if c in _beh_incidents.columns]
+                            st.dataframe(_beh_incidents[_show_cols], use_container_width=True, hide_index=True)
         else:
             st.info("No behaviour data recorded yet.")
     st.markdown("---")
