@@ -402,19 +402,20 @@ def render_bsem_recommendations(items: list[dict], key_prefix: str):
     }
     for i, item in enumerate(items):
         style = _domain_style.get(item["domain"], {"icon": "•", "color": "#64748b", "bg": "#f8fafc"})
-        st.markdown(
-            f"<div style='border-left:4px solid {style['color']};background:{style['bg']};"
-            f"border-radius:6px;padding:0.15rem 0.9rem;margin-bottom:0.4rem;'>",
-            unsafe_allow_html=True,
-        )
-        with st.expander(f"{style['icon']}  **{item['domain']}**  ·  {item['strategy']}"):
-            if item.get("why"):
-                st.markdown(f"**Why this fits:** {item['why']}")
-            if item.get("how"):
-                st.markdown(f"**How to trial it:** {item['how']}")
-            if not item.get("why") and not item.get("how"):
-                st.caption("Implementation detail unavailable right now — the strategy above is still valid to trial.")
-        st.markdown("</div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            st.markdown(
+                f"<span style='background:{style['bg']};color:{style['color']};"
+                f"padding:0.15rem 0.6rem;border-radius:6px;font-size:0.72rem;font-weight:700;"
+                f"text-transform:uppercase;letter-spacing:.03em;'>{style['icon']} {item['domain']}</span>",
+                unsafe_allow_html=True,
+            )
+            with st.expander(item["strategy"], key=f"{key_prefix}_exp_{i}"):
+                if item.get("why"):
+                    st.markdown(f"**Why this fits:** {item['why']}")
+                if item.get("how"):
+                    st.markdown(f"**How to trial it:** {item['how']}")
+                if not item.get("why") and not item.get("how"):
+                    st.caption("Implementation detail unavailable right now — the strategy above is still valid to trial.")
 
 
 def build_considerations(full_df, top_ant, top_loc, top_session) -> list[str]:
@@ -783,7 +784,8 @@ Critical Incident Form completed and saved.
     """)
 
 
-def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, top_loc, top_session, risk_score, risk_level):
+def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, top_loc, top_session, risk_score, risk_level,
+                                           supports_trialled: str = "", supports_success: str = ""):
     """Generate professional BAP — fixed chart sizing and page layout."""
     try:
         from docx import Document
@@ -970,7 +972,80 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             arun(p, f"{label}:  ", bold=True, size=15, color=GREY_DARK)
             arun(p, val, size=15)
 
+        doc.add_paragraph().paragraph_format.space_after = Pt(4)
+
+        # ── AT A GLANCE: risk level + hypothesis summary + top strategies ──
+        # (front-page condensed view — full detail follows after the page break)
+        hyp_data_front = generate_strong_clinical_hypothesis(
+            full_df, top_ant, top_beh, top_loc, top_session, student["name"])
+        _risk_hex = {"LOW": "16A34A", "MODERATE": "D97706", "HIGH": "DC2626"}.get(risk_level, "64748B")
+
+        rk = doc.add_table(rows=1, cols=1); rk.style = 'Table Grid'
+        rk_c = rk.rows[0].cells[0]
+        set_bg(rk_c, _risk_hex); set_borders(rk_c, _risk_hex)
+        rk_c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        arun(rk_c.paragraphs[0], f"RISK LEVEL: {risk_level}  ({risk_score}/100)", bold=True, size=17, color=WHITE)
+        doc.add_paragraph().paragraph_format.space_after = Pt(3)
+
+        if hyp_data_front.get("summary"):
+            fh = doc.add_table(rows=1, cols=1); fh.style = 'Table Grid'
+            fh_c = fh.rows[0].cells[0]
+            set_bg(fh_c, TEAL_LIGHT); set_borders(fh_c, TEAL_HEX)
+            fh_c.paragraphs[0].clear()
+            p_fh = fh_c.paragraphs[0]
+            p_fh.paragraph_format.space_before = Pt(3); p_fh.paragraph_format.space_after = Pt(3)
+            arun(p_fh, "FUNCTIONAL HYPOTHESIS (Summary):  ", bold=True, size=15, color=TEAL_HEX)
+            arun(p_fh, hyp_data_front["summary"], size=15)
+            doc.add_paragraph().paragraph_format.space_after = Pt(4)
+
+        _front_cats = _top_categories(full_df, n=1)
+        if _front_cats:
+            _front_strats = BSEM_STRATEGY_LIBRARY.get(_front_cats[0], [])[:3]
+            if _front_strats:
+                ts = doc.add_table(rows=1, cols=1); ts.style = 'Table Grid'
+                ts_c = ts.rows[0].cells[0]
+                set_bg(ts_c, AMBER_LIGHT); set_borders(ts_c, AMBER_HEX)
+                ts_c.paragraphs[0].clear()
+                p_ts = ts_c.paragraphs[0]
+                p_ts.paragraph_format.space_before = Pt(3)
+                arun(p_ts, "TOP STRATEGIES TO TRIAL", bold=True, size=15, color=AMBER_HEX)
+                for _s in _front_strats:
+                    p = ts_c.add_paragraph()
+                    p.paragraph_format.space_before = Pt(2); p.paragraph_format.space_after = Pt(2)
+                    arun(p, f"[{_s['domain']}] ", bold=True, size=14, color=GREY_DARK)
+                    arun(p, _s["strategy"], size=14)
+                p_more = ts_c.add_paragraph()
+                p_more.paragraph_format.space_before = Pt(4)
+                arun(p_more, "See Support Lens and Teaching Lens sections (below) for the full set.",
+                     italic=True, size=13, color=GREY_DARK)
+
+        if (supports_trialled or "").strip() or (supports_success or "").strip():
+            doc.add_paragraph().paragraph_format.space_after = Pt(3)
+            tr = doc.add_table(rows=1, cols=1); tr.style = 'Table Grid'
+            tr_c = tr.rows[0].cells[0]
+            set_bg(tr_c, LIGHT_GREY); set_borders(tr_c, GREY_DARK)
+            tr_c.paragraphs[0].clear()
+            p_tr = tr_c.paragraphs[0]
+            p_tr.paragraph_format.space_before = Pt(3)
+            arun(p_tr, "SUPPORTS TRIALLED & OUTCOMES", bold=True, size=15, color=GREY_DARK)
+            if (supports_trialled or "").strip():
+                p1 = tr_c.add_paragraph()
+                p1.paragraph_format.space_before = Pt(3); p1.paragraph_format.space_after = Pt(2)
+                arun(p1, "Trialled:  ", bold=True, size=14, color=GREY_DARK)
+                arun(p1, supports_trialled.strip(), size=14)
+            if (supports_success or "").strip():
+                p2 = tr_c.add_paragraph()
+                p2.paragraph_format.space_before = Pt(2); p2.paragraph_format.space_after = Pt(3)
+                arun(p2, "Outcome:  ", bold=True, size=14, color=GREY_DARK)
+                arun(p2, supports_success.strip(), size=14)
+
         doc.add_page_break()
+
+        p_detail_note = doc.add_paragraph()
+        p_detail_note.paragraph_format.space_after = Pt(6)
+        arun(p_detail_note, "The pages below expand on the summary above with full charts, "
+             "the complete functional hypothesis, and the full recommendation set.",
+             italic=True, size=14, color=GREY_DARK)
 
         section_header(doc, "VISUAL ANALYTICS — FREQUENCY PATTERNS")
         p_sp = doc.add_paragraph(); p_sp.paragraph_format.space_after = Pt(4)
@@ -1057,19 +1132,9 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         base_ax_style(ax)
         plt.tight_layout(pad=0.4)
         add_chart(doc, fig,
-            f"The most frequently occurring behaviour is {_bap_beh_labels[0] if _bap_beh_labels else 'Unknown'} "
+            f"Most frequent: {_bap_beh_labels[0] if _bap_beh_labels else 'Unknown'} "
             f"({_bap_beh_vals[0] if _bap_beh_vals else 0} of {len(full_df)} incidents, "
-            f"{int((_bap_beh_vals[0] if _bap_beh_vals else 0)/max(len(full_df),1)*100)}% of total). "
-            + (f"A wide range of behaviour types ({len(_bap_beh_labels)} types shown) indicates a broad stress response — "
-               "the student is communicating distress through multiple channels. "
-               "Foundational Body domain regulation supports (sensory regulation, movement breaks, "
-               "predictable routines) should be the primary focus rather than behaviour-by-behaviour intervention. "
-               if len(_bap_beh_labels) >= 4 else
-               "A narrow behaviour profile (1-2 types) suggests a specific, consistent function — "
-               "the student is using a predictable response to communicate a particular unmet need. "
-               "This supports targeted functional intervention: identify the function, "
-               "teach an alternative, and pre-empt the trigger. ") +
-            "Behaviours are described using consistent, observable language to support shared understanding across the team.")
+            f"{int((_bap_beh_vals[0] if _bap_beh_vals else 0)/max(len(full_df),1)*100)}% of total).")
 
         ant_counts = full_df["antecedent"].value_counts().head(6)
         # Strip category prefix (e.g. "Peer - " → "peer conflict/interaction")
@@ -1095,17 +1160,9 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         base_ax_style(ax)
         plt.tight_layout(pad=0.4)
         add_chart(doc, fig,
-            f"The most frequent trigger is '{wrap_labels([top_ant], width=60)[0]}' "
+            f"Most frequent trigger: '{wrap_labels([top_ant], width=60)[0]}' "
             f"({int(ant_counts.values[0])} of {len(full_df)} incidents, "
-            f"{int(ant_counts.values[0]/max(len(full_df),1)*100)}% of total). "
-            "Antecedent-stage intervention — modifying what happens before the trigger occurs — "
-            "is consistently more effective than any consequence-based response. "
-            "The goal is either to reduce or modify the trigger itself, or to build the student's "
-            "capacity to tolerate it through graduated exposure and skill-building. "
-            "Triggers that cluster around peer interaction, instruction, or transitions point to "
-            "specific environmental conditions that can be directly modified by staff. "
-            "Sensory triggers indicate the nervous system is overloaded before behaviour emerges — "
-            "a sensory audit and proactive sensory breaks are the most direct preventive intervention.")
+            f"{int(ant_counts.values[0]/max(len(full_df),1)*100)}% of total).")
 
         doc.add_page_break()
 
@@ -1142,33 +1199,7 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         add_chart(doc, fig,
             f"Peak session: {SESSION_LABELS[peak_name].replace(chr(10),' ')} — "
             f"{int(session_counts[peak_name])} of {len(full_df)} incidents "
-            f"({int(session_counts[peak_name]/max(len(full_df),1)*100)}%). "
-            + ({"Morning":
-                "Morning peaks frequently reflect difficulty with the transition from home, "
-                "low readiness to engage, or unmet overnight and morning needs (hunger, sleep disruption, "
-                "sensory dysregulation on arrival). A structured, low-demand arrival routine with a "
-                "trusted adult check-in is the most effective morning intervention. "
-                "Consider: has the student eaten? Have there been any household stressors? "
-                "A predictable, warm, unhurried start to the day reduces cortisol and builds regulatory capacity "
-                "before academic demands are introduced.",
-                "Middle":
-                "Middle-of-day peaks reflect cumulative fatigue — the student has been managing demands "
-                "since arrival and regulatory capacity is depleted. Lunch and transition periods introduce "
-                "unstructured time which can be particularly challenging. "
-                "A mid-day sensory or movement break, a quiet opt-out space, and reduced demand "
-                "before and after the lunch break are high-priority strategies. "
-                "Pre-teach the transition into and out of lunch with explicit expectations and a visual schedule.",
-                "Afternoon":
-                "Afternoon peaks often reflect end-of-day fatigue, anticipatory anxiety about the transition "
-                "home, or the accumulation of the day's regulatory demands. "
-                "A structured, predictable end-of-day routine — including a debrief, a positive closure "
-                "activity, and advance notice of tomorrow's schedule — reduces afternoon escalation. "
-                "Consider the student's home situation: if the transition home is anxiety-provoking, "
-                "this may manifest as afternoon behaviour at school.",
-               }.get(peak_name,
-                "Review the specific conditions of this session and schedule targeted proactive support. "
-                "Identify what is different about the lowest-incident session and replicate those conditions.")) +
-            f" Lowest-frequency session provides a template: identify what differs structurally and replicate.")
+            f"({int(session_counts[peak_name]/max(len(full_df),1)*100)}%).")
 
         loc_counts = full_df["location"].value_counts().head(6)
         labels_loc = wrap_labels(list(loc_counts.index[::-1]))
@@ -1193,32 +1224,7 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         add_chart(doc, fig,
             f"Highest-frequency location: {normalise_location(top_loc)} "
             f"({int(loc_counts.values[-1])} of {len(full_df)} incidents, "
-            f"{int(loc_counts.values[-1]/max(len(full_df),1)*100)}% of total). "
-            "Location clustering signals that specific environmental conditions are contributing to behaviour. "
-            + ({"jp room": "Classroom behaviour often reflects academic demand, seating arrangements, "
-                "peer noise, or non-preferred task presentation. Review the physical layout, "
-                "sensory conditions, and demand level of activities occurring at the time of incidents.",
-                "py room": "Classroom behaviour often reflects academic demand, seating arrangements, "
-                "peer noise, or non-preferred task presentation. Review the physical layout, "
-                "sensory conditions, and demand level of activities occurring at the time of incidents.",
-                "sy room": "Classroom behaviour often reflects academic demand, seating arrangements, "
-                "peer noise, or non-preferred task presentation. Review the physical layout, "
-                "sensory conditions, and demand level of activities occurring at the time of incidents.",
-                "yard":    "Yard incidents reflect unstructured time, peer conflict, sensory overload, "
-                "and reduced adult proximity. Increased supervision ratios, structured yard activities, "
-                "and a clear opt-out space are recommended.",
-                "kitchen": "Kitchen incidents may reflect access to food as a motivator, transitions "
-                "in/out of the space, or sensory factors around meal/snack time. "
-                "Ensure clear, consistent expectations and supervised, predictable kitchen routines.",
-                "toilets": "Incidents in or near toilets may indicate the student uses this space as an "
-                "escape route, or that transitions to/from the toilets are a trigger. "
-                "Review supervision and transition routines.",
-               }.get(normalise_location(top_loc).lower(),
-               "Conduct an environmental audit of this location — review noise level, crowding, "
-               "supervision ratio, demand level, and transition patterns in and out of the space. ")) +
-            "An environmental audit of this location is the most direct preventive action. "
-            "Also note whether this hotspot coincides with the peak time of day — "
-            "if so, the combination creates a compounding risk window requiring an immediate targeted plan.")
+            f"{int(loc_counts.values[-1]/max(len(full_df),1)*100)}% of total).")
 
         # WoT for incidents: yellow/orange=coping (severity 1–3), red=outside window (severity 4–5)
         sev_colours = {1:'#eab308',2:'#eab308',3:'#f97316',4:'#ef4444',5:'#7f1d1d'}
@@ -1267,36 +1273,12 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         elif len(full_df) > 0:
             direction = "insufficient data for trend"
         add_chart(doc, fig,
-            f"Severity trajectory: {direction} (early average {e_avg:.1f} → recent average {r_avg:.1f}). "
+            f"Severity trend: {direction} (early average {e_avg:.1f} → recent average {r_avg:.1f})."
             + ({
-               "reducing": (
-                   f"Average severity has reduced by {abs(round(r_avg-e_avg,1))} levels across the data period. "
-                   "This is a meaningful positive indicator — the student is experiencing less intense episodes over time. "
-                   "This may reflect improved regulatory capacity, more effective proactive supports, or a stronger "
-                   "relational foundation with key staff. Document specifically what has changed and ensure those "
-                   "conditions are deliberately sustained — gains in regulation can reverse quickly if supports "
-                   "are reduced or key staff change."
-               ),
-               "stable": (
-                   "Severity has remained stable across the data period. "
-                   "Current supports are maintaining a consistent level of functioning — not a deterioration, "
-                   "but not a recovery. Consider whether support intensity matches the student's needs, "
-                   "or whether a targeted strategy shift is needed to move the trajectory downward. "
-                   "A case review or consultation with an external specialist may be appropriate "
-                   "if this pattern has held across multiple terms."
-               ),
-               "increasing": (
-                   f"Average severity has increased by {abs(round(r_avg-e_avg,1))} levels — "
-                   "the most significant finding in this analysis. Current supports are insufficient. "
-                   "Recommended immediate actions: case conference, updated safety plan, "
-                   "sensory and environmental audit, review of staffing consistency and relational supports, "
-                   "and consideration of specialist referral. Also check whether external stressors "
-                   "(family changes, transitions, health factors) are contributing."
-               ),
-              }.get(direction, "")) +
-            " Yellow zone (severity 1–3) = Coping. Red zone (severity 4–5) = Outside window. "
-            "A critical incident does not automatically mean outside the window. "
-            "All episodes in the red zone require post-incident relational repair before re-engaging with learning.")
+               "reducing": f" Reduced by {abs(round(r_avg-e_avg,1))} points — a positive indicator worth sustaining.",
+               "increasing": f" Increased by {abs(round(r_avg-e_avg,1))} points — the most significant finding here; a case review is warranted.",
+               "stable": " Holding steady — current supports are maintaining functioning without a clear recovery trend.",
+              }.get(direction, "")))
 
         doc.add_page_break()
 
@@ -1331,16 +1313,8 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             _dow_low_bap = _dow_bap[_dow_bap > 0].idxmin() if (_dow_bap > 0).any() else ""
             add_chart(doc, fig,
                 f"Peak incident day: {_dow_peak_bap} ({_dow_peak_n_bap} incidents). "
-                "Day-of-week patterns point to timetable-specific triggers. "
-                "The recommended action is to review the full timetable for the peak day: "
-                "which subjects, staff members, peer groupings, or transitions are unique to that day? "
-                "Is there a particular subject that is cognitively demanding or non-preferred? "
-                "Is there a staffing change (e.g. a relief teacher, a different support worker)? "
-                "Is there an unstructured or transition-heavy period that does not appear on other days? "
-                + (f"The lowest-incident day is {_dow_low_bap} — "
-                   "this day provides a template for what effective conditions look like. "
-                   "Identify what is structurally different and deliberately replicate those conditions "
-                   "on high-risk days. This is one of the highest-leverage preventive strategies available. "
+                "Worth checking what's specific to the timetable, staffing, or subjects on that day."
+                + (f" Lowest: {_dow_low_bap} — a useful comparison point for what's working."
                    if _dow_low_bap and _dow_low_bap != _dow_peak_bap else ""))
 
         # ── Chart 8: Escalation Rate by Behaviour ────────────────────────
@@ -1383,27 +1357,13 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             plt.tight_layout(pad=0.4)
             _high_esc = [x for x in _esc_data if x[3] > 50]
             add_chart(doc, fig,
-                "Escalation rate is the proportion of incidents for each behaviour that progressed "
-                "from a regular (Coping zone) episode to a critical incident (ABCH-documented). "
-                "A high rate for a specific behaviour signals that something about how that behaviour unfolds "
-                "— the environment, the staff response, or the student's internal state — "
-                "is not being interrupted effectively while the student is still in the Coping zone. "
-                "Grey bars indicate fewer than 4 incidents — rate is not yet reliable, continue logging. "
-                "The Sev StDev (if shown) tells you how variable the severity is: a low value means "
-                "episodes are consistently similar in intensity; a high value means the student "
-                "oscillates between mild and severe episodes, which may indicate inconsistent triggers "
-                "or inconsistent staff responses across different contexts. "
-                + (f"HIGH ESCALATION RISK IDENTIFIED: {", ".join(x[0][:35] for x in _high_esc)}. "
-                   "For these behaviours, proactive strategies must be in place BEFORE the behaviour emerges. "
-                   "The Coping zone (yellow/orange) is the window for effective intervention — "
-                   "once the student moves to the outside-window zone (red), de-escalation is the only "
-                   "available strategy and learning re-engagement must wait until full recovery. "
-                   "Review the antecedent chain for these specific behaviours: what conditions reliably "
-                   "precede escalation, and how can those conditions be modified or removed? "
+                "Escalation rate = the proportion of each behaviour's incidents that reached "
+                "Critical Incident status rather than staying in the Coping zone. Grey bars = fewer than 4 "
+                "incidents, not yet a reliable rate. "
+                + (f"HIGH ESCALATION: {", ".join(x[0][:35] for x in _high_esc)} — proactive strategies "
+                   "need to be in place before these behaviours emerge, not after."
                    if _high_esc else
-                   "No behaviours are currently showing high escalation risk — "
-                   "all incidents are remaining within the Coping zone rather than escalating to critical. "
-                   "This is a significant positive indicator: document and sustain current staff responses. "))
+                   "No behaviours currently show high escalation risk — a positive indicator."))
 
         # ── Chart 9: Severity distribution by Behaviour (WoT coloured) ──
         doc.add_paragraph().paragraph_format.space_after = Pt(4)
@@ -1445,25 +1405,10 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             _outside_n = int((full_df["severity"] > 3).sum())
             _c_pct = int(_coping_n / len(full_df) * 100) if len(full_df) else 0
             add_chart(doc, fig,
-                f"{_c_pct}% of all incidents ({_coping_n} of {len(full_df)}) occurred within the Coping zone (severity 1–3). "
-                "This chart shows how each behaviour type is distributed across Window of Tolerance zones. "
-                "Colour key: yellow = severity 1–2 Coping (low-level behaviour, student managing); "
-                "orange = severity 3 Coping, approaching edge; red = severity 4–5 Outside window (significant dysregulation). "
-                "Behaviours with a high proportion of yellow/orange are being managed within the Coping zone — "
-                "these are responsive to proactive supports and de-escalation strategies. "
-                "Behaviours with a high proportion of red indicate the student is regularly moving "
-                "outside their window with this specific behaviour — these require urgent antecedent intervention, "
-                "a robust safety plan, and a clear post-incident relational repair protocol. "
-                "Important: a critical incident classification does not automatically mean outside the window — "
-                "many critical incidents are logged at severity 3 (Coping, approaching edge). "
-                + (f"The remaining {100-_c_pct}% ({_outside_n} incidents) reached the outside-window zone (severity 4–5). "
-                   "Post-incident repair — re-establishing relational safety before returning to learning — "
-                   "is essential after every outside-window episode. "
-                   "Review what proactive conditions were absent on those days. "
-                   if _outside_n > 0 else
-                   "All logged incidents remained within the Coping zone — a strong positive indicator. "
-                   "Current staff responses are successfully preventing escalation to full dysregulation. "
-                   "Document and sustain current proactive strategies explicitly. "))
+                f"{_c_pct}% of all incidents ({_coping_n} of {len(full_df)}) stayed within the Coping zone "
+                f"(severity 1–3); {100-_c_pct}% ({_outside_n}) reached the outside-window zone (severity 4–5)."
+                + (" Every outside-window episode needs relational repair before re-engaging with learning."
+                   if _outside_n > 0 else " A strong positive indicator — document and sustain current strategies."))
 
         # ── Chart 10: Antecedent Category Breakdown (also shown in-app) ──
         full_df["_ant_cat"] = full_df["antecedent"].apply(categorize_antecedent)
@@ -6201,6 +6146,27 @@ def render_student_analysis_page():
                         st.error("❌ Failed to save — please try again.")
 
     st.markdown("---")
+    st.markdown("#### 📝 Supports Trialled (optional — included in the report below)")
+    st.caption("Answers here are included in the Behaviour Summary report automatically.")
+    _st_col1, _st_col2 = st.columns(2)
+    with _st_col1:
+        st.text_area(
+            "What supports/strategies have been trialled with this student?",
+            key=f"supports_trialled_{student_id}", height=90,
+            placeholder="e.g. Quiet entry space before joining the group, movement break before Maths, "
+                        "visual transition schedule...",
+        )
+    with _st_col2:
+        st.text_area(
+            "How successful were they? What worked, what didn't?",
+            key=f"supports_success_{student_id}", height=90,
+            placeholder="e.g. Quiet entry space reduced morning incidents significantly; movement "
+                        "breaks had mixed results...",
+        )
+    _supports_trialled = st.session_state.get(f"supports_trialled_{student_id}", "")
+    _supports_success  = st.session_state.get(f"supports_success_{student_id}", "")
+
+    st.markdown("---")
     st.markdown("### 📄 Export Data & Reports")
     col1, col2 = st.columns(2)
     with col1:
@@ -6211,7 +6177,8 @@ def render_student_analysis_page():
     with col2:
         with st.spinner("Generating Behaviour Summary..."):
             docx_file = generate_behaviour_analysis_plan_docx(
-                student, full_df, top_ant, top_beh, top_loc, top_session, risk_score, risk_level)
+                student, full_df, top_ant, top_beh, top_loc, top_session, risk_score, risk_level,
+                supports_trialled=_supports_trialled, supports_success=_supports_success)
         if docx_file:
             _bs_date = datetime.now().strftime("%Y%m%d")
             _bs_local_name = f"BehaviourSummary_{student['name'].replace(' ', '_')}_{_bs_date}.docx"
