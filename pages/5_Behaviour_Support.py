@@ -7,6 +7,7 @@ from datetime import datetime, date, time, timedelta
 import uuid
 import random
 import json
+import re
 from io import BytesIO
 import base64
 import bcrypt
@@ -372,12 +373,24 @@ def build_bsem_recommendations(
 
     try:
         raw = groq_ai_call(prompt, max_tokens=900, temperature=0.3)
-        raw = raw.replace("```json", "").replace("```", "").strip()
+        raw = raw.strip()
+        raw = re.sub(r'^```(?:json)?\s*|\s*```\s*$', '', raw, flags=re.IGNORECASE).strip()
         ai_items = json.loads(raw)
+        if isinstance(ai_items, dict):
+            # Model may have wrapped the array in an object, e.g. {"recommendations": [...]}
+            for _v in ai_items.values():
+                if isinstance(_v, list):
+                    ai_items = _v
+                    break
         result = []
         for a in ai_items:
-            idx = a.get("id")
-            if not isinstance(idx, int) or not (0 <= idx < len(picked)):
+            if not isinstance(a, dict):
+                continue
+            try:
+                idx = int(a.get("id"))
+            except (TypeError, ValueError):
+                continue
+            if not (0 <= idx < len(picked)):
                 continue
             result.append({**picked[idx], "why": a.get("why", ""), "how": a.get("how", "")})
         if result:
