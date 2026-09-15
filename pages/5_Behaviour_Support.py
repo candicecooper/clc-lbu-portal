@@ -524,6 +524,18 @@ def build_window_of_tolerance_table(full_df) -> dict:
     _df = full_df.copy()
     _df["severity"] = pd.to_numeric(_df.get("severity", 3), errors="coerce").fillna(3)
 
+    def _flatten(v):
+        # "intervention" is a multi-select field stored as a Postgres array —
+        # supabase-py returns it as a Python list, not a plain string, which
+        # breaks a straight "\n".join() downstream. Flatten to one string.
+        if isinstance(v, list):
+            return ", ".join(str(x) for x in v if x)
+        return v
+
+    for _col in ("antecedent", "behaviour_type", "intervention"):
+        if _col in _df.columns:
+            _df[_col] = _df[_col].apply(_flatten)
+
     def _zone(row):
         direction = WOT_DIRECTION_MAP.get(row.get("behaviour_type"))
         if direction is None:
@@ -576,15 +588,21 @@ def render_window_of_tolerance_table(full_df):
             unsafe_allow_html=True,
         )
         _wcol1, _wcol2, _wcol3 = st.columns(3)
+
+        def _safe_join(items):
+            # Defensive: coerce anything unexpected (e.g. a stray list) to a
+            # plain string rather than letting "\n".join() crash the page.
+            return "\n".join(x if isinstance(x, str) else str(x) for x in items)
+
         with _wcol1:
             st.caption("Context")
-            st.code("\n".join(zd["context"]) or "—", language=None)
+            st.code(_safe_join(zd["context"]) or "—", language=None)
         with _wcol2:
             st.caption("Behaviour")
-            st.code("\n".join(zd["behaviour"]) or "—", language=None)
+            st.code(_safe_join(zd["behaviour"]) or "—", language=None)
         with _wcol3:
             st.caption("Interventions")
-            st.code("\n".join(zd["interventions"]) or "— none logged for this zone —", language=None)
+            st.code(_safe_join(zd["interventions"]) or "— none logged for this zone —", language=None)
 
 
 def build_considerations(full_df, top_ant, top_loc, top_session) -> list[str]:
@@ -3470,17 +3488,33 @@ def render_student_analysis_page():
     if student.get('placement_start'):
         try:
             start_dt = datetime.fromisoformat(student['placement_start'])
-            end_dt = datetime.fromisoformat(student['placement_end']) if student.get('placement_end') else datetime.utcnow()
-            days_enrolled = (end_dt.date() - start_dt.date()).days
+            has_end = bool(student.get('placement_end'))
+            end_dt = datetime.fromisoformat(student['placement_end']) if has_end else None
+            today = datetime.utcnow()
+            # Days enrolled so far — today, capped at the placement end date
+            # once it's passed (so this doesn't keep climbing after the
+            # placement has actually finished).
+            _reference_end = min(today, end_dt) if end_dt else today
+            days_enrolled = max((_reference_end.date() - start_dt.date()).days, 0)
+
             st.markdown("---")
             pcol1, pcol2, pcol3 = st.columns(3)
             with pcol1: st.metric("Placement Start", start_dt.strftime('%d/%m/%Y'))
             with pcol2:
-                if student.get('placement_end'):
-                    st.metric("Placement End", datetime.fromisoformat(student['placement_end']).strftime('%d/%m/%Y'))
+                if has_end:
+                    st.metric("Placement End", end_dt.strftime('%d/%m/%Y'))
                 else:
                     st.metric("Status", "Ongoing")
             with pcol3: st.metric("Days Enrolled", days_enrolled)
+
+            if has_end:
+                total_placement_days = max((end_dt.date() - start_dt.date()).days, 0)
+                days_remaining = max((end_dt.date() - today.date()).days, 0)
+                pcol4, pcol5 = st.columns(2)
+                with pcol4:
+                    st.metric("Days Remaining", days_remaining)
+                with pcol5:
+                    st.metric("Total Placement (days)", total_placement_days)
             st.markdown("---")
         except: pass
 
@@ -4027,10 +4061,18 @@ def render_student_analysis_page():
 
     st.markdown("### 📈 Executive Summary")
     if _dropped_nat > 0:
-        st.caption(f"⚠️ {_dropped_nat} record(s) had no valid date and were excluded from this analysis "
-                   f"— worth checking those entries in the Document Archive or incident log for a missing date.")
+        _raw_total = len(full_df) + _dropped_nat
+        st.warning(
+            f"⚠️ **This student has {_raw_total} incident(s) on file in total, but {_dropped_nat} "
+            f"have no valid date recorded**, so they're excluded from every chart and metric below "
+            f"(all of it is organised by date). That's why this page may show a lower number than "
+            f"other screens — it's not a missing/deleted record, it's a missing date. "
+            f"Check the Document Archive or incident log for those {_dropped_nat} entries and add a date "
+            f"to bring them into this analysis."
+        )
     col1, col2, col3, col4, col5 = st.columns(5)
-    with col1: st.metric("Total", len(full_df))
+    with col1:
+        st.metric("Total (dated)" if _dropped_nat > 0 else "Total", len(full_df))
     with col2: st.metric("Critical", len(full_df[full_df["incident_type"] == "Critical"]))
     with col3: st.metric("Avg Severity", f"{full_df['severity'].mean():.1f}")
     with col4:
