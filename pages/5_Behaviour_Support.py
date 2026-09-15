@@ -931,7 +931,7 @@ def get_clinical_behaviour(raw: str) -> str:
 INTERVENTIONS = ["CPI Supportive stance", "Offered break", "Reduced demand", "Provided choices",
                 "Removed audience", "Visual supports", "Co-regulation", "Prompted coping skill", "Redirection"]
 LOCATIONS = ["JP Room", "PY Room", "SY Room", "Yard", "Playground", "Library", "Kitchen", "Office", "Student Gate", "Toilets", "Transition area", "Other"]
-VALID_PAGES = ["login", "landing", "program_students", "incident_log", "critical_incident", "review_critical", "leader_approve_critical", "student_analysis", "student_dashboard", "admin_portal"]
+VALID_PAGES = ["login", "landing", "program_students", "incident_log", "critical_incident", "review_critical", "leader_approve_critical", "student_analysis", "student_dashboard", "admin_portal", "support_plan"]
 
 HYPOTHESIS_FUNCTIONS = ["To get", "To avoid"]
 HYPOTHESIS_ITEMS = ["Tangible", "Activity", "Sensory", "Attention"]
@@ -2183,6 +2183,58 @@ def delete_placement_extension_from_db(extension_id):
         return False
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# BEHAVIOUR SUPPORT PLAN (student-lens, living document)
+# Data-derived sections (Target Behaviours, Possible Function, Known
+# Triggers) are deliberately NOT stored — they're computed live from
+# incident data every time the plan is opened, so they always reflect the
+# latest data with no separate "refresh" step and no risk of ever being
+# overwritten by (or overwriting) staff/student writing. Only the
+# staff/student-authored sections below are persisted.
+# ══════════════════════════════════════════════════════════════════════════
+SUPPORT_PLAN_FIELDS = [
+    "class_teacher", "support_staff", "parent_carer", "date_commenced", "review_date",
+    "strengths", "interests", "purpose", "early_warning_signs",
+    "proactive_strategies_additional", "teaching_strategies",
+    "response_early_signs", "response_escalation", "safety_risk_management",
+    "post_incident_repair", "reinforcement", "adjustments_supports",
+    "short_term_goals", "student_voice",
+]
+
+
+def load_support_plan_from_db(student_id):
+    """Load the staff/student-authored sections of a student's Behaviour
+    Support Plan."""
+    if not supabase or not student_id:
+        return {}
+    try:
+        res = supabase.table("support_plans").select("*").eq("student_id", student_id).limit(1).execute()
+        return res.data[0] if res.data else {}
+    except Exception:
+        return {}
+
+
+def save_support_plan_to_db(student_id, data: dict, updated_by: str = ""):
+    """Upsert the staff/student-authored sections of a Behaviour Support
+    Plan. Only ever touches fields staff explicitly edited."""
+    if not supabase or not student_id:
+        return False
+    try:
+        payload = {k: v for k, v in data.items() if k in SUPPORT_PLAN_FIELDS}
+        payload["student_id"] = student_id
+        payload["last_updated_by"] = updated_by
+        payload["last_updated_at"] = datetime.utcnow().isoformat()
+        existing = supabase.table("support_plans").select("id").eq("student_id", student_id).limit(1).execute()
+        if existing.data:
+            supabase.table("support_plans").update(payload).eq("student_id", student_id).execute()
+        else:
+            supabase.table("support_plans").insert(payload).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error saving support plan: {e}")
+        return False
+
+
 def load_students_from_db():
     if not supabase:
         return MOCK_STUDENTS
@@ -2980,6 +3032,8 @@ def render_program_students_page():
                     go_to("incident_log", selected_student_id=stu["id"])
                 if st.button("📈 Analysis", key=f"ana_{stu['id']}", use_container_width=True):
                     go_to("student_analysis", selected_student_id=stu["id"])
+                if st.button("📋 Plan", key=f"plan_{stu['id']}", use_container_width=True):
+                    go_to("support_plan", selected_student_id=stu["id"])
                 if st.session_state.get("is_admin") or (st.session_state.get("current_user") or {}).get("role") == "ADM":
                     if st.button("📦 Archive", key=f"archive_prog_{stu['id']}", use_container_width=True):
                         stu['archived'] = True
@@ -2998,7 +3052,7 @@ def render_incident_log_page():
         st.error("No student selected")
         return
     st.markdown(f"## 📝 Incident Log — {student['name']}")
-    col1, col2 = st.columns([3, 1])
+    col1, col2, col3 = st.columns([3, 1, 1])
     with col1:
         if st.button("⬅ Back to Students", key="back_log_top"):
             # Clear prefill state when navigating away
@@ -3010,6 +3064,9 @@ def render_incident_log_page():
             st.session_state.incident_prefill = None
             st.session_state.last_saved_incident = None
             go_to("landing")
+    with col3:
+        if st.button("📋 Support Plan", key="sp_from_log"):
+            go_to("support_plan", selected_student_id=student_id)
     show_severity_guide()
     if st.session_state.show_critical_prompt:
         inc_info = st.session_state.get("last_incident_info", {})
@@ -3654,7 +3711,7 @@ def render_student_analysis_page():
             st.markdown("---")
         except: pass
 
-    col1, col2 = st.columns([3, 1])
+    col1, col2, col3 = st.columns([3, 1, 1])
     with col1:
         if st.button("⬅ Back to Students", key="back_analysis_top"):
             if student.get("archived", False):
@@ -3664,6 +3721,9 @@ def render_student_analysis_page():
     with col2:
         if st.button("🏠 Program Landing", key="home_analysis"):
             go_to("landing")
+    with col3:
+        if st.button("📋 Support Plan", key="sp_from_analysis"):
+            go_to("support_plan", selected_student_id=student_id)
 
     # ── Part-time schedule context ───────────────────────────────────────────
     # ── Load saved attendance from Supabase on first render ─────────────────
@@ -6922,7 +6982,7 @@ def render_student_dashboard():
     if st.session_state.get("hist_incident_just_saved"):
         _saved_total = st.session_state.pop("hist_incident_just_saved")
         st.success(f"✅ Historical incident saved — {student['name']} now has **{_saved_total}** incident(s) on record.")
-    col1, col2, col3 = st.columns([2, 1, 1])
+    col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
     with col1:
         if st.button("⬅ Back to Students", key="back_dash"):
             if student.get("archived", False):
@@ -6935,6 +6995,9 @@ def render_student_dashboard():
     with col3:
         if st.button("📈 Full Analysis", key="analysis_dash"):
             go_to("student_analysis", selected_student_id=student_id)
+    with col4:
+        if st.button("📋 Support Plan", key="sp_dash"):
+            go_to("support_plan", selected_student_id=student_id)
     st.markdown("---")
     incidents = [i for i in st.session_state.incidents if i["student_id"] == student_id]
     critical = [c for c in st.session_state.critical_incidents if c["student_id"] == student_id]
@@ -8281,6 +8344,261 @@ def render_admin_portal():
                 st.warning("Enter both email and password to test.")
 
 
+def render_support_plan_page():
+    """Student-lens Behaviour Support Plan — a living document per student.
+    Data-derived sections (Target Behaviours, Possible Function, Known
+    Triggers, Data/Monitoring) are computed live from current incident data
+    every time this page loads. Staff/student-authored sections are saved
+    to the database and are never touched by that live computation."""
+    student_id = st.session_state.get("selected_student_id")
+    student = get_student(student_id)
+    if not student:
+        st.error("No student selected"); return
+
+    st.markdown(f"## 📋 Behaviour Support Plan — {student['name']}")
+    st.caption("Target Behaviours, Possible Function, Known Triggers, and Data/Monitoring update "
+               "automatically from incident data every time this page is opened. Everything else is "
+               "written by staff and/or the student, and is saved separately — it's never overwritten.")
+
+    col_back1, col_back2 = st.columns(2)
+    with col_back1:
+        if st.button("⬅ Back", key="sp_back"):
+            go_to("student_dashboard", selected_student_id=student_id)
+    with col_back2:
+        if st.button("📈 Full Analysis", key="sp_to_analysis"):
+            go_to("student_analysis", selected_student_id=student_id)
+
+    # ── Assemble this student's incident data (same pattern as Dashboard) ──
+    incidents = [i for i in st.session_state.incidents if i["student_id"] == student_id]
+    critical  = [c for c in st.session_state.critical_incidents if c["student_id"] == student_id]
+    quick_df = pd.DataFrame(incidents) if incidents else pd.DataFrame()
+    crit_df  = pd.DataFrame(critical) if critical else pd.DataFrame()
+    if not quick_df.empty:
+        quick_df["incident_type"] = "Quick"
+        quick_df["date_parsed"] = pd.to_datetime(quick_df["date"], errors="coerce")
+    if not crit_df.empty:
+        crit_df["incident_type"] = "Critical"
+        _crit_dates = crit_df["created_at"] if "created_at" in crit_df.columns else pd.Series([None]*len(crit_df))
+        crit_df["date_parsed"] = pd.to_datetime(_crit_dates, errors="coerce", utc=True).dt.tz_localize(None)
+        crit_df["severity"] = crit_df["severity"].fillna(5).astype(int) if "severity" in crit_df.columns else 5
+        crit_df["behaviour_type"] = crit_df["ABCH_primary"].apply(
+            lambda d: d.get("behaviour", "") if isinstance(d, dict) else "") if "ABCH_primary" in crit_df.columns else ""
+        crit_df["antecedent"] = crit_df["ABCH_primary"].apply(
+            lambda d: d.get("context", "") if isinstance(d, dict) else "") if "ABCH_primary" in crit_df.columns else ""
+        crit_df["location"] = crit_df["ABCH_primary"].apply(
+            lambda d: d.get("location", "") if isinstance(d, dict) else "") if "ABCH_primary" in crit_df.columns else ""
+    full_df = pd.concat([quick_df, crit_df], ignore_index=True) if not quick_df.empty or not crit_df.empty else pd.DataFrame()
+    if not full_df.empty and "date_parsed" in full_df.columns:
+        full_df = full_df.dropna(subset=["date_parsed"])
+
+    # ── Live, auto-computed sections ────────────────────────────────────
+    _sp_target_behaviours, _sp_function, _sp_triggers, _sp_monitoring, _sp_strategies = [], "", [], "", []
+    if not full_df.empty and "behaviour_type" in full_df.columns:
+        _bcounts = full_df["behaviour_type"].dropna()
+        _bcounts = _bcounts[_bcounts.astype(str).str.strip() != ""].value_counts()
+        _sp_target_behaviours = _bcounts.head(4).index.tolist()
+
+        top_beh     = full_df["behaviour_type"].mode()[0] if len(full_df) else "Unknown"
+        top_ant     = full_df["antecedent"].mode()[0] if "antecedent" in full_df.columns and len(full_df) else "Unknown"
+        top_loc     = full_df["location"].mode()[0] if "location" in full_df.columns and len(full_df) else "Unknown"
+        top_session = full_df["session"].mode()[0] if "session" in full_df.columns and len(full_df) else "Unknown"
+        try:
+            _hyp = generate_strong_clinical_hypothesis(full_df, top_ant, top_beh, top_loc, top_session, student["name"])
+            _sp_function = _hyp.get("detail", {}).get("Behavioural Function") or _hyp.get("summary", "")
+        except Exception:
+            _sp_function = ""
+
+        _cats = _top_categories(full_df, n=3)
+        _sp_triggers = _cats
+
+        _total = len(full_df)
+        _crit_n = len(full_df[full_df.get("incident_type", "Quick") == "Critical"]) if "incident_type" in full_df.columns else 0
+        _sp_monitoring = (
+            f"{_total} incident(s) on record. Most frequent behaviour: {_bcounts.index[0] if len(_bcounts) else '—'} "
+            f"({int(_bcounts.iloc[0])} occurrence(s)). Peak time: {top_session}. Hotspot location: {normalise_location(top_loc)}. "
+            f"{_crit_n} critical incident(s)."
+        )
+        if _cats:
+            _picked = []
+            for cat in _cats[:2]:
+                _picked.extend(BSEM_STRATEGY_LIBRARY.get(cat, [])[:2])
+            _sp_strategies = _picked
+
+    st.markdown("---")
+    st.markdown("#### 🎯 Target Behaviours  *(auto, from incident data)*")
+    if _sp_target_behaviours:
+        for b in _sp_target_behaviours: st.markdown(f"- {b}")
+    else:
+        st.caption("Not enough data yet — log some incidents to populate this section.")
+
+    st.markdown("#### 🔍 Possible Function of the Behaviour  *(auto, from incident data)*")
+    st.markdown(_sp_function or "_Not enough data yet._")
+
+    st.markdown("#### ⚡ Known Triggers / Precipitating Factors  *(auto, from incident data)*")
+    if _sp_triggers:
+        for t in _sp_triggers: st.markdown(f"- {t}")
+    else:
+        st.caption("Not enough data yet.")
+
+    st.markdown("#### 🛡️ Proactive Strategies — suggested starting point  *(auto, from BSEM library)*")
+    if _sp_strategies:
+        for s in _sp_strategies:
+            st.markdown(f"- **[{s['domain']}]** {s['strategy']}")
+    else:
+        st.caption("Not enough data yet to suggest strategies.")
+
+    st.markdown("#### 📊 Data / Monitoring  *(auto, from incident data)*")
+    st.markdown(_sp_monitoring or "_Not enough data yet._")
+
+    st.markdown("---")
+    st.markdown("### ✏️ Staff & Student Sections — written and saved here")
+
+    _plan = load_support_plan_from_db(student_id)
+
+    with st.form("support_plan_form"):
+        st.markdown("**Plan details**")
+        pc1, pc2, pc3 = st.columns(3)
+        with pc1:
+            _f_teacher = st.text_input("Class teacher", value=_plan.get("class_teacher","") or "")
+            _f_start = st.date_input("Date commenced", value=(
+                datetime.fromisoformat(_plan["date_commenced"]).date() if _plan.get("date_commenced") else date.today()))
+        with pc2:
+            _f_support = st.text_input("Support staff", value=_plan.get("support_staff","") or "")
+            _f_review = st.date_input("Review date", value=(
+                datetime.fromisoformat(_plan["review_date"]).date() if _plan.get("review_date") else date.today()))
+        with pc3:
+            _f_parent = st.text_input("Parent/carer", value=_plan.get("parent_carer","") or "")
+
+        st.markdown("**Student Profile**")
+        _f_strengths = st.text_area("Strengths", value=_plan.get("strengths","") or "", height=80)
+        _f_interests = st.text_area("Interests", value=_plan.get("interests","") or "", height=80)
+        _f_purpose = st.text_area("Purpose of this plan", value=_plan.get("purpose","") or "", height=80)
+
+        st.markdown("**Early Warning Signs**")
+        _f_ews = st.text_area("What does this look like for this student?", value=_plan.get("early_warning_signs","") or "", height=90, label_visibility="collapsed")
+
+        st.markdown("**Additional Proactive Strategies** *(beyond the suggestions above)*")
+        _f_proactive_add = st.text_area("Additional proactive strategies", value=_plan.get("proactive_strategies_additional","") or "", height=90, label_visibility="collapsed")
+
+        st.markdown("**Teaching Strategies**")
+        _f_teaching = st.text_area("What will be explicitly taught?", value=_plan.get("teaching_strategies","") or "", height=90, label_visibility="collapsed")
+
+        st.markdown("**Response to Early Signs**")
+        _f_resp_early = st.text_area("Staff response to early signs", value=_plan.get("response_early_signs","") or "", height=90, label_visibility="collapsed")
+
+        st.markdown("**Response to Escalation**")
+        _f_resp_esc = st.text_area("Staff response to escalation", value=_plan.get("response_escalation","") or "", height=90, label_visibility="collapsed")
+
+        st.markdown("**Safety / Risk Management**")
+        _f_safety = st.text_area("Safety and risk management", value=_plan.get("safety_risk_management","") or "", height=90, label_visibility="collapsed")
+
+        st.markdown("**Post-Incident / Repair**")
+        _f_repair = st.text_area("Post-incident and repair process", value=_plan.get("post_incident_repair","") or "", height=90, label_visibility="collapsed")
+
+        st.markdown("**Reinforcement**")
+        _f_reinforce = st.text_area("How positive behaviour is reinforced", value=_plan.get("reinforcement","") or "", height=80, label_visibility="collapsed")
+
+        st.markdown("**Adjustments / Supports**")
+        _f_adjustments = st.text_area("Adjustments and supports in place", value=_plan.get("adjustments_supports","") or "", height=80, label_visibility="collapsed")
+
+        st.markdown("**Short-Term Goals**")
+        _f_goals = st.text_area("Short-term goals", value=_plan.get("short_term_goals","") or "", height=80, label_visibility="collapsed")
+
+        st.markdown("**🗣️ Student Voice** — in the student's own words")
+        _f_voice = st.text_area("What the student says about this themselves", value=_plan.get("student_voice","") or "", height=100, label_visibility="collapsed")
+
+        if st.form_submit_button("💾 Save Plan", type="primary", use_container_width=True):
+            _updated_by = (
+                st.session_state.current_user.get("name", "unknown")
+                if st.session_state.get("current_user") else "unknown"
+            )
+            _plan_data = {
+                "class_teacher": _f_teacher, "support_staff": _f_support, "parent_carer": _f_parent,
+                "date_commenced": _f_start.isoformat() if _f_start else None,
+                "review_date": _f_review.isoformat() if _f_review else None,
+                "strengths": _f_strengths, "interests": _f_interests, "purpose": _f_purpose,
+                "early_warning_signs": _f_ews, "proactive_strategies_additional": _f_proactive_add,
+                "teaching_strategies": _f_teaching, "response_early_signs": _f_resp_early,
+                "response_escalation": _f_resp_esc, "safety_risk_management": _f_safety,
+                "post_incident_repair": _f_repair, "reinforcement": _f_reinforce,
+                "adjustments_supports": _f_adjustments, "short_term_goals": _f_goals,
+                "student_voice": _f_voice,
+            }
+            if save_support_plan_to_db(student_id, _plan_data, updated_by=_updated_by):
+                st.success("✅ Plan saved.")
+                st.rerun()
+
+    if _plan.get("last_updated_by"):
+        st.caption(f"Last updated by {_plan['last_updated_by']}"
+                   + (f" on {_plan['last_updated_at'][:16].replace('T',' ')}" if _plan.get("last_updated_at") else ""))
+
+    st.markdown("---")
+    if st.button("📥 Generate Downloadable Plan (Word)", key="sp_download_btn"):
+        _sp_docx = generate_support_plan_docx(
+            student, _plan, _sp_target_behaviours, _sp_function, _sp_triggers, _sp_strategies, _sp_monitoring)
+        st.download_button(
+            "📄 Download Behaviour Support Plan (Word)", _sp_docx,
+            file_name=f"BSP_{student['name'].replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            key="sp_download_dl",
+        )
+
+
+def generate_support_plan_docx(student, plan, target_behaviours, function_text, triggers, strategies, monitoring_text):
+    """Word export of the Behaviour Support Plan — combines the live
+    auto-computed sections with whatever staff/student have written and
+    saved, in the DfE-style template structure."""
+    from docx import Document
+    from docx.shared import Pt, Cm
+    doc = Document()
+    sec = doc.sections[0]
+    sec.page_width, sec.page_height = Cm(21), Cm(29.7)
+    sec.left_margin = sec.right_margin = sec.top_margin = sec.bottom_margin = Cm(2)
+
+    doc.add_heading(f"Behaviour Support Plan — {student['name']}", level=1)
+    p = doc.add_paragraph()
+    p.add_run(f"Class teacher: {plan.get('class_teacher','—')}    Support staff: {plan.get('support_staff','—')}    "
+               f"Parent/carer: {plan.get('parent_carer','—')}")
+    p2 = doc.add_paragraph()
+    p2.add_run(f"Date commenced: {plan.get('date_commenced','—')}    Review date: {plan.get('review_date','—')}")
+
+    def _section(title, body):
+        doc.add_heading(title, level=2)
+        if isinstance(body, list):
+            for item in body:
+                doc.add_paragraph(f"• {item}", style=None)
+        else:
+            doc.add_paragraph(body or "—")
+
+    _section("Strengths", plan.get("strengths"))
+    _section("Interests", plan.get("interests"))
+    _section("Purpose of This Plan", plan.get("purpose"))
+    _section("Target Behaviours (auto — from incident data)", target_behaviours or "Not enough data yet.")
+    _section("Possible Function of the Behaviour (auto — from incident data)", function_text or "Not enough data yet.")
+    _section("Known Triggers / Precipitating Factors (auto — from incident data)", triggers or "Not enough data yet.")
+    _section("Early Warning Signs", plan.get("early_warning_signs"))
+    _section("Proactive Strategies — suggested (auto — from BSEM library)",
+              [f"[{s['domain']}] {s['strategy']}" for s in strategies] if strategies else "Not enough data yet.")
+    _section("Additional Proactive Strategies", plan.get("proactive_strategies_additional"))
+    _section("Teaching Strategies", plan.get("teaching_strategies"))
+    _section("Response to Early Signs", plan.get("response_early_signs"))
+    _section("Response to Escalation", plan.get("response_escalation"))
+    _section("Safety / Risk Management", plan.get("safety_risk_management"))
+    _section("Post-Incident / Repair", plan.get("post_incident_repair"))
+    _section("Reinforcement", plan.get("reinforcement"))
+    _section("Adjustments / Supports", plan.get("adjustments_supports"))
+    _section("Data / Monitoring (auto — from incident data)", monitoring_text or "Not enough data yet.")
+    _section("Short-Term Goals", plan.get("short_term_goals"))
+    _section("Student Voice", plan.get("student_voice"))
+
+    p_footer = doc.add_paragraph()
+    p_footer.add_run(f"\nGenerated from CLC-LBU Behaviour Support Tool — {datetime.now().strftime('%d/%m/%Y %H:%M')}").italic = True
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf
+
+
 def render_quick_incident_log():
     """Standalone quick incident log — no login required."""
     import uuid as _uuid
@@ -8622,6 +8940,7 @@ def main():
     elif page == "leader_approve_critical": render_leader_approve_critical_page()
     elif page == "student_analysis":        render_student_analysis_page()
     elif page == "student_dashboard":       render_student_dashboard()
+    elif page == "support_plan":             render_support_plan_page()
     elif page == "admin_portal":            render_admin_portal()
     else:                                   render_landing_page()
 
