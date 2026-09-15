@@ -8304,6 +8304,37 @@ def render_quick_incident_log():
         st.error("Database not connected — unable to save. Contact the portal administrator.")
         return
 
+    # After a successful save, show a summary + explicit "log another?"
+    # prompt instead of silently resetting straight back to a blank form.
+    _ql_saved = st.session_state.get("ql_just_saved")
+    if _ql_saved:
+        st.markdown(
+            f"<div style='background:#f0fdf4;border:2px solid #22c55e;border-radius:12px;"
+            f"padding:1.1rem 1.5rem;margin-top:.5rem;'>"
+            f"<div style='font-weight:700;color:#15803d;font-size:1rem;margin-bottom:.4rem;'>"
+            f"✅ Incident logged successfully</div>"
+            f"<div style='font-size:.85rem;color:#1e293b;line-height:1.7;'>"
+            f"<b>Student:</b> {_ql_saved['student']}<br>"
+            f"<b>Date/Time:</b> {_ql_saved['datetime']} — {_ql_saved['session']}<br>"
+            f"<b>Location:</b> {_ql_saved['location']}<br>"
+            f"<b>Behaviour:</b> {_ql_saved['behaviour']}<br>"
+            f"<b>Antecedent:</b> {_ql_saved['antecedent']}<br>"
+            f"<b>Severity:</b> <span style='background:{_ql_saved['sev_color']};color:white;"
+            f"padding:.1rem .4rem;border-radius:4px;font-size:.82rem;'>"
+            f"{_ql_saved['sev_label']}</span><br>"
+            f"<b>Logged by:</b> {_ql_saved['logged_by']}"
+            f"</div></div>",
+            unsafe_allow_html=True,
+        )
+        st.caption("Visible immediately in the student's analysis in the Behaviour Support Tool.")
+        st.markdown("<div style='height:.5rem'></div>", unsafe_allow_html=True)
+        if st.button("➕ Log Another Incident", type="primary", use_container_width=True, key="ql_log_another"):
+            st.session_state["ql_just_saved"] = None
+            st.rerun()
+        st.markdown("---")
+        st.caption("CLC-LBU Portal · Quick Incident Log · For critical incidents use the full Behaviour Support Tool")
+        return
+
     # Load students live
     try:
         _stu_resp = supabase.table("students").select("id,first_name,last_name,name,program") \
@@ -8353,7 +8384,13 @@ def render_quick_incident_log():
     }
     _SEV_COLS_QL = {1:"#22c55e", 2:"#eab308", 3:"#f97316", 4:"#ef4444", 5:"#7f1d1d"}
 
-    with st.form("ql_form", clear_on_submit=True):
+    try:
+        _ql_form = st.form("ql_form", clear_on_submit=True, enter_to_submit=False)
+    except TypeError:
+        # Older Streamlit without the enter_to_submit param — falls back to
+        # default behaviour rather than crashing the page.
+        _ql_form = st.form("ql_form", clear_on_submit=True)
+    with _ql_form:
         _ql_c1, _ql_c2 = st.columns([3, 2])
         with _ql_c1:
             _stu_opts = {s["id"]: f"{s['name']}  ({s['program']})" for s in _students}
@@ -8457,26 +8494,18 @@ def render_quick_incident_log():
                 supabase.table("incidents").insert(_data).execute()
                 _stu_name = _stu_opts[_sel_id].split("  (")[0]
                 _sc2 = _SEV_COLS_QL[_severity]
-                st.markdown(
-                    f"<div style='background:#f0fdf4;border:2px solid #22c55e;border-radius:12px;"
-                    f"padding:1.1rem 1.5rem;margin-top:.5rem;'>"
-                    f"<div style='font-weight:700;color:#15803d;font-size:1rem;margin-bottom:.4rem;'>"
-                    f"✅ Incident logged successfully</div>"
-                    f"<div style='font-size:.85rem;color:#1e293b;line-height:1.7;'>"
-                    f"<b>Student:</b> {_stu_name}<br>"
-                    f"<b>Date/Time:</b> {_inc_date.strftime('%-d %b %Y')} at {_inc_time.strftime('%H:%M')}"
-                    f" — {_SESSIONS_QL[_sess_lbl]}<br>"
-                    f"<b>Location:</b> {_location}<br>"
-                    f"<b>Behaviour:</b> {_behaviour}<br>"
-                    f"<b>Antecedent:</b> {_antecedent}<br>"
-                    f"<b>Severity:</b> <span style='background:{_sc2};color:white;"
-                    f"padding:.1rem .4rem;border-radius:4px;font-size:.82rem;'>"
-                    f"{_SEV_LABELS_QL[_severity]}</span><br>"
-                    f"<b>Logged by:</b> {_staff_opts[_rep_by_id]}"
-                    f"</div></div>",
-                    unsafe_allow_html=True,
-                )
-                st.caption("Visible immediately in the student's analysis in the Behaviour Support Tool.")
+                st.session_state["ql_just_saved"] = {
+                    "student": _stu_name,
+                    "datetime": f"{_inc_date.strftime('%-d %b %Y')} at {_inc_time.strftime('%H:%M')}",
+                    "session": _SESSIONS_QL[_sess_lbl],
+                    "location": _location,
+                    "behaviour": _behaviour,
+                    "antecedent": _antecedent,
+                    "sev_color": _sc2,
+                    "sev_label": _SEV_LABELS_QL[_severity],
+                    "logged_by": _staff_opts[_rep_by_id],
+                }
+                st.rerun()
             except Exception as _e:
                 st.error(f"❌ Save failed: {_e}")
 
