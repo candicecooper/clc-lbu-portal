@@ -7297,7 +7297,10 @@ def render_admin_portal():
                         with col2:
                             if student.get('placement_start'):
                                 st.caption(f"📅 Placement: {datetime.fromisoformat(student['placement_start']).strftime('%d/%m/%Y')} – {datetime.fromisoformat(student['placement_end']).strftime('%d/%m/%Y') if student.get('placement_end') else 'ongoing'}")
-                            incident_count = len([i for i in st.session_state.incidents if i['student_id'] == student['id']])
+                            incident_count = (
+                                len([i for i in st.session_state.incidents if i['student_id'] == student['id']])
+                                + len([c for c in st.session_state.critical_incidents if c['student_id'] == student['id']])
+                            )
                             st.caption(f"📋 {incident_count} incidents on record")
                         with col3:
                             if st.button("👁️ View Details", key=f"view_archived_{student['id']}", use_container_width=True):
@@ -7327,6 +7330,12 @@ def render_admin_portal():
                                             except Exception as e:
                                                 st.error(f"Delete failed: {e}")
                                         st.session_state.students = [s for s in st.session_state.students if s['id'] != student['id']]
+                                        # Also refresh incidents/critical_incidents — otherwise this
+                                        # student's now-deleted records linger in the cached lists
+                                        # and inflate site-wide totals elsewhere in the portal.
+                                        if supabase:
+                                            st.session_state.incidents = load_incidents_from_db()
+                                            st.session_state.critical_incidents = load_critical_incidents_from_db()
                                         st.session_state[f"confirm_delete_{student['id']}"] = False
                                         st.rerun()
                                 with col_no:
