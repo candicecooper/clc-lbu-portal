@@ -2060,6 +2060,51 @@ def save_attendance_to_db(student_id, absent_dates, pt_days, pt_sessions, pt_not
         return False
 
 
+def load_placement_extensions_from_db(student_id):
+    """Load all recorded placement extensions for a student from Supabase,
+    oldest first."""
+    if not supabase or not student_id:
+        return []
+    try:
+        res = supabase.table("placement_extensions") \
+            .select("*").eq("student_id", student_id).order("from_date").execute()
+        return [
+            {"id": row.get("id"), "from": row.get("from_date"), "to": row.get("to_date"), "reason": row.get("reason", "")}
+            for row in (res.data or [])
+        ]
+    except Exception:
+        return []
+
+
+def save_placement_extension_to_db(student_id, from_date, to_date, reason):
+    """Insert a new placement extension record in Supabase."""
+    if not supabase or not student_id:
+        return False
+    try:
+        supabase.table("placement_extensions").insert({
+            "student_id": student_id,
+            "from_date": from_date,
+            "to_date": to_date,
+            "reason": reason,
+        }).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error saving extension: {e}")
+        return False
+
+
+def delete_placement_extension_from_db(extension_id):
+    """Permanently delete a placement extension record from Supabase."""
+    if not supabase or not extension_id:
+        return False
+    try:
+        supabase.table("placement_extensions").delete().eq("id", extension_id).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error deleting extension: {e}")
+        return False
+
+
 def load_students_from_db():
     if not supabase:
         return MOCK_STUDENTS
@@ -3490,6 +3535,19 @@ def render_student_analysis_page():
             start_dt = datetime.fromisoformat(student['placement_start'])
             has_end = bool(student.get('placement_end'))
             end_dt = datetime.fromisoformat(student['placement_end']) if has_end else None
+            # Extensions push the true end date later — use the latest of the
+            # original end date and any extension's "to" date.
+            _exts_for_metrics = load_placement_extensions_from_db(student_id)
+            _extended = False
+            if _exts_for_metrics:
+                try:
+                    _latest_ext = max(datetime.fromisoformat(e["to"]) for e in _exts_for_metrics if e.get("to"))
+                    if not end_dt or _latest_ext > end_dt:
+                        end_dt = _latest_ext
+                        has_end = True
+                        _extended = True
+                except Exception:
+                    pass
             today = datetime.utcnow()
             # Days enrolled so far — today, capped at the placement end date
             # once it's passed (so this doesn't keep climbing after the
@@ -3502,7 +3560,7 @@ def render_student_analysis_page():
             with pcol1: st.metric("Placement Start", start_dt.strftime('%d/%m/%Y'))
             with pcol2:
                 if has_end:
-                    st.metric("Placement End", end_dt.strftime('%d/%m/%Y'))
+                    st.metric("Extended End" if _extended else "Placement End", end_dt.strftime('%d/%m/%Y'))
                 else:
                     st.metric("Status", "Ongoing")
             with pcol3: st.metric("Days Enrolled", days_enrolled)
@@ -3557,8 +3615,7 @@ def render_student_analysis_page():
         )
         _pl_start_raw = student.get("placement_start")
         _pl_end_raw   = student.get("placement_end")
-        _ext_key_an   = f"placement_extensions_{student_id}"
-        _pl_exts      = st.session_state.get(_ext_key_an, [])
+        _pl_exts      = load_placement_extensions_from_db(student_id)
 
         _pl_c1, _pl_c2, _pl_c3 = st.columns(3)
         with _pl_c1:
@@ -3629,10 +3686,9 @@ def render_student_analysis_page():
                 )
             if st.button("➕ Add extension", key=f"an_ext_add_{student_id}", use_container_width=True):
                 if _an_ef and _an_et and _an_er.strip():
-                    _pl_exts = _pl_exts + [{"from": _an_ef.isoformat(), "to": _an_et.isoformat(), "reason": _an_er.strip()}]
-                    st.session_state[_ext_key_an] = _pl_exts
-                    st.success(f"✅ Extension added: {_an_ef.strftime('%-d %b')} – {_an_et.strftime('%-d %b %Y')}")
-                    st.rerun()
+                    if save_placement_extension_to_db(student_id, _an_ef.isoformat(), _an_et.isoformat(), _an_er.strip()):
+                        st.success(f"✅ Extension added: {_an_ef.strftime('%-d %b')} – {_an_et.strftime('%-d %b %Y')}")
+                        st.rerun()
                 else:
                     st.error("Please complete all three fields.")
 
@@ -4394,7 +4450,7 @@ def render_student_analysis_page():
     # ── Placement phase analysis ──────────────────────────────────────────────
     _pl_start_str = st.session_state.get(f"pl_start_an_{student_id}") or student.get("placement_start")
     _pl_end_str   = st.session_state.get(f"pl_end_an_{student_id}")   or student.get("placement_end")
-    _pl_exts_an   = st.session_state.get(f"placement_extensions_{student_id}", [])
+    _pl_exts_an   = load_placement_extensions_from_db(student_id)
     if _pl_start_str and not full_df.empty:
         import datetime as _pldt
         _pl_s = datetime.fromisoformat(_pl_start_str).date()
@@ -6241,19 +6297,22 @@ def render_student_analysis_page():
 
     combined = []
     for i in reg_incidents:
+        _rdate = i.get("date", "")
+        _no_date_flag = "⚠️ NO DATE  " if not _rdate else ""
         combined.append({
             "id": i["id"],
             "type": "regular",
-            "label": f"[REGULAR]  {i.get('date','?')}  {i.get('time','')[:5]}  |  {i.get('behaviour_type','—')}  |  Severity {i.get('severity','?')}  |  {i.get('location','—')}",
-            "date": i.get("date",""),
+            "label": f"{_no_date_flag}[REGULAR]  {_rdate or '(none)'}  {i.get('time','')[:5]}  |  {i.get('behaviour_type','—')}  |  Severity {i.get('severity','?')}  |  {i.get('location','—')}",
+            "date": _rdate,
         })
     for c in crit_incidents:
         primary = c.get("ABCH_primary", {}) if isinstance(c.get("ABCH_primary"), dict) else {}
         created = (c.get("created_at","") or "")[:10]
+        _no_date_flag = "⚠️ NO DATE  " if not created else ""
         combined.append({
             "id": c["id"],
             "type": "critical",
-            "label": f"[CRITICAL]  {created}  {primary.get('time','')[:5]}  |  {primary.get('behaviour','Behaviour not recorded')[:50]}  |  {primary.get('location','—')}",
+            "label": f"{_no_date_flag}[CRITICAL]  {created or '(none)'}  {primary.get('time','')[:5]}  |  {primary.get('behaviour','Behaviour not recorded')[:50]}  |  {primary.get('location','—')}",
             "date": created,
         })
 
@@ -7292,8 +7351,7 @@ def render_admin_portal():
                             "Record any extensions to the original placement. "
                             "Extensions appear in the student's analysis alongside incident patterns."
                         )
-                        _adm_ext_key = f"placement_extensions_{student['id']}"
-                        _adm_exts    = st.session_state.get(_adm_ext_key, [])
+                        _adm_exts = load_placement_extensions_from_db(student['id'])
 
                         with st.form(f"ext_form_{student['id']}"):
                             _ae1, _ae2, _ae3 = st.columns([2, 2, 3])
@@ -7302,22 +7360,21 @@ def render_admin_portal():
                             with _ae3: _adm_er = st.text_input("Reason / context *", placeholder="e.g. Extended — positive progress", key=f"adm_er_{student['id']}")
                             if st.form_submit_button("➕ Add Extension"):
                                 if _adm_ef and _adm_et and _adm_er.strip():
-                                    _adm_exts = _adm_exts + [{"from": _adm_ef.isoformat(), "to": _adm_et.isoformat(), "reason": _adm_er.strip()}]
-                                    st.session_state[_adm_ext_key] = _adm_exts
-                                    st.success(f"✅ Extension added")
-                                    st.rerun()
+                                    if save_placement_extension_to_db(student['id'], _adm_ef.isoformat(), _adm_et.isoformat(), _adm_er.strip()):
+                                        st.success(f"✅ Extension added")
+                                        st.rerun()
                                 else: st.error("Complete all three fields.")
 
                         if _adm_exts:
-                            for _ei, _ex in enumerate(_adm_exts):
+                            for _ex in _adm_exts:
                                 try:
                                     _c1, _c2 = st.columns([5, 1])
                                     with _c1:
                                         st.markdown(f"📌 **{datetime.fromisoformat(_ex['from']).strftime('%-d %b %Y')} – {datetime.fromisoformat(_ex['to']).strftime('%-d %b %Y')}** — {_ex['reason']}")
                                     with _c2:
-                                        if st.button("❌", key=f"rm_ext_{student['id']}_{_ei}"):
-                                            st.session_state[_adm_ext_key] = [e for i, e in enumerate(_adm_exts) if i != _ei]
-                                            st.rerun()
+                                        if st.button("❌", key=f"rm_ext_{student['id']}_{_ex['id']}"):
+                                            if delete_placement_extension_from_db(_ex['id']):
+                                                st.rerun()
                                 except: pass
 
     with tab2:
