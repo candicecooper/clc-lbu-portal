@@ -511,14 +511,41 @@ WOT_DIRECTION_MAP = {
 }
 
 
-def build_window_of_tolerance_table(full_df) -> dict:
+def deidentify_context(text: str, subject_student_id=None) -> str:
+    """Replace known staff/peer first names in free text with a generic
+    role label, so the Context column reads as a general situation
+    rather than naming specific people. Uses the app's own known staff
+    and student names — matches whole words only, case-insensitive."""
+    if not text or not isinstance(text, str):
+        return text
+    result = text
+    for s in st.session_state.get("staff", []):
+        _first = (s.get("name") or "").split()[0] if s.get("name") else ""
+        if _first and len(_first) > 2:
+            result = re.sub(rf'\b{re.escape(_first)}\b', "a staff member", result, flags=re.IGNORECASE)
+    for stu in st.session_state.get("students", []):
+        if stu.get("id") == subject_student_id:
+            continue  # don't scrub the subject student's own name from their own record
+        _first = (stu.get("name") or "").split()[0] if stu.get("name") else ""
+        if _first and len(_first) > 2:
+            result = re.sub(rf'\b{re.escape(_first)}\b', "a peer", result, flags=re.IGNORECASE)
+    return result
+
+
+def build_window_of_tolerance_table(full_df, student_id=None) -> dict:
     """Group this student's incident data into the WoT Creator's 4
     dysregulation zones (the 'Window of Tolerance' zone itself is by
     definition regulated behaviour, which incident logs don't capture,
     so it's intentionally left for staff to complete directly in the
     Creator). Returns {zone_id: {"n", "context", "behaviour",
     "interventions"}} — each a short list of this student's most
-    frequent entries for that zone."""
+    frequent entries for that zone.
+
+    Context is de-identified (named peers/staff replaced with a generic
+    role) since it describes the surrounding situation, not this
+    student's own presentation. Behaviour keeps — and where a free-text
+    description exists, adds — the specific detail, since that's exactly
+    what should stay sharp and individual to this student."""
     if full_df is None or full_df.empty or "behaviour_type" not in full_df.columns:
         return {}
     _df = full_df.copy()
@@ -532,9 +559,26 @@ def build_window_of_tolerance_table(full_df) -> dict:
             return ", ".join(str(x) for x in v if x)
         return v
 
-    for _col in ("antecedent", "behaviour_type", "intervention"):
+    for _col in ("antecedent", "behaviour_type", "intervention", "description"):
         if _col in _df.columns:
             _df[_col] = _df[_col].apply(_flatten)
+
+    if "antecedent" in _df.columns:
+        _df["antecedent"] = _df["antecedent"].apply(lambda t: deidentify_context(t, student_id))
+
+    # Combine the canonical behaviour label with any free-text description
+    # for specificity — the label alone is a category, the description is
+    # what this student's presentation actually looks like.
+    if "description" in _df.columns:
+        def _combine_behaviour(row):
+            _lbl = row.get("behaviour_type") or ""
+            _desc = str(row.get("description") or "").strip()
+            if _desc:
+                return f"{_lbl} — {_desc}" if _lbl else _desc
+            return _lbl
+        _df["_behaviour_detail"] = _df.apply(_combine_behaviour, axis=1)
+    else:
+        _df["_behaviour_detail"] = _df["behaviour_type"]
 
     def _zone(row):
         direction = WOT_DIRECTION_MAP.get(row.get("behaviour_type"))
@@ -555,7 +599,7 @@ def build_window_of_tolerance_table(full_df) -> dict:
             continue
         _contexts = (_zdf["antecedent"].dropna().value_counts().head(5).index.tolist()
                      if "antecedent" in _zdf.columns else [])
-        _behaviours = _zdf["behaviour_type"].dropna().value_counts().head(5).index.tolist()
+        _behaviours = _zdf["_behaviour_detail"].dropna().value_counts().head(5).index.tolist()
         _interventions = []
         if "intervention" in _zdf.columns:
             _iv = _zdf["intervention"].dropna()
@@ -566,18 +610,20 @@ def build_window_of_tolerance_table(full_df) -> dict:
     return result
 
 
-def render_window_of_tolerance_table(full_df):
+def render_window_of_tolerance_table(full_df, student_id=None):
     """Streamlit UI for build_window_of_tolerance_table — one block per
     zone, each field in its own st.code() box so staff can use
     Streamlit's built-in copy-icon to paste straight into the Creator."""
-    wot_data = build_window_of_tolerance_table(full_df)
+    wot_data = build_window_of_tolerance_table(full_df, student_id=student_id)
     if not wot_data:
         st.info("Not enough classifiable incidents yet to draft a Window of Tolerance table. "
                 "This needs behaviour types that clearly indicate arousal direction (e.g. aggression, "
                 "elopement, shutdown, withdrawal) — 'Other' or ambiguous entries are left out on purpose.")
         return
     st.caption("Draft only — built from this student's logged behaviour types and severity. "
-               "Review before use; copy any line across into the Window of Tolerance Creator.")
+               "Context is de-identified (peers/staff shown by role, not name); Behaviour and "
+               "Interventions stay specific to this student. Review before use; copy any line "
+               "across into the Window of Tolerance Creator.")
     for z in WOT_ZONES:
         if z["id"] not in wot_data:
             continue
@@ -5956,7 +6002,7 @@ def render_student_analysis_page():
 
     st.markdown("---")
     st.markdown("### 🪟 Window of Tolerance — Draft from This Student's Data")
-    render_window_of_tolerance_table(full_df)
+    render_window_of_tolerance_table(full_df, student_id=student_id)
 
     st.markdown("---")
 
