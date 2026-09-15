@@ -532,6 +532,34 @@ def deidentify_context(text: str, subject_student_id=None) -> str:
     return result
 
 
+def generate_single_incident_docx(print_data: dict, incident_type: str, student_name: str):
+    """Simple one-page printable/downloadable summary of a single incident
+    — for staff who need to print one record's details or hand it to
+    someone outside the portal."""
+    from docx import Document
+    from docx.shared import Pt, Cm
+    doc = Document()
+    sec = doc.sections[0]
+    sec.page_width, sec.page_height = Cm(21), Cm(29.7)
+    sec.left_margin = sec.right_margin = sec.top_margin = sec.bottom_margin = Cm(2)
+    doc.add_heading(f"Incident Summary — {student_name}", level=1)
+    _type_label = "Critical Incident (ABCH)" if incident_type == "critical" else "Regular Incident"
+    p = doc.add_paragraph()
+    p.add_run("Record type: ").bold = True
+    p.add_run(_type_label)
+    doc.add_paragraph("")
+    for label, value in print_data.items():
+        p = doc.add_paragraph()
+        p.add_run(f"{label}: ").bold = True
+        p.add_run(str(value) if value not in (None, "") else "—")
+    p_footer = doc.add_paragraph()
+    p_footer.add_run(f"\nPrinted from CLC-LBU Behaviour Support Tool — {datetime.now().strftime('%d/%m/%Y %H:%M')}").italic = True
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf
+
+
 def build_window_of_tolerance_table(full_df, student_id=None) -> dict:
     """Group this student's incident data into the WoT Creator's 4
     dysregulation zones (the 'Window of Tolerance' zone itself is by
@@ -572,7 +600,11 @@ def build_window_of_tolerance_table(full_df, student_id=None) -> dict:
     if "description" in _df.columns:
         def _combine_behaviour(row):
             _lbl = row.get("behaviour_type") or ""
-            _desc = str(row.get("description") or "").strip()
+            _desc_raw = row.get("description")
+            # pd.isna() correctly catches NaN/None; a plain "or ''" check
+            # doesn't, because NaN is truthy in Python — that produced the
+            # literal text "nan" appearing whenever description was blank.
+            _desc = "" if pd.isna(_desc_raw) else str(_desc_raw).strip()
             if _desc:
                 return f"{_lbl} — {_desc}" if _lbl else _desc
             return _lbl
@@ -6333,6 +6365,162 @@ def render_student_analysis_page():
             "at the top of this analysis page — the recommendations here will automatically update.</p></div>",
             unsafe_allow_html=True
         )
+
+    st.markdown("---")
+    st.markdown("### 👁️ View, Edit & Print an Incident")
+    st.caption("Look up any single incident for this student, correct details (e.g. a wrong date), and print or download a summary.")
+
+    _ve_reg  = [i for i in st.session_state.incidents if i["student_id"] == student_id]
+    _ve_crit = [c for c in st.session_state.critical_incidents if c["student_id"] == student_id]
+    _ve_combined = []
+    for i in _ve_reg:
+        _rdate = i.get("date", "")
+        _flag = "⚠️ NO DATE  " if not _rdate else ""
+        _ve_combined.append({
+            "id": i["id"], "type": "regular", "date": _rdate,
+            "label": f"{_flag}[REGULAR]  {_rdate or '(none)'}  {i.get('time','')[:5]}  |  "
+                     f"{i.get('behaviour_type','—')}  |  Severity {i.get('severity','?')}",
+        })
+    for c in _ve_crit:
+        _primary_lbl = c.get("ABCH_primary", {}) if isinstance(c.get("ABCH_primary"), dict) else {}
+        _created = (c.get("created_at", "") or "")[:10]
+        _flag = "⚠️ NO DATE  " if not _created else ""
+        _ve_combined.append({
+            "id": c["id"], "type": "critical", "date": _created,
+            "label": f"{_flag}[CRITICAL]  {_created or '(none)'}  {_primary_lbl.get('time','')[:5]}  |  "
+                     f"{_primary_lbl.get('behaviour','Behaviour not recorded')[:50]}",
+        })
+
+    if not _ve_combined:
+        st.info("No incidents on record for this student yet.")
+    else:
+        _ve_sorted = sorted(_ve_combined, key=lambda x: x["date"], reverse=True)
+        _ve_options = {item["label"]: item for item in _ve_sorted}
+        _ve_selected_label = st.selectbox(
+            f"Select incident to view/edit ({len(_ve_combined)} total)",
+            list(_ve_options.keys()), key="view_edit_incident_select",
+        )
+        _ve_item = _ve_options[_ve_selected_label]
+        _ve_id, _ve_type = _ve_item["id"], _ve_item["type"]
+        _ve_record = next((i for i in _ve_reg if i["id"] == _ve_id), None) if _ve_type == "regular" \
+            else next((c for c in _ve_crit if c["id"] == _ve_id), None)
+
+        _ve_print_data = {}
+
+        if _ve_record and _ve_type == "regular":
+            _beh_opts = [b for b in BEHAVIOUR_TYPES if not b.startswith("---")]
+            _ant_opts = [a for a in ANTECEDENTS if not a.startswith("---")]
+            with st.form(f"edit_reg_{_ve_id}"):
+                ec1, ec2, ec3 = st.columns(3)
+                with ec1:
+                    _ve_date_val = None
+                    if _ve_record.get("date"):
+                        try: _ve_date_val = datetime.fromisoformat(_ve_record["date"]).date()
+                        except Exception: pass
+                    _e_date = st.date_input("Date", value=_ve_date_val, key=f"e_date_{_ve_id}")
+                    _e_time = st.text_input("Time (HH:MM:SS)", value=_ve_record.get("time","") or "", key=f"e_time_{_ve_id}")
+                with ec2:
+                    _e_loc = st.text_input("Location", value=_ve_record.get("location","") or "", key=f"e_loc_{_ve_id}")
+                    _sess_opts = ["Morning", "Middle", "Afternoon"]
+                    _e_sess = st.selectbox("Session", _sess_opts,
+                        index=_sess_opts.index(_ve_record.get("session")) if _ve_record.get("session") in _sess_opts else 0,
+                        key=f"e_sess_{_ve_id}")
+                with ec3:
+                    _e_sev = st.slider("Severity", 1, 5, int(_ve_record.get("severity") or 3), key=f"e_sev_{_ve_id}")
+                    _e_beh = st.selectbox("Behaviour Type", _beh_opts,
+                        index=_beh_opts.index(_ve_record.get("behaviour_type")) if _ve_record.get("behaviour_type") in _beh_opts else 0,
+                        key=f"e_beh_{_ve_id}")
+                _e_ant = st.selectbox("Antecedent", _ant_opts,
+                    index=_ant_opts.index(_ve_record.get("antecedent")) if _ve_record.get("antecedent") in _ant_opts else 0,
+                    key=f"e_ant_{_ve_id}")
+                _e_desc = st.text_area("Description / Notes", value=_ve_record.get("description","") or "", key=f"e_desc_{_ve_id}")
+                _ve_interv_current = _ve_record.get("intervention")
+                _e_interv = st.text_input(
+                    "Intervention(s) — comma separated",
+                    value=", ".join(_ve_interv_current) if isinstance(_ve_interv_current, list) else (_ve_interv_current or ""),
+                    key=f"e_interv_{_ve_id}",
+                )
+                if st.form_submit_button("💾 Save Changes", type="primary"):
+                    _updated = dict(_ve_record)
+                    _updated.update({
+                        "date": _e_date.isoformat() if _e_date else None,
+                        "time": _e_time, "location": _e_loc, "session": _e_sess,
+                        "severity": _e_sev, "behaviour_type": _e_beh, "antecedent": _e_ant,
+                        "description": _e_desc,
+                        "intervention": [s.strip() for s in _e_interv.split(",") if s.strip()],
+                        "db_exists": True,
+                    })
+                    if save_incident_to_db(_updated):
+                        st.session_state.incidents = load_incidents_from_db()
+                        st.session_state.critical_incidents = load_critical_incidents_from_db()
+                        st.success("✅ Incident updated.")
+                        st.rerun()
+            _ve_print_data = {
+                "Date": _ve_record.get("date") or "—", "Time": _ve_record.get("time") or "—",
+                "Location": _ve_record.get("location") or "—", "Session": _ve_record.get("session") or "—",
+                "Behaviour Type": _ve_record.get("behaviour_type") or "—",
+                "Antecedent": _ve_record.get("antecedent") or "—",
+                "Severity": _ve_record.get("severity") or "—",
+                "Intervention": ", ".join(_ve_interv_current) if isinstance(_ve_interv_current, list) else (_ve_interv_current or "—"),
+                "Description": _ve_record.get("description") or "—",
+            }
+
+        elif _ve_record and _ve_type == "critical":
+            _primary = _ve_record.get("ABCH_primary", {}) if isinstance(_ve_record.get("ABCH_primary"), dict) else {}
+            with st.form(f"edit_crit_{_ve_id}"):
+                ec1, ec2, ec3 = st.columns(3)
+                with ec1:
+                    _ve_cdate_val = None
+                    if _ve_record.get("created_at"):
+                        try: _ve_cdate_val = datetime.fromisoformat(_ve_record["created_at"][:10]).date()
+                        except Exception: pass
+                    _e_cdate = st.date_input("Date", value=_ve_cdate_val, key=f"e_cdate_{_ve_id}")
+                    _e_ctime = st.text_input("Time", value=_primary.get("time","") or "", key=f"e_ctime_{_ve_id}")
+                with ec2:
+                    _e_cloc = st.text_input("Location", value=_primary.get("location","") or "", key=f"e_cloc_{_ve_id}")
+                    _e_csev = st.slider("Severity", 1, 5, int(_ve_record.get("severity") or 3), key=f"e_csev_{_ve_id}")
+                with ec3:
+                    _e_sapol = st.text_input("SAPOL Reference", value=_ve_record.get("sapol_reference") or "", key=f"e_sapol_{_ve_id}")
+                _e_ctx = st.text_area("Antecedent / Context", value=_primary.get("context","") or "", key=f"e_cctx_{_ve_id}")
+                _e_cbeh = st.text_area("Behaviour", value=_primary.get("behaviour","") or "", key=f"e_cbeh_{_ve_id}")
+                _e_ccons = st.text_area("Consequence / Response", value=_primary.get("consequence","") or "", key=f"e_ccons_{_ve_id}")
+                _e_notes = st.text_area("Admin Summary / Notes", value=_ve_record.get("admin_summary","") or "", key=f"e_cnotes_{_ve_id}")
+                if st.form_submit_button("💾 Save Changes", type="primary"):
+                    _update_payload = {
+                        "created_at": f"{_e_cdate.isoformat()}T00:00:00" if _e_cdate else None,
+                        "primary_time": _e_ctime, "primary_location": _e_cloc,
+                        "primary_context": _e_ctx, "primary_behaviour": _e_cbeh,
+                        "primary_consequence": _e_ccons, "severity": _e_csev,
+                        "sapol_reference": _e_sapol or None, "admin_summary": _e_notes,
+                    }
+                    try:
+                        supabase.table("critical_incidents").update(_update_payload).eq("id", _ve_id).execute()
+                        st.session_state.incidents = load_incidents_from_db()
+                        st.session_state.critical_incidents = load_critical_incidents_from_db()
+                        st.success("✅ Critical incident updated.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Update failed: {e}")
+            _ve_print_data = {
+                "Date": (_ve_record.get("created_at","") or "")[:10] or "—",
+                "Time": _primary.get("time") or "—", "Location": _primary.get("location") or "—",
+                "Antecedent / Context": _primary.get("context") or "—",
+                "Behaviour": _primary.get("behaviour") or "—",
+                "Consequence": _primary.get("consequence") or "—",
+                "Severity": _ve_record.get("severity") or "—",
+                "SAPOL Reference": _ve_record.get("sapol_reference") or "—",
+                "Notes": _ve_record.get("admin_summary") or "—",
+            }
+
+        if _ve_print_data:
+            st.markdown("")
+            _print_buf = generate_single_incident_docx(_ve_print_data, _ve_type, student["name"])
+            st.download_button(
+                "🖨️ Download Printable Summary (Word)", _print_buf,
+                file_name=f"Incident_{student['name'].replace(' ', '_')}_{_ve_item.get('date') or 'nodate'}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                key=f"print_dl_{_ve_id}",
+            )
 
     st.markdown("---")
     st.markdown("### 🗑️ Delete an Incident")
