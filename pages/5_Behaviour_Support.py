@@ -8533,15 +8533,29 @@ def render_support_plan_page():
                    + (f" on {_plan['last_updated_at'][:16].replace('T',' ')}" if _plan.get("last_updated_at") else ""))
 
     st.markdown("---")
-    if st.button("📥 Generate Downloadable Plan (Word)", key="sp_download_btn"):
-        _sp_docx = generate_support_plan_docx(
-            student, _plan, _sp_target_behaviours, _sp_function, _sp_triggers, _sp_strategies, _sp_monitoring)
-        st.download_button(
-            "📄 Download Behaviour Support Plan (Word)", _sp_docx,
-            file_name=f"BSP_{student['name'].replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            key="sp_download_dl",
-        )
+    _dl_col1, _dl_col2 = st.columns(2)
+    with _dl_col1:
+        if st.button("📥 Generate Full Plan (Word)", key="sp_download_btn", use_container_width=True):
+            _sp_docx = generate_support_plan_docx(
+                student, _plan, _sp_target_behaviours, _sp_function, _sp_triggers, _sp_strategies, _sp_monitoring)
+            st.download_button(
+                "📄 Download Behaviour Support Plan (Word)", _sp_docx,
+                file_name=f"BSP_{student['name'].replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                key="sp_download_dl",
+            )
+    with _dl_col2:
+        if st.button("🧒 Generate Student-Friendly Version (Word)", key="sp_kid_btn", use_container_width=True):
+            _sp_kid_docx = generate_student_friendly_plan_docx(student, _plan, _sp_strategies)
+            st.download_button(
+                "📄 Download My Plan (Word)", _sp_kid_docx,
+                file_name=f"MyPlan_{student['name'].replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                key="sp_kid_dl",
+            )
+    st.caption("The student-friendly version pulls from the same saved plan, kept short and in plain "
+               "language, and leaves out anything clinical (hypothesis, triggers, escalation/safety "
+               "protocols) that belongs in the staff version only.")
 
 
 def generate_support_plan_docx(student, plan, target_behaviours, function_text, triggers, strategies, monitoring_text):
@@ -8593,6 +8607,82 @@ def generate_support_plan_docx(student, plan, target_behaviours, function_text, 
 
     p_footer = doc.add_paragraph()
     p_footer.add_run(f"\nGenerated from CLC-LBU Behaviour Support Tool — {datetime.now().strftime('%d/%m/%Y %H:%M')}").italic = True
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf
+
+
+def _first_lines(text: str, max_items: int = 3) -> list[str]:
+    """Break staff-written text into a few short standalone lines,
+    splitting on newlines/semicolons/sentence breaks and capping the
+    count — a deterministic way to keep the student-facing version
+    brief without rewriting anyone's actual words."""
+    if not text or not isinstance(text, str):
+        return []
+    _raw = text.replace("•", "\n").replace(";", "\n")
+    _lines = [l.strip(" -\n\t") for l in re.split(r'\n|(?<=[.!?])\s+', _raw) if l.strip(" -\n\t")]
+    return _lines[:max_items]
+
+
+def generate_student_friendly_plan_docx(student, plan, strategies):
+    """A short, plain-language version of the same saved plan, for the
+    student themselves. Deliberately leaves out anything clinical
+    (possible function, triggers, escalation/safety protocols) — those
+    stay in the staff version. Content is the same words staff wrote,
+    just trimmed to a few short lines per section rather than rewritten,
+    so nothing appears here that a real person didn't actually say."""
+    from docx import Document
+    from docx.shared import Pt, Cm
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    doc = Document()
+    sec = doc.sections[0]
+    sec.page_width, sec.page_height = Cm(21), Cm(29.7)
+    sec.left_margin = sec.right_margin = sec.top_margin = sec.bottom_margin = Cm(2.5)
+
+    title = doc.add_heading("My Plan", level=0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    sub = doc.add_paragraph(student["name"])
+    sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    sub.runs[0].font.size = Pt(16)
+    doc.add_paragraph("")
+
+    def _simple_section(heading, lines, italic=False):
+        if not lines:
+            return
+        h = doc.add_heading(heading, level=1)
+        for r in h.runs:
+            r.font.size = Pt(18)
+        for line in lines:
+            p = doc.add_paragraph(line if italic else f"•  {line}")
+            for r in p.runs:
+                r.font.size = Pt(14)
+                if italic:
+                    r.font.italic = True
+        doc.add_paragraph("")
+
+    _about_me = _first_lines(plan.get("strengths"), 3) + _first_lines(plan.get("interests"), 2)
+    _simple_section("🌟 About Me", _about_me)
+
+    _helps_me = (
+        _first_lines(plan.get("proactive_strategies_additional"), 2)
+        + _first_lines(plan.get("adjustments_supports"), 2)
+        + [s["strategy"] for s in (strategies or [])[:2]]
+    )
+    _simple_section("💪 Things That Help Me", _helps_me[:4])
+
+    _simple_section("🎯 My Goals", _first_lines(plan.get("short_term_goals"), 3))
+
+    _simple_section("🗣️ In My Own Words", _first_lines(plan.get("student_voice"), 4), italic=True)
+
+    doc.add_paragraph("")
+    p_note = doc.add_paragraph(
+        f"This is a simple version of a bigger plan that {student['name']}'s teachers and support "
+        "staff keep. Ask a trusted adult if you want to know more or talk about anything in it."
+    )
+    p_note.runs[0].font.size = Pt(11)
+    p_note.runs[0].font.italic = True
+
     buf = BytesIO()
     doc.save(buf)
     buf.seek(0)
