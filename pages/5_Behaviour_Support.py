@@ -479,6 +479,114 @@ def render_bsem_recommendations(items: list[dict], key_prefix: str):
                     st.caption("Implementation detail unavailable right now — the strategy above is still valid to trial.")
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# WINDOW OF TOLERANCE — DRAFT TABLE FROM INCIDENT DATA
+# Maps this tool's incident records into the same 5-zone structure used by
+# the standalone Window of Tolerance Creator, so staff get a data-informed
+# starting draft to review and copy across, rather than starting blank.
+# ══════════════════════════════════════════════════════════════════════════
+WOT_ZONES = [
+    {"id": "hyper",      "label": "Mobilisation — Hyperarousal",                    "color": "#AF3A2C"},
+    {"id": "copingup",   "label": "Coping Mechanisms — moving toward Hyperarousal", "color": "#B9761A"},
+    {"id": "copingdown", "label": "Coping Mechanisms — moving toward Hypoarousal",  "color": "#2A6693"},
+    {"id": "hypo",       "label": "Immobilisation — Hypoarousal",                   "color": "#3C4C6B"},
+]
+
+# Behaviour type -> arousal direction ("up" toward hyperarousal/fight-flight,
+# "down" toward hypoarousal/shutdown-freeze). Severity then decides which of
+# the two bands on that side a given incident sits in. Types not listed here
+# (e.g. "Other") are left unclassified and excluded from the draft table —
+# this is a starting point for staff judgement, not a final answer.
+WOT_DIRECTION_MAP = {
+    "Physical aggression toward peer": "up", "Physical aggression toward adult": "up",
+    "Threatening behaviour": "up", "Property destruction": "up", "Throwing objects": "up",
+    "Unsanctioned departure (elopement)": "up", "Absconding from school grounds": "up",
+    "Self-injurious behaviour": "up", "Verbal aggression toward peer": "up",
+    "Verbal aggression toward adult": "up", "Property misuse or interference": "up",
+    "Disruptive verbal commentary": "up", "Interrupting / calling out": "up",
+    "Inappropriate vocalisation / noises": "up", "Verbal refusal of instruction": "up",
+    "Dysregulated emotional expression": "up",
+    "Task refusal / passive non-compliance": "down", "Shutdown / complete withdrawal": "down",
+    "Selective mutism / non-responsiveness": "down", "Hiding or avoiding adult proximity": "down",
+}
+
+
+def build_window_of_tolerance_table(full_df) -> dict:
+    """Group this student's incident data into the WoT Creator's 4
+    dysregulation zones (the 'Window of Tolerance' zone itself is by
+    definition regulated behaviour, which incident logs don't capture,
+    so it's intentionally left for staff to complete directly in the
+    Creator). Returns {zone_id: {"n", "context", "behaviour",
+    "interventions"}} — each a short list of this student's most
+    frequent entries for that zone."""
+    if full_df is None or full_df.empty or "behaviour_type" not in full_df.columns:
+        return {}
+    _df = full_df.copy()
+    _df["severity"] = pd.to_numeric(_df.get("severity", 3), errors="coerce").fillna(3)
+
+    def _zone(row):
+        direction = WOT_DIRECTION_MAP.get(row.get("behaviour_type"))
+        if direction is None:
+            return None
+        if direction == "up":
+            return "hyper" if row["severity"] >= 4 else "copingup"
+        return "hypo" if row["severity"] >= 4 else "copingdown"
+
+    _df["_wot_zone"] = _df.apply(_zone, axis=1)
+    _df = _df.dropna(subset=["_wot_zone"])
+    if _df.empty:
+        return {}
+    result = {}
+    for z in WOT_ZONES:
+        _zdf = _df[_df["_wot_zone"] == z["id"]]
+        if _zdf.empty:
+            continue
+        _contexts = (_zdf["antecedent"].dropna().value_counts().head(5).index.tolist()
+                     if "antecedent" in _zdf.columns else [])
+        _behaviours = _zdf["behaviour_type"].dropna().value_counts().head(5).index.tolist()
+        _interventions = []
+        if "intervention" in _zdf.columns:
+            _iv = _zdf["intervention"].dropna()
+            _iv = _iv[_iv.astype(str).str.strip() != ""]
+            _interventions = _iv.value_counts().head(5).index.tolist()
+        result[z["id"]] = {"n": len(_zdf), "context": _contexts,
+                            "behaviour": _behaviours, "interventions": _interventions}
+    return result
+
+
+def render_window_of_tolerance_table(full_df):
+    """Streamlit UI for build_window_of_tolerance_table — one block per
+    zone, each field in its own st.code() box so staff can use
+    Streamlit's built-in copy-icon to paste straight into the Creator."""
+    wot_data = build_window_of_tolerance_table(full_df)
+    if not wot_data:
+        st.info("Not enough classifiable incidents yet to draft a Window of Tolerance table. "
+                "This needs behaviour types that clearly indicate arousal direction (e.g. aggression, "
+                "elopement, shutdown, withdrawal) — 'Other' or ambiguous entries are left out on purpose.")
+        return
+    st.caption("Draft only — built from this student's logged behaviour types and severity. "
+               "Review before use; copy any line across into the Window of Tolerance Creator.")
+    for z in WOT_ZONES:
+        if z["id"] not in wot_data:
+            continue
+        zd = wot_data[z["id"]]
+        st.markdown(
+            f"<div style='border-left:5px solid {z['color']};padding:0.3rem 0.9rem;margin:0.6rem 0 0.2rem;'>"
+            f"<b style='color:{z['color']};'>{z['label']}</b> — {zd['n']} incident(s)</div>",
+            unsafe_allow_html=True,
+        )
+        _wcol1, _wcol2, _wcol3 = st.columns(3)
+        with _wcol1:
+            st.caption("Context")
+            st.code("\n".join(zd["context"]) or "—", language=None)
+        with _wcol2:
+            st.caption("Behaviour")
+            st.code("\n".join(zd["behaviour"]) or "—", language=None)
+        with _wcol3:
+            st.caption("Interventions")
+            st.code("\n".join(zd["interventions"]) or "— none logged for this zone —", language=None)
+
+
 def build_considerations(full_df, top_ant, top_loc, top_session) -> list[str]:
     """Deterministic 'things to consider' prompts — alternative or
     structural explanations to weigh before treating a data pattern as
@@ -5749,6 +5857,10 @@ def render_student_analysis_page():
             st.markdown(f"- {_c}")
 
     st.markdown("---")
+    st.markdown("### 🪟 Window of Tolerance — Draft from This Student's Data")
+    render_window_of_tolerance_table(full_df)
+
+    st.markdown("---")
 
     # ══════════════════════════════════════════════════════════════════════════
     # ANTECEDENT CATEGORY BREAKDOWN CHART
@@ -6183,10 +6295,13 @@ def render_student_analysis_page():
                     else:
                         deleted = True
                     if deleted:
-                        if selected_type == "regular":
-                            st.session_state.incidents = [i for i in st.session_state.incidents if i["id"] != selected_id]
-                        else:
-                            st.session_state.critical_incidents = [c for c in st.session_state.critical_incidents if c["id"] != selected_id]
+                        # Explicitly reload fresh from the database rather than
+                        # filtering the in-memory list — guarantees the removed
+                        # incident is actually gone everywhere it's counted
+                        # (program roster, dashboard, analysis), with no
+                        # dependency on an in-memory id-match succeeding.
+                        st.session_state.incidents = load_incidents_from_db()
+                        st.session_state.critical_incidents = load_critical_incidents_from_db()
                         for k in [confirm_key, confirm2_key, f"confirm_chk_{selected_id}"]:
                             st.session_state.pop(k, None)
                         st.success("✅ Incident permanently deleted and removed from the data set.")
@@ -6469,6 +6584,9 @@ def render_student_dashboard():
     if not student:
         st.error("No student selected"); return
     st.markdown(f"## 📊 Dashboard — {student['name']}")
+    if st.session_state.get("hist_incident_just_saved"):
+        _saved_total = st.session_state.pop("hist_incident_just_saved")
+        st.success(f"✅ Historical incident saved — {student['name']} now has **{_saved_total}** incident(s) on record.")
     col1, col2, col3 = st.columns([2, 1, 1])
     with col1:
         if st.button("⬅ Back to Students", key="back_dash"):
@@ -6966,7 +7084,11 @@ def render_student_dashboard():
                     # immediately, with no dependency on rerun ordering.
                     st.session_state.incidents = load_incidents_from_db()
                     st.session_state.critical_incidents = load_critical_incidents_from_db()
-                    st.success(f"✅ Saved to {student['name']}'s record! Refreshing...")
+                    _new_total = (
+                        len([i for i in st.session_state.incidents if i["student_id"] == student_id])
+                        + len([c for c in st.session_state.critical_incidents if c["student_id"] == student_id])
+                    )
+                    st.session_state["hist_incident_just_saved"] = _new_total
                     st.rerun()
                 except Exception as e:
                     st.error(f"Error saving: {e}")
