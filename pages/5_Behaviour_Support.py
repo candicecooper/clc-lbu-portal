@@ -3889,6 +3889,13 @@ def render_student_analysis_page():
                 crit_df[_col] = crit_df["ABCH_primary"].apply(lambda d: d.get(_col, "") if isinstance(d, dict) else "")
 
     full_df = pd.concat([quick_df, crit_df], ignore_index=True).sort_values("date_parsed")
+    # Drop any record with an unparseable/missing date — a handful of charts
+    # below call .strftime() on date_parsed directly, which crashes on NaT
+    # (pandas' null timestamp). A record with no valid date can't be
+    # meaningfully plotted by date anyway.
+    _dropped_nat = int(full_df["date_parsed"].isna().sum()) if "date_parsed" in full_df.columns else 0
+    if _dropped_nat > 0:
+        full_df = full_df.dropna(subset=["date_parsed"])
     if "time" not in full_df.columns:
         full_df["time"] = "09:00:00"
     else:
@@ -3911,6 +3918,9 @@ def render_student_analysis_page():
     crit_only_df = full_df[full_df['incident_type'] == 'Critical'].copy() if 'Critical' in full_df['incident_type'].values else pd.DataFrame()
 
     st.markdown("### 📈 Executive Summary")
+    if _dropped_nat > 0:
+        st.caption(f"⚠️ {_dropped_nat} record(s) had no valid date and were excluded from this analysis "
+                   f"— worth checking those entries in the Document Archive or incident log for a missing date.")
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1: st.metric("Total", len(full_df))
     with col2: st.metric("Critical", len(full_df[full_df["incident_type"] == "Critical"]))
@@ -3930,6 +3940,8 @@ def render_student_analysis_page():
         quick_only_df.assign(_type="Regular") if not quick_only_df.empty else pd.DataFrame(),
         crit_only_df.assign(_type="Critical") if not crit_only_df.empty else pd.DataFrame(),
     ], ignore_index=True)
+    if not _all_daily.empty:
+        _all_daily = _all_daily.dropna(subset=["date_parsed"])
 
     fig1 = go.Figure()
     if not _all_daily.empty:
@@ -6946,11 +6958,15 @@ def render_student_dashboard():
                         "status": "historical", "audit_trail": "[]", "include_audit_in_report": False,
                     }
                     supabase.table("critical_incidents").insert(record).execute()
-                    st.success(f"✅ Saved to {student['name']}'s record!")
                     st.session_state["ai_extracted_incident"] = None
-                    for _key in ["critical_incidents", "incidents"]:
-                        if _key in st.session_state:
-                            del st.session_state[_key]
+                    # Explicitly refetch fresh data now, rather than deleting
+                    # the cache and relying on init_state()'s lazy-load guard
+                    # to correctly repopulate it on the next run — this
+                    # guarantees the dashboard reflects the new incident
+                    # immediately, with no dependency on rerun ordering.
+                    st.session_state.incidents = load_incidents_from_db()
+                    st.session_state.critical_incidents = load_critical_incidents_from_db()
+                    st.success(f"✅ Saved to {student['name']}'s record! Refreshing...")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Error saving: {e}")
