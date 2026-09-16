@@ -296,6 +296,87 @@ BSEM_STRATEGY_LIBRARY = {
 }
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# BEHAVIOUR REFRAME — trauma-informed / neurodivergent-affirming lens
+# Reframes a canonical behaviour label away from "the student is choosing
+# to be difficult" toward what's more likely actually happening
+# neurologically/developmentally. General, well-established trauma-
+# informed and neurodiversity-affirming concepts, not a diagnosis for any
+# individual student — a starting lens for staff, to be read alongside
+# clinical judgement, not instead of it.
+# ══════════════════════════════════════════════════════════════════════════
+BEHAVIOUR_REFRAME = {
+    "Verbal refusal of instruction": "Often reflects a felt loss of control, or a demand that feels unsafe or overwhelming in the moment — not a wish to be defiant.",
+    "Task refusal / passive non-compliance": "May reflect executive-function load, perceived risk of failure, or sensory overwhelm rather than unwillingness to comply.",
+    "Physical aggression toward peer": "A fight response from a nervous system that has moved into survival mode — the priority is safety and de-escalation, not the 'why' in the moment.",
+    "Physical aggression toward adult": "Same as above — a fight-stage survival response, not a considered choice made with full access to reasoning.",
+    "Threatening behaviour": "Often a warning sign the nervous system is close to its threshold, an attempt to create distance or safety — though it must still be taken seriously and responded to safely.",
+    "Property destruction": "A release of overwhelming internal arousal directed at an object rather than a person — often safer than it looks.",
+    "Throwing objects": "A physical release of energy the body can't otherwise discharge in the moment.",
+    "Unsanctioned departure (elopement)": "A flight response — moving away from an overwhelming environment, often the only escape route available to a dysregulated nervous system.",
+    "Absconding from school grounds": "An extension of the same flight response, at higher intensity.",
+    "Self-injurious behaviour": "Can be a way of regulating overwhelming internal sensation, or a communication of distress when other channels feel unavailable.",
+    "Shutdown / complete withdrawal": "A freeze response — the nervous system going into shutdown as a protective strategy, not disengagement by choice.",
+    "Selective mutism / non-responsiveness": "Consistent with a freeze response, or for some neurodivergent students a genuine, situational loss of verbal access under stress.",
+    "Hiding or avoiding adult proximity": "May reflect a freeze/avoid response, or sensory and social avoidance common in autism.",
+    "Verbal aggression toward peer": "Often a release of built-up frustration or dysregulation rather than a considered social choice.",
+    "Verbal aggression toward adult": "Usually reflects dysregulation in the moment, not a stable judgement about the adult.",
+    "Property misuse or interference": "Can reflect sensory-seeking or a need for control/predictability rather than deliberate disruption.",
+    "Disruptive verbal commentary": "Can reflect impulsivity (common in ADHD) or an attempt to self-regulate out loud, rather than intentional disruption.",
+    "Interrupting / calling out": "Often impulsivity-driven — reduced inhibitory control rather than rudeness, common in ADHD presentations.",
+    "Inappropriate vocalisation / noises": "May be a self-regulatory or stimming behaviour common in neurodivergence rather than attention-seeking.",
+    "Dysregulated emotional expression": "A visible sign the student's regulatory capacity has been exceeded in that moment.",
+}
+
+# ══════════════════════════════════════════════════════════════════════════
+# CPI VERBAL ESCALATION CONTINUUM
+# CPI's continuum tracks rising verbal defiance through five stages. It
+# describes verbal/behavioural escalation specifically — physical
+# aggression, elopement, and shutdown/freeze presentations sit outside
+# it (physical aggression belongs to CPI's broader Crisis Development
+# Model rather than the verbal continuum; shutdown/freeze is the opposite
+# pole entirely). Mapped here in general terms — always apply CPI training
+# and in-the-moment clinical judgement over an automatic label.
+# ══════════════════════════════════════════════════════════════════════════
+CPI_STAGE_MAP = {
+    "Verbal refusal of instruction": "Refusal",
+    "Task refusal / passive non-compliance": "Refusal",
+    "Disruptive verbal commentary": "Release",
+    "Interrupting / calling out": "Release",
+    "Inappropriate vocalisation / noises": "Release",
+    "Verbal aggression toward peer": "Release",
+    "Verbal aggression toward adult": "Release",
+    "Property misuse or interference": "Release",
+    "Dysregulated emotional expression": "Release",
+    "Property destruction": "Release",
+    "Throwing objects": "Release",
+    "Threatening behaviour": "Intimidation",
+}
+
+CPI_STAGES = {
+    "Questioning": {
+        "desc": "Asking questions that challenge authority or purpose — sometimes a genuine information request, sometimes a challenge disguised as one.",
+        "response": "Answer a genuine information question directly and matter-of-factly. If it's a challenging question aimed at your authority rather than real information, redirect calmly back to the original request rather than getting drawn into a debate.",
+    },
+    "Refusal": {
+        "desc": "Non-compliance — saying no, or passively refusing to follow an instruction.",
+        "response": "Set a clear, simple limit and offer a genuine choice within it. Avoid repeating the same instruction on a loop, and avoid a power struggle — state it once, calmly, and allow processing time.",
+    },
+    "Release": {
+        "desc": "Releasing built-up energy through venting — raised voice, swearing, crying, or object-directed release not aimed at hurting anyone.",
+        "response": "Allow the release to happen safely and remove the audience if possible. Don't try to reason, problem-solve, or debrief while they're venting — wait for the energy to visibly drop first.",
+    },
+    "Intimidation": {
+        "desc": "Verbal or nonverbal threats aimed at a specific person, or general intimidation.",
+        "response": "Take the threat seriously and seek additional staff support. Stay calm and neutral — don't respond in kind, argue, or make counter-threats.",
+    },
+    "Tension Reduction": {
+        "desc": "The point after the peak where energy visibly starts dropping.",
+        "response": "This is the window for reconnection and repair — not before. Debrief once the student is genuinely calm, not immediately after the peak.",
+    },
+}
+
+
 def _top_categories(full_df, n: int = 2) -> list[str]:
     """Return the n most frequent antecedent categories present in
     full_df, computing the category column if it isn't already there."""
@@ -856,6 +937,113 @@ def find_combined_patterns(full_df, min_count: int = 3, min_pct: float = 0.2) ->
         if len(combos) >= 2:
             break
     return combos
+
+
+def render_analysis_snapshot(student, full_df, student_id):
+    """A condensed, one-screen view of the key findings for this student —
+    an alternative to the full detailed Analysis page for anyone who just
+    wants the headline picture without the full set of charts. Reuses
+    the same underlying logic as the full page (hypothesis, combined
+    patterns, BSEM strategies) so the two views can never disagree with
+    each other."""
+    st.markdown(f"## 🔎 Snapshot — {student['name']}")
+    st.caption("The headline findings only. Switch to Full Analysis for every chart and detail behind these.")
+
+    if full_df.empty:
+        st.info("No incidents logged yet for this student.")
+        return
+
+    top_beh     = full_df["behaviour_type"].mode()[0] if len(full_df) else "Unknown"
+    top_ant     = full_df["antecedent"].mode()[0] if len(full_df) else "Unknown"
+    top_loc     = full_df["location"].mode()[0] if len(full_df) else "Unknown"
+    top_session = full_df["session"].mode()[0] if len(full_df) else "Unknown"
+
+    m1, m2, m3, m4 = st.columns(4)
+    with m1: st.metric("Total Incidents", len(full_df))
+    with m2: st.metric("Critical", len(full_df[full_df.get("incident_type", "Quick") == "Critical"]))
+    with m3: st.metric("Avg Severity", f"{full_df['severity'].mean():.1f}" if "severity" in full_df.columns else "—")
+    with m4:
+        _direction = "—"
+        if len(full_df) >= 5:
+            _r_avg = full_df.tail(5)["severity"].mean()
+            _e_avg = full_df.head(5)["severity"].mean()
+            _direction = "🟢 Reducing" if _r_avg < _e_avg else "🔴 Increasing" if _r_avg > _e_avg else "🟡 Stable"
+        st.metric("Severity Trend", _direction)
+
+    st.markdown("---")
+    st.markdown("#### 📌 Top Patterns")
+    st.markdown(f"- **Most frequent behaviour:** {top_beh}")
+    st.markdown(f"- **Most frequent trigger:** {top_ant}")
+    st.markdown(f"- **Location hotspot:** {normalise_location(top_loc)}")
+    st.markdown(f"- **Peak time:** {top_session}")
+
+    _combos = find_combined_patterns(full_df)
+    if _combos:
+        c = _combos[0]
+        st.markdown(
+            f"- **Combined pattern:** {int(c['pct']*100)}% of incidents are "
+            f"**{c['category']}**-triggered, in **{normalise_location(c['location'])}**, "
+            f"during **{c['session']}**"
+        )
+
+    st.markdown("---")
+    st.markdown("#### 🧠 Behaviour Reframe — Trauma / Neurodivergent Lens")
+    st.caption("A starting lens, not a diagnosis — read alongside clinical judgement and what's known "
+               "about this individual student.")
+    _reframe = BEHAVIOUR_REFRAME.get(top_beh)
+    if _reframe:
+        st.markdown(f"**{top_beh}:** {_reframe}")
+    else:
+        st.caption(f"No reframe on file yet for '{top_beh}'.")
+
+    st.markdown("**CPI Verbal Escalation Continuum**")
+    _cpi_stage = CPI_STAGE_MAP.get(top_beh)
+    if _cpi_stage:
+        _stage_info = CPI_STAGES[_cpi_stage]
+        st.markdown(f"- **Stage:** {_cpi_stage} — {_stage_info['desc']}")
+        st.markdown(f"- **Appropriate response:** {_stage_info['response']}")
+    else:
+        st.caption(
+            f"'{top_beh}' sits outside the verbal continuum — CPI's continuum tracks rising verbal "
+            "defiance; physical aggression, flight (elopement/absconding), and freeze/shutdown "
+            "presentations belong to a different part of CPI's broader crisis framework, or reflect "
+            "a fight/flight/freeze response rather than escalating verbal behaviour."
+        )
+
+    st.markdown("**Suggested classroom management approach**")
+    _cats_for_reframe = _top_categories(full_df, n=1)
+    if _cats_for_reframe:
+        for s in BSEM_STRATEGY_LIBRARY.get(_cats_for_reframe[0], [])[:2]:
+            st.markdown(f"- **[{s['domain']}]** {s['strategy']}")
+    else:
+        st.caption("Not enough data yet.")
+
+    st.markdown("---")
+    st.markdown("#### 🔬 Hypothesis")
+    try:
+        _hyp = generate_strong_clinical_hypothesis(full_df, top_ant, top_beh, top_loc, top_session, student["name"])
+        st.markdown(_hyp.get("summary", "Not enough data yet."))
+    except Exception:
+        st.caption("Not enough data yet.")
+
+    st.markdown("---")
+    st.markdown("#### 💡 Top Strategies to Trial")
+    _cats = _top_categories(full_df, n=1)
+    if _cats:
+        for s in BSEM_STRATEGY_LIBRARY.get(_cats[0], [])[:3]:
+            st.markdown(f"- **[{s['domain']}]** {s['strategy']}")
+    else:
+        st.caption("Not enough data yet.")
+
+    st.markdown("---")
+    sc1, sc2 = st.columns(2)
+    with sc1:
+        if st.button("📄 Switch to Full Analysis", type="primary", use_container_width=True, key="snap_to_full"):
+            st.session_state[f"analysis_view_mode_{student_id}"] = "📄 Full Analysis"
+            st.rerun()
+    with sc2:
+        if st.button("📋 Support Plan", use_container_width=True, key="snap_to_plan"):
+            go_to("support_plan", selected_student_id=student_id)
 
 
 def render_combined_patterns(full_df):
@@ -4311,6 +4499,14 @@ def render_student_analysis_page():
 
     quick_only_df = full_df[full_df['incident_type'] == 'Quick'].copy() if 'Quick' in full_df['incident_type'].values else pd.DataFrame()
     crit_only_df = full_df[full_df['incident_type'] == 'Critical'].copy() if 'Critical' in full_df['incident_type'].values else pd.DataFrame()
+
+    _view_mode = st.radio(
+        "View", ["🔎 Snapshot", "📄 Full Analysis"], horizontal=True, index=1,
+        key=f"analysis_view_mode_{student_id}",
+    )
+    if _view_mode == "🔎 Snapshot":
+        render_analysis_snapshot(student, full_df, student_id)
+        return
 
     st.markdown("### 📈 Executive Summary")
     if _dropped_nat > 0:
