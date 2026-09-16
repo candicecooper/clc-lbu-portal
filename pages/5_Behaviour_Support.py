@@ -8685,49 +8685,91 @@ def generate_student_friendly_plan_docx(student, plan, strategies):
     (possible function, triggers, escalation/safety protocols) — those
     stay in the staff version. Content is the same words staff wrote,
     just trimmed to a few short lines per section rather than rewritten,
-    so nothing appears here that a real person didn't actually say."""
+    so nothing appears here that a real person didn't actually say.
+
+    Formatted along Easy Read principles (a widely-used accessible-document
+    standard in the disability sector): one idea per line, a picture
+    anchoring every idea, large plain text, high-contrast colour, and
+    generous white space. Uses emoji as the visual anchor since licensed
+    symbol sets (Widgit, Makaton, Boardmaker) aren't something this tool
+    has access to — staff can swap in real symbols afterward since it's
+    an editable Word file."""
     from docx import Document
-    from docx.shared import Pt, Cm
+    from docx.shared import Pt, Cm, RGBColor
     from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+
+    def _set_bg(cell, hex_color):
+        tcPr = cell._tc.get_or_add_tcPr()
+        shd = OxmlElement('w:shd')
+        shd.set(qn('w:val'), 'clear'); shd.set(qn('w:color'), 'auto'); shd.set(qn('w:fill'), hex_color)
+        tcPr.append(shd)
+
+    def _no_border(cell):
+        # Cards read as solid colour blocks, not boxes-within-boxes
+        tcPr = cell._tc.get_or_add_tcPr()
+        borders = OxmlElement('w:tcBorders')
+        for side in ('top', 'left', 'bottom', 'right'):
+            b = OxmlElement(f'w:{side}')
+            b.set(qn('w:val'), 'nil')
+            borders.append(b)
+        tcPr.append(borders)
+
     doc = Document()
     sec = doc.sections[0]
     sec.page_width, sec.page_height = Cm(21), Cm(29.7)
-    sec.left_margin = sec.right_margin = sec.top_margin = sec.bottom_margin = Cm(2.5)
+    sec.left_margin = sec.right_margin = sec.top_margin = sec.bottom_margin = Cm(1.8)
 
-    title = doc.add_heading("My Plan", level=0)
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    sub = doc.add_paragraph(student["name"])
-    sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    sub.runs[0].font.size = Pt(16)
+    # ── Title band ───────────────────────────────────────────────────────
+    tt = doc.add_table(rows=1, cols=1); tt.autofit = True
+    tt_c = tt.rows[0].cells[0]
+    _set_bg(tt_c, "1A7A6E"); _no_border(tt_c)
+    tt_c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r1 = tt_c.paragraphs[0].add_run("⭐ My Plan ⭐")
+    r1.font.size = Pt(32); r1.font.bold = True; r1.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+    p_name = tt_c.add_paragraph(); p_name.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r2 = p_name.add_run(student["name"])
+    r2.font.size = Pt(20); r2.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
     doc.add_paragraph("")
 
-    def _simple_section(heading, lines, italic=False):
+    # ── One bright, high-contrast card per section ──────────────────────
+    _CARD_ICONS = {"about": "🖐️", "helps": "✅", "goals": "🎯", "voice": "💬"}
+
+    def _card(hex_color, icon, heading, lines, italic=False):
         if not lines:
             return
-        h = doc.add_heading(heading, level=1)
-        for r in h.runs:
-            r.font.size = Pt(18)
+        tbl = doc.add_table(rows=1, cols=1); tbl.autofit = True
+        cell = tbl.rows[0].cells[0]
+        _set_bg(cell, hex_color); _no_border(cell)
+        p_h = cell.paragraphs[0]
+        rh = p_h.add_run(f"{icon}  {heading}")
+        rh.font.size = Pt(24); rh.font.bold = True; rh.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+        p_h.paragraph_format.space_after = Pt(6)
         for line in lines:
-            p = doc.add_paragraph(line if italic else f"•  {line}")
-            for r in p.runs:
-                r.font.size = Pt(14)
-                if italic:
-                    r.font.italic = True
+            p = cell.add_paragraph()
+            _bullet_icon = "💬" if italic else "⭐"
+            r = p.add_run(line if italic else f"{_bullet_icon}  {line}")
+            r.font.size = Pt(17)
+            r.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+            if italic:
+                r.font.italic = True
+            p.paragraph_format.space_after = Pt(8)
         doc.add_paragraph("")
 
     _about_me = _first_lines(plan.get("strengths"), 3) + _first_lines(plan.get("interests"), 2)
-    _simple_section("🌟 About Me", _about_me)
+    _card("3B82F6", _CARD_ICONS["about"], "About Me", _about_me)
 
     _helps_me = (
         _first_lines(plan.get("proactive_strategies_additional"), 2)
         + _first_lines(plan.get("adjustments_supports"), 2)
         + [s["strategy"] for s in (strategies or [])[:2]]
     )
-    _simple_section("💪 Things That Help Me", _helps_me[:4])
+    _card("22C55E", _CARD_ICONS["helps"], "Things That Help Me", _helps_me[:4])
 
-    _simple_section("🎯 My Goals", _first_lines(plan.get("short_term_goals"), 3))
+    _card("F59E0B", _CARD_ICONS["goals"], "My Goals", _first_lines(plan.get("short_term_goals"), 3))
 
-    _simple_section("🗣️ In My Own Words", _first_lines(plan.get("student_voice"), 4), italic=True)
+    _card("8B5CF6", _CARD_ICONS["voice"], "In My Own Words", _first_lines(plan.get("student_voice"), 4), italic=True)
 
     doc.add_paragraph("")
     p_note = doc.add_paragraph(
