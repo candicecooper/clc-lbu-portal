@@ -8,6 +8,8 @@ import uuid
 import random
 import json
 import re
+import requests
+import urllib.parse
 from io import BytesIO
 import base64
 import bcrypt
@@ -8679,6 +8681,35 @@ def _first_lines(text: str, max_items: int = 3) -> list[str]:
     return _lines[:max_items]
 
 
+@st.cache_data(ttl=86400)
+def get_arasaac_symbol_bytes(keyword: str):
+    """Fetch a real ARASAAC pictogram — a free, open-license symbol set
+    built for AAC/visual supports, already used in this portal's Visual
+    Support Tools — for a fixed, well-defined keyword. Returns PNG bytes,
+    or None if the lookup/download fails for any reason. Never raises:
+    a network hiccup just means the plan falls back to its emoji-only
+    look rather than breaking the document. Only used for fixed section
+    concepts (me/help/goal/talk) this code controls — not for arbitrary
+    free text, since a mismatched auto-picked symbol could pair the
+    wrong picture with someone's actual words."""
+    try:
+        search_url = f"https://api.arasaac.org/api/pictograms/en/search/{urllib.parse.quote(keyword)}"
+        resp = requests.get(search_url, timeout=5)
+        if resp.status_code != 200:
+            return None
+        results = resp.json()
+        if not results:
+            return None
+        symbol_id = results[0]["_id"]
+        img_url = f"https://static.arasaac.org/pictograms/{symbol_id}/{symbol_id}_500.png"
+        img_resp = requests.get(img_url, timeout=5)
+        if img_resp.status_code == 200:
+            return img_resp.content
+    except Exception:
+        pass
+    return None
+
+
 def generate_student_friendly_plan_docx(student, plan, strategies):
     """A short, plain-language version of the same saved plan, for the
     student themselves. Deliberately leaves out anything clinical
@@ -8735,16 +8766,25 @@ def generate_student_friendly_plan_docx(student, plan, strategies):
 
     # ── One bright, high-contrast card per section ──────────────────────
     _CARD_ICONS = {"about": "🖐️", "helps": "✅", "goals": "🎯", "voice": "💬"}
+    _CARD_SYMBOLS = {"about": "me", "helps": "help", "goals": "goal", "voice": "talk"}
 
-    def _card(hex_color, icon, heading, lines, italic=False):
+    def _card(hex_color, icon, heading, lines, italic=False, symbol_keyword=None):
         if not lines:
             return
         tbl = doc.add_table(rows=1, cols=1); tbl.autofit = True
         cell = tbl.rows[0].cells[0]
         _set_bg(cell, hex_color); _no_border(cell)
         p_h = cell.paragraphs[0]
+        if symbol_keyword:
+            _sym_bytes = get_arasaac_symbol_bytes(symbol_keyword)
+            if _sym_bytes:
+                p_img = cell.paragraphs[0]
+                p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                p_img.add_run().add_picture(BytesIO(_sym_bytes), width=Cm(2.2))
+                p_h = cell.add_paragraph()
         rh = p_h.add_run(f"{icon}  {heading}")
         rh.font.size = Pt(24); rh.font.bold = True; rh.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+        p_h.alignment = WD_ALIGN_PARAGRAPH.CENTER
         p_h.paragraph_format.space_after = Pt(6)
         for line in lines:
             p = cell.add_paragraph()
@@ -8758,18 +8798,18 @@ def generate_student_friendly_plan_docx(student, plan, strategies):
         doc.add_paragraph("")
 
     _about_me = _first_lines(plan.get("strengths"), 3) + _first_lines(plan.get("interests"), 2)
-    _card("3B82F6", _CARD_ICONS["about"], "About Me", _about_me)
+    _card("3B82F6", _CARD_ICONS["about"], "About Me", _about_me, symbol_keyword=_CARD_SYMBOLS["about"])
 
     _helps_me = (
         _first_lines(plan.get("proactive_strategies_additional"), 2)
         + _first_lines(plan.get("adjustments_supports"), 2)
         + [s["strategy"] for s in (strategies or [])[:2]]
     )
-    _card("22C55E", _CARD_ICONS["helps"], "Things That Help Me", _helps_me[:4])
+    _card("22C55E", _CARD_ICONS["helps"], "Things That Help Me", _helps_me[:4], symbol_keyword=_CARD_SYMBOLS["helps"])
 
-    _card("F59E0B", _CARD_ICONS["goals"], "My Goals", _first_lines(plan.get("short_term_goals"), 3))
+    _card("F59E0B", _CARD_ICONS["goals"], "My Goals", _first_lines(plan.get("short_term_goals"), 3), symbol_keyword=_CARD_SYMBOLS["goals"])
 
-    _card("8B5CF6", _CARD_ICONS["voice"], "In My Own Words", _first_lines(plan.get("student_voice"), 4), italic=True)
+    _card("8B5CF6", _CARD_ICONS["voice"], "In My Own Words", _first_lines(plan.get("student_voice"), 4), italic=True, symbol_keyword=_CARD_SYMBOLS["voice"])
 
     doc.add_paragraph("")
     p_note = doc.add_paragraph(
