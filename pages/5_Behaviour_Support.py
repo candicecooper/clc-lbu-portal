@@ -251,47 +251,48 @@ def categorize_antecedent(ant) -> str | None:
 # ══════════════════════════════════════════════════════════════════════════
 # BSEM STRATEGY LIBRARY
 # Curated, trauma-informed strategies organised by antecedent category and
-# BSEM domain (Brain / Sensory / Emotional / Mind — Beacon House model).
+# BSEM domain (Body / Relationship / Stamina / Engagement / Character —
+# the Berry Street Education Model's five real domains).
 # This is the fixed, reviewable source of truth for "what could be
 # trialled" — the AI layer (build_bsem_recommendations, below) only ever
 # selects and explains items from this list; it never invents strategies.
 # ══════════════════════════════════════════════════════════════════════════
 BSEM_STRATEGY_LIBRARY = {
     "Peer": [
-        {"domain": "Brain", "strategy": "A consistent seating position / work partner away from known peer-conflict pairings, so the nervous system isn't spending the lesson tracking a threat."},
-        {"domain": "Sensory", "strategy": "A peripheral or partitioned work spot during high-friction tasks (competitive games, shared resources) to reduce visual/social density."},
-        {"domain": "Emotional", "strategy": "A pre-taught, low-key 'I need space' cue (card, gesture, or phrase) agreed with the student in advance, so they have a script before dysregulation, not during."},
-        {"domain": "Mind", "strategy": "Once regulated, a brief comic-strip-conversation or social-story style debrief of a recent peer incident, building the student's own account of what happened and why."},
+        {"domain": "Body", "strategy": "A consistent seating position / work partner away from known peer-conflict pairings, reducing the physical stress response of tracking a threat."},
+        {"domain": "Relationship", "strategy": "A pre-taught, low-key 'I need space' cue (card, gesture, or phrase) agreed with the student in advance, so the relationship can hold the need for distance before dysregulation, not during."},
+        {"domain": "Character", "strategy": "Once regulated, a brief comic-strip-conversation or social-story debrief of the incident, building the student's own account of what happened, their values, and a better next step."},
+        {"domain": "Stamina", "strategy": "Notice and name small wins in staying engaged after a peer conflict, building resilience for next time."},
     ],
     "Transition": [
-        {"domain": "Brain", "strategy": "A visual first-then schedule with a consistent early warning (5-minute, then 2-minute) before the transition, reducing surprise."},
-        {"domain": "Sensory", "strategy": "A transition object or fidget carried between spaces; noise-reducing headphones/earphones for corridor or high-traffic transitions if auditory load seems to be a factor."},
-        {"domain": "Emotional", "strategy": "A brief regulation check-in with a trusted adult immediately before the transition begins, not only offered after dysregulation appears."},
-        {"domain": "Mind", "strategy": "Involve the student in choosing part of their own transition routine (order of steps, which door, which adult walks with them) to build a sense of control."},
+        {"domain": "Body", "strategy": "A visual first-then schedule with a consistent early warning (5-minute, then 2-minute) before the transition, reducing the stress response to surprise."},
+        {"domain": "Relationship", "strategy": "A brief regulation check-in with a trusted adult immediately before the transition begins, not only offered after dysregulation appears."},
+        {"domain": "Engagement", "strategy": "Involve the student in choosing part of their own transition routine (order of steps, which door, which adult walks with them) to build willingness to engage with the routine."},
+        {"domain": "Stamina", "strategy": "A visible 'transition streak' tracker, celebrating consecutive successful transitions to build persistence through a known hard moment."},
     ],
     "Instructions": [
-        {"domain": "Brain", "strategy": "Offer instructions as a choice of order rather than a single directive ('finish the maths or start it — you choose') to reduce the perceived threat of direct demand."},
-        {"domain": "Sensory", "strategy": "Reduce instruction load to one step at a time, paired with a written or visual cue rather than verbal-only delivery."},
-        {"domain": "Emotional", "strategy": "PACE-aligned delivery (Playful, Accepting, Curious, Empathic tone) rather than a directive tone, particularly for the first instruction attempt."},
-        {"domain": "Mind", "strategy": "Build in visible processing/wait time before expecting compliance, using 'when-then' framing so the student can see the endpoint."},
+        {"domain": "Body", "strategy": "Offer instructions as a choice of order rather than a single directive ('finish the maths or start it — you choose') to reduce the perceived threat of direct demand."},
+        {"domain": "Relationship", "strategy": "PACE-aligned delivery (Playful, Accepting, Curious, Empathic tone) rather than a directive tone, particularly for the first instruction attempt."},
+        {"domain": "Engagement", "strategy": "Build in visible processing/wait time before expecting compliance, using 'when-then' framing so the student can see the endpoint and stays willing to engage."},
+        {"domain": "Character", "strategy": "Frame following instructions as a values-based choice the student is making ('this is what taking responsibility looks like'), building their own self-knowledge of capability."},
     ],
     "Engagement": [
-        {"domain": "Brain", "strategy": "Chunk tasks into short, visibly-bounded segments with a built-in movement break before fatigue sets in, rather than after."},
-        {"domain": "Sensory", "strategy": "Offer alternative seating or a movement option (standing desk, wobble cushion, short walk) proactively during longer seated tasks."},
-        {"domain": "Emotional", "strategy": "Lead with specific, genuine connection/praise before task difficulty increases, so engagement is scaffolded by relationship rather than demand alone."},
-        {"domain": "Mind", "strategy": "Offer choice in task order or format, and link the task to a known interest area where possible, to build intrinsic motivation."},
+        {"domain": "Body", "strategy": "Chunk tasks into short, visibly-bounded segments with a built-in movement break before fatigue sets in, rather than after."},
+        {"domain": "Relationship", "strategy": "Lead with specific, genuine connection/praise before task difficulty increases, so engagement is scaffolded by relationship rather than demand alone."},
+        {"domain": "Engagement", "strategy": "Offer choice in task order or format, and link the task to a known interest area where possible, to build willingness to learn."},
+        {"domain": "Stamina", "strategy": "A visible progress tracker or goal-setting approach so the student can see persistence paying off across the task."},
     ],
     "Sensory": [
-        {"domain": "Brain", "strategy": "Reduce ambient unpredictability where identifiable (flickering lights, sudden bells/alarms, echoing spaces)."},
-        {"domain": "Sensory", "strategy": "A quiet, low-stimulation space to enter before joining the group (rather than straight into a full room); trial reducing ambient volume on entry, and noise-cancelling headphones/earphones if auditory input seems to be the driver."},
-        {"domain": "Emotional", "strategy": "Offer the sensory strategy discreetly rather than in front of peers, so support doesn't come at the cost of the student's dignity."},
-        {"domain": "Mind", "strategy": "Once regulated, collaboratively ask the student which specific inputs feel hardest — building their own sensory self-awareness and language for it over time."},
+        {"domain": "Body", "strategy": "A quiet, low-stimulation space to enter before joining the group; trial reducing ambient volume on entry, and noise-cancelling headphones/earphones if auditory input seems to be the driver."},
+        {"domain": "Body", "strategy": "Reduce ambient unpredictability where identifiable (flickering lights, sudden bells/alarms, echoing spaces)."},
+        {"domain": "Relationship", "strategy": "Offer the sensory strategy discreetly rather than in front of peers, protecting the relationship and the student's dignity."},
+        {"domain": "Character", "strategy": "Once regulated, collaboratively ask the student which specific inputs feel hardest — building their own self-knowledge and language for it over time."},
     ],
     "Other": [
-        {"domain": "Brain", "strategy": "Look for a predictability gap around this trigger (change of adult, change of routine, time of day) and consider what advance notice could be built in."},
-        {"domain": "Sensory", "strategy": "Check whether an unidentified sensory or physiological factor (hunger, tiredness, medication timing) coincides with these incidents."},
-        {"domain": "Emotional", "strategy": "Prioritise co-regulation and connection with a trusted adult before any expectation of cognitive engagement or compliance."},
-        {"domain": "Mind", "strategy": "Because this antecedent doesn't fit a clear category yet, a closer look at the incident narratives themselves may surface a more specific pattern to target."},
+        {"domain": "Body", "strategy": "Check whether an unidentified sensory or physiological factor (hunger, tiredness, medication timing) coincides with these incidents."},
+        {"domain": "Relationship", "strategy": "Prioritise co-regulation and connection with a trusted adult before any expectation of cognitive engagement or compliance."},
+        {"domain": "Stamina", "strategy": "Look for a predictability gap around this trigger (change of adult, change of routine, time of day) and consider what advance notice could be built in, building resilience to change over time."},
+        {"domain": "Character", "strategy": "Because this antecedent doesn't fit a clear category yet, a closer look at the incident narratives — including what they say about the student's needs and values — may surface a more specific pattern to target."},
     ],
 }
 
@@ -300,10 +301,11 @@ BSEM_STRATEGY_LIBRARY = {
 # BEHAVIOUR REFRAME — trauma-informed / neurodivergent-affirming lens
 # Reframes a canonical behaviour label away from "the student is choosing
 # to be difficult" toward what's more likely actually happening
-# neurologically/developmentally. General, well-established trauma-
-# informed and neurodiversity-affirming concepts, not a diagnosis for any
-# individual student — a starting lens for staff, to be read alongside
-# clinical judgement, not instead of it.
+# neurologically/developmentally. Draws on SMART (Strategies for Managing
+# Abuse-Related Trauma), Australian Childhood Foundation, and general
+# well-established neurodiversity-affirming concepts — not a diagnosis
+# for any individual student, a starting lens for staff to be read
+# alongside clinical judgement, not instead of it.
 # ══════════════════════════════════════════════════════════════════════════
 BEHAVIOUR_REFRAME = {
     "Verbal refusal of instruction": "Often reflects a felt loss of control, or a demand that feels unsafe or overwhelming in the moment — not a wish to be defiant.",
@@ -438,8 +440,8 @@ def build_bsem_recommendations(
         )
 
     prompt = (
-        "You are a trauma-informed behaviour support specialist, using the BSEM model "
-        "(Brain, Sensory, Emotional, Mind).\n"
+        "You are a trauma-informed behaviour support specialist, using the Berry Street Education "
+        "Model (BSEM), whose five domains are Body, Relationship, Stamina, Engagement, and Character.\n"
         f"Student pattern — primary behaviour: {top_beh}; primary trigger: {top_ant}; "
         f"location hotspot: {top_loc}; peak time: {top_session}.\n\n"
         "Here is a numbered, fixed, pre-approved list of strategies. Do NOT invent new "
@@ -528,10 +530,11 @@ def render_bsem_recommendations(items: list[dict], key_prefix: str):
     if not items:
         return
     _domain_style = {
-        "Brain":     {"icon": "🧠", "color": "#8b5cf6", "bg": "#faf5ff"},
-        "Sensory":   {"icon": "🎧", "color": "#10b981", "bg": "#f0fdf4"},
-        "Emotional": {"icon": "💛", "color": "#f59e0b", "bg": "#fffbeb"},
-        "Mind":      {"icon": "💭", "color": "#3b82f6", "bg": "#eff6ff"},
+        "Body":         {"icon": "🧘", "color": "#10b981", "bg": "#f0fdf4"},
+        "Relationship": {"icon": "🤝", "color": "#3b82f6", "bg": "#eff6ff"},
+        "Stamina":      {"icon": "💪", "color": "#f97316", "bg": "#fff7ed"},
+        "Engagement":   {"icon": "🎯", "color": "#8b5cf6", "bg": "#faf5ff"},
+        "Character":    {"icon": "⭐", "color": "#eab308", "bg": "#fefce8"},
     }
     for i, item in enumerate(items):
         style = _domain_style.get(item["domain"], {"icon": "•", "color": "#64748b", "bg": "#f8fafc"})
@@ -946,8 +949,15 @@ def render_analysis_snapshot(student, full_df, student_id):
     the same underlying logic as the full page (hypothesis, combined
     patterns, BSEM strategies) so the two views can never disagree with
     each other."""
-    st.markdown(f"## 🔎 Snapshot — {student['name']}")
-    st.caption("The headline findings only. Switch to Full Analysis for every chart and detail behind these.")
+    st.markdown(
+        "<div style='background:linear-gradient(135deg,#1A7A7A 0%,#134e4e 100%);"
+        "border-radius:14px;padding:1.1rem 1.4rem;margin-bottom:0.9rem;"
+        "box-shadow:0 4px 14px rgba(19,78,78,0.25);'>"
+        f"<span style='color:white;font-size:1.3rem;font-weight:700;'>🔎 Snapshot — {student['name']}</span><br>"
+        "<span style='color:#d1fae5;font-size:0.85rem;'>The headline findings only — switch to Full "
+        "Analysis for every chart and detail behind these.</span></div>",
+        unsafe_allow_html=True,
+    )
 
     if full_df.empty:
         st.info("No incidents logged yet for this student.")
@@ -957,6 +967,18 @@ def render_analysis_snapshot(student, full_df, student_id):
     top_ant     = full_df["antecedent"].mode()[0] if len(full_df) else "Unknown"
     top_loc     = full_df["location"].mode()[0] if len(full_df) else "Unknown"
     top_session = full_df["session"].mode()[0] if len(full_df) else "Unknown"
+
+    def _snap_card(color_hex, bg_hex, icon, heading, body_lines, footnote=None):
+        _body = "".join(f"<div style='margin:.25rem 0;'>{line}</div>" for line in body_lines)
+        _foot = f"<div style='margin-top:.5rem;font-size:.75rem;color:#64748b;font-style:italic;'>{footnote}</div>" if footnote else ""
+        st.markdown(
+            f"<div style='background:{bg_hex};border-left:5px solid {color_hex};border-radius:10px;"
+            f"padding:.9rem 1.2rem;margin-bottom:.8rem;'>"
+            f"<div style='font-weight:700;color:{color_hex};font-size:1.05rem;margin-bottom:.4rem;'>"
+            f"{icon}  {heading}</div>"
+            f"<div style='font-size:.92rem;color:#1e293b;line-height:1.6;'>{_body}</div>{_foot}</div>",
+            unsafe_allow_html=True,
+        )
 
     m1, m2, m3, m4 = st.columns(4)
     with m1: st.metric("Total Incidents", len(full_df))
@@ -969,73 +991,66 @@ def render_analysis_snapshot(student, full_df, student_id):
             _e_avg = full_df.head(5)["severity"].mean()
             _direction = "🟢 Reducing" if _r_avg < _e_avg else "🔴 Increasing" if _r_avg > _e_avg else "🟡 Stable"
         st.metric("Severity Trend", _direction)
+    st.markdown("<div style='height:.4rem'></div>", unsafe_allow_html=True)
 
-    st.markdown("---")
-    st.markdown("#### 📌 Top Patterns")
-    st.markdown(f"- **Most frequent behaviour:** {top_beh}")
-    st.markdown(f"- **Most frequent trigger:** {top_ant}")
-    st.markdown(f"- **Location hotspot:** {normalise_location(top_loc)}")
-    st.markdown(f"- **Peak time:** {top_session}")
-
+    _patterns = [
+        f"<b>Most frequent behaviour:</b> {top_beh}",
+        f"<b>Most frequent trigger:</b> {top_ant}",
+        f"<b>Location hotspot:</b> {normalise_location(top_loc)}",
+        f"<b>Peak time:</b> {top_session}",
+    ]
     _combos = find_combined_patterns(full_df)
     if _combos:
         c = _combos[0]
-        st.markdown(
-            f"- **Combined pattern:** {int(c['pct']*100)}% of incidents are "
-            f"**{c['category']}**-triggered, in **{normalise_location(c['location'])}**, "
-            f"during **{c['session']}**"
+        _patterns.append(
+            f"<b>Combined pattern:</b> {int(c['pct']*100)}% of incidents are "
+            f"{c['category']}-triggered, in {normalise_location(c['location'])}, during {c['session']}"
         )
+    _snap_card("#3B82F6", "#EFF6FF", "📌", "Top Patterns", _patterns)
 
-    st.markdown("---")
-    st.markdown("#### 🧠 Behaviour Reframe — Trauma / Neurodivergent Lens")
-    st.caption("A starting lens, not a diagnosis — read alongside clinical judgement and what's known "
-               "about this individual student.")
+    _reframe_body = []
     _reframe = BEHAVIOUR_REFRAME.get(top_beh)
     if _reframe:
-        st.markdown(f"**{top_beh}:** {_reframe}")
+        _reframe_body.append(f"<b>{top_beh}:</b> {_reframe}")
     else:
-        st.caption(f"No reframe on file yet for '{top_beh}'.")
-
-    st.markdown("**CPI Verbal Escalation Continuum**")
+        _reframe_body.append(f"No reframe on file yet for '{top_beh}'.")
     _cpi_stage = CPI_STAGE_MAP.get(top_beh)
     if _cpi_stage:
         _stage_info = CPI_STAGES[_cpi_stage]
-        st.markdown(f"- **Stage:** {_cpi_stage} — {_stage_info['desc']}")
-        st.markdown(f"- **Appropriate response:** {_stage_info['response']}")
+        _reframe_body.append(f"<b>CPI stage:</b> {_cpi_stage} — {_stage_info['desc']}")
+        _reframe_body.append(f"<b>Appropriate response:</b> {_stage_info['response']}")
     else:
-        st.caption(
-            f"'{top_beh}' sits outside the verbal continuum — CPI's continuum tracks rising verbal "
-            "defiance; physical aggression, flight (elopement/absconding), and freeze/shutdown "
-            "presentations belong to a different part of CPI's broader crisis framework, or reflect "
-            "a fight/flight/freeze response rather than escalating verbal behaviour."
+        _reframe_body.append(
+            f"<b>CPI Verbal Escalation Continuum:</b> '{top_beh}' sits outside the verbal continuum — "
+            "it tracks rising verbal defiance; physical aggression, flight, and freeze/shutdown "
+            "presentations belong elsewhere in CPI's broader crisis framework."
         )
-
-    st.markdown("**Suggested classroom management approach**")
     _cats_for_reframe = _top_categories(full_df, n=1)
     if _cats_for_reframe:
-        for s in BSEM_STRATEGY_LIBRARY.get(_cats_for_reframe[0], [])[:2]:
-            st.markdown(f"- **[{s['domain']}]** {s['strategy']}")
-    else:
-        st.caption("Not enough data yet.")
+        _mgmt = BSEM_STRATEGY_LIBRARY.get(_cats_for_reframe[0], [])[:2]
+        if _mgmt:
+            _reframe_body.append("<b>Suggested classroom management:</b> " +
+                                  "; ".join(f"[{s['domain']}] {s['strategy']}" for s in _mgmt))
+    _snap_card("#8B5CF6", "#FAF5FF", "🧠", "Behaviour Reframe", _reframe_body,
+               footnote="A starting lens, not a diagnosis — read alongside clinical judgement and what's known about this individual student. Trauma reframing draws on SMART (Strategies for Managing Abuse-Related Trauma), Australian Childhood Foundation; escalation staging draws on CPI's Verbal Escalation Continuum.")
 
-    st.markdown("---")
-    st.markdown("#### 🔬 Hypothesis")
     try:
         _hyp = generate_strong_clinical_hypothesis(full_df, top_ant, top_beh, top_loc, top_session, student["name"])
-        st.markdown(_hyp.get("summary", "Not enough data yet."))
+        _hyp_text = _hyp.get("summary", "Not enough data yet.")
     except Exception:
-        st.caption("Not enough data yet.")
+        _hyp_text = "Not enough data yet."
+    _snap_card("#1A7A7A", "#F0FDFA", "🔬", "Hypothesis", [_hyp_text])
 
-    st.markdown("---")
-    st.markdown("#### 💡 Top Strategies to Trial")
     _cats = _top_categories(full_df, n=1)
+    _strat_body = []
     if _cats:
         for s in BSEM_STRATEGY_LIBRARY.get(_cats[0], [])[:3]:
-            st.markdown(f"- **[{s['domain']}]** {s['strategy']}")
-    else:
-        st.caption("Not enough data yet.")
+            _strat_body.append(f"<b>[{s['domain']}]</b> {s['strategy']}")
+    if not _strat_body:
+        _strat_body = ["Not enough data yet."]
+    _snap_card("#D97706", "#FFFBEB", "💡", "Top Strategies to Trial", _strat_body,
+               footnote="Based on the Berry Street Education Model (BSEM) — domains: Body, Relationship, Stamina, Engagement, Character.")
 
-    st.markdown("---")
     sc1, sc2 = st.columns(2)
     with sc1:
         if st.button("📄 Switch to Full Analysis", type="primary", use_container_width=True, key="snap_to_full"):
@@ -6450,7 +6465,7 @@ def render_student_analysis_page():
         "border-radius:14px;padding:1.1rem 1.4rem;margin-bottom:0.7rem;"
         "box-shadow:0 4px 14px rgba(19,78,78,0.25);'>"
         "<span style='color:white;font-size:1.15rem;font-weight:700;'>🎒 Supports for Transition to a Mainstream Setting</span><br>"
-        "<span style='color:#d1fae5;font-size:0.85rem;'>BSEM-informed strategies (Brain · Sensory · Emotional · Mind), "
+        "<span style='color:#d1fae5;font-size:0.85rem;'>BSEM-informed strategies (Body · Relationship · Stamina · Engagement · Character), "
         "matched to this student's actual pattern, framed for handover to a receiving school. "
         "Click a strategy for why it fits and how to implement it.</span></div>",
         unsafe_allow_html=True,
