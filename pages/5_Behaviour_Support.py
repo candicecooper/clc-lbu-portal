@@ -359,22 +359,27 @@ CPI_STAGES = {
     "Questioning": {
         "desc": "Asking questions that challenge authority or purpose — sometimes a genuine information request, sometimes a challenge disguised as one.",
         "response": "Answer a genuine information question directly and matter-of-factly. If it's a challenging question aimed at your authority rather than real information, redirect calmly back to the original request rather than getting drawn into a debate.",
+        "smart_stage": "Relate — the student is still verbally reachable here, but a defensive/testing question is often an early sign the nervous system is starting to feel unsafe. Stay connected before pushing for compliance.",
     },
     "Refusal": {
         "desc": "Non-compliance — saying no, or passively refusing to follow an instruction.",
         "response": "Set a clear, simple limit and offer a genuine choice within it. Avoid repeating the same instruction on a loop, and avoid a power struggle — state it once, calmly, and allow processing time.",
+        "smart_stage": "Relate — offering choice and a calm, connected tone keeps the relationship (not the demand) in charge. Reasoning or negotiating the 'why' of the rule can wait.",
     },
     "Release": {
         "desc": "Releasing built-up energy through venting — raised voice, swearing, crying, or object-directed release not aimed at hurting anyone.",
         "response": "Allow the release to happen safely and remove the audience if possible. Don't try to reason, problem-solve, or debrief while they're venting — wait for the energy to visibly drop first.",
+        "smart_stage": "Regulate — the brainstem/survival part of the brain is driving this, not the thinking part. Words and logic can't reach it yet; the only job right now is safety and letting the energy discharge.",
     },
     "Intimidation": {
         "desc": "Verbal or nonverbal threats aimed at a specific person, or general intimidation.",
         "response": "Take the threat seriously and seek additional staff support. Stay calm and neutral — don't respond in kind, argue, or make counter-threats.",
+        "smart_stage": "Regulate — the student's threat response has taken over. Your own calm, regulated nervous system is the intervention here, not an argument or a consequence delivered in the moment.",
     },
     "Tension Reduction": {
         "desc": "The point after the peak where energy visibly starts dropping.",
         "response": "This is the window for reconnection and repair — not before. Debrief once the student is genuinely calm, not immediately after the peak.",
+        "smart_stage": "Relate, then Reason — this is the only point in the sequence where a debrief or a consequence conversation will actually land. Reconnect first (Relate); once that's solid, then reflect together (Reason).",
     },
 }
 
@@ -797,8 +802,10 @@ def render_window_of_tolerance_table(full_df, student_id=None):
         return
     st.caption("Draft only — built from this student's logged behaviour types and severity. "
                "Context is de-identified (peers/staff shown by role, not name); Behaviour and "
-               "Interventions stay specific to this student. Review before use; copy any line "
-               "across into the Window of Tolerance Creator.")
+               "Interventions stay specific to this student. The Window of Tolerance concept itself "
+               "is part of SMART's brain-based framework — regulation must be restored before any "
+               "reasoning or correction can land. Review before use; copy any line across into the "
+               "Window of Tolerance Creator.")
     for z in WOT_ZONES:
         if z["id"] not in wot_data:
             continue
@@ -1019,6 +1026,7 @@ def render_analysis_snapshot(student, full_df, student_id):
         _stage_info = CPI_STAGES[_cpi_stage]
         _reframe_body.append(f"<b>CPI stage:</b> {_cpi_stage} — {_stage_info['desc']}")
         _reframe_body.append(f"<b>Appropriate response:</b> {_stage_info['response']}")
+        _reframe_body.append(f"<b>Regulate → Relate → Reason:</b> {_stage_info['smart_stage']}")
     else:
         _reframe_body.append(
             f"<b>CPI Verbal Escalation Continuum:</b> '{top_beh}' sits outside the verbal continuum — "
@@ -2228,6 +2236,9 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
 
         section_header(doc, "TEACHING LENS — RECOMMENDATIONS")
         p_tl = doc.add_paragraph(); p_tl.paragraph_format.space_after = Pt(4)
+        arun(p_tl, "Framed on SMART's core principle: a dysregulated (Regulate-stage) brain can't yet learn or "
+                   "reason — these strategies work by keeping the student regulated before demand increases, "
+                   "not after.", italic=True, size=13, color=GREY_DARK)
 
         tl_tbl = doc.add_table(rows=2, cols=2); tl_tbl.style = 'Table Grid'
         tl_data = [
@@ -2278,6 +2289,9 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
 
         section_header(doc, "SUPPORT LENS — RECOMMENDATIONS")
         p_sl = doc.add_paragraph(); p_sl.paragraph_format.space_after = Pt(4)
+        arun(p_sl, "Sequenced on SMART's Regulate → Relate → Reason principle — co-regulation and safety come "
+                   "first; debrief, repair, and skill-teaching only once the student is genuinely calm.",
+             italic=True, size=13, color=GREY_DARK)
 
         sl_tbl = doc.add_table(rows=2, cols=2); sl_tbl.style = 'Table Grid'
         sl_data = [
@@ -6357,7 +6371,9 @@ def render_student_analysis_page():
     with st.expander("🤔 Considerations — before settling on this hypothesis"):
         st.caption(
             "Alternative or structural explanations worth ruling out before treating the "
-            "pattern above as purely behavioural."
+            "pattern above as purely behavioural. Worth reading with SMART's core reminder in "
+            "mind: behaviour is communication from the nervous system, not a considered choice "
+            "in the moment — regulate and relate before reasoning about it."
         )
         for _c in _considerations:
             st.markdown(f"- {_c}")
@@ -6470,6 +6486,8 @@ def render_student_analysis_page():
         "Click a strategy for why it fits and how to implement it.</span></div>",
         unsafe_allow_html=True,
     )
+    st.caption("SMART's core reminder: regulate before you reason — these strategies work by supporting "
+               "regulation ahead of demand, not by correcting after the fact.")
     _bsem_key = f"bsem_analysis_{student_id}"
     _bsem_sig = f"{top_beh}|{top_ant}|{top_loc}|{top_session}"
     if (st.session_state.get(f"{_bsem_key}_sig") != _bsem_sig
@@ -6490,7 +6508,9 @@ def render_student_analysis_page():
     # TEACHING LENS
     # ══════════════════════════════════════════════════════════════════════════
     st.markdown("### 🎓 Teaching Lens — Recommendations")
-    st.caption("Strategies for educators to embed within the learning environment and curriculum delivery.")
+    st.caption("Strategies for educators to embed within the learning environment and curriculum delivery. "
+               "Framed on SMART's core principle: a dysregulated (Regulate-stage) brain can't yet learn or reason — "
+               "these strategies work by keeping the student regulated before demand increases, not after.")
 
     tc1, tc2 = st.columns(2)
     with tc1:
@@ -6551,7 +6571,9 @@ def render_student_analysis_page():
     # SUPPORT LENS
     # ══════════════════════════════════════════════════════════════════════════
     st.markdown("### 🤝 Support Lens — Recommendations")
-    st.caption("Therapeutic and behavioural support strategies for the care team, allied health, and leadership.")
+    st.caption("Therapeutic and behavioural support strategies for the care team, allied health, and leadership. "
+               "Sequenced on SMART's Regulate → Relate → Reason principle — co-regulation and safety come first; "
+               "debrief, repair, and skill-teaching only once the student is genuinely calm.")
 
     sc1, sc2 = st.columns(2)
     with sc1:
@@ -7505,6 +7527,8 @@ def render_student_dashboard():
         "student's actual pattern. Click a strategy for why it fits and how to trial it.</span></div>",
         unsafe_allow_html=True,
     )
+    st.caption("SMART's core reminder: regulate before you reason — these strategies work by supporting "
+               "regulation ahead of demand, not by correcting after the fact.")
     _risk_line = {"HIGH": "🔴 **HIGH RISK** — daily check-ins recommended alongside the strategies below.",
                   "MODERATE": "🟡 **MODERATE RISK** — weekly review alongside the strategies below.",
                   "LOW": "🟢 **LOW RISK** — maintain current supports."}[risk_level]
@@ -8752,15 +8776,18 @@ def render_support_plan_page():
         _f_teaching = st.text_area("What will be explicitly taught?", value=_plan.get("teaching_strategies","") or "", height=90, label_visibility="collapsed")
 
         st.markdown("**Response to Early Signs**")
+        st.caption("Regulate first — at this stage the goal is co-regulation, not correction or reasoning.")
         _f_resp_early = st.text_area("Staff response to early signs", value=_plan.get("response_early_signs","") or "", height=90, label_visibility="collapsed")
 
         st.markdown("**Response to Escalation**")
+        st.caption("The nervous system is in survival mode here — safety and calm presence, not words or logic, are the intervention.")
         _f_resp_esc = st.text_area("Staff response to escalation", value=_plan.get("response_escalation","") or "", height=90, label_visibility="collapsed")
 
         st.markdown("**Safety / Risk Management**")
         _f_safety = st.text_area("Safety and risk management", value=_plan.get("safety_risk_management","") or "", height=90, label_visibility="collapsed")
 
         st.markdown("**Post-Incident / Repair**")
+        st.caption("Relate, then reason — reconnect with the student first; a debrief or consequence conversation only lands once they're genuinely calm.")
         _f_repair = st.text_area("Post-incident and repair process", value=_plan.get("post_incident_repair","") or "", height=90, label_visibility="collapsed")
 
         st.markdown("**Reinforcement**")
