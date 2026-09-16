@@ -573,16 +573,37 @@ def _strip_category_prefix(text: str) -> str:
     return (_clean[:1].upper() + _clean[1:]) if _clean else _clean
 
 
+# INTERVENTIONS (the fixed multi-select list staff choose from when logging
+# an incident) expanded into a fuller standard description of what each
+# technique actually means/looks like in practice. These describe the
+# technique itself, not any specific incident — so expanding a known,
+# fixed strategy name this way doesn't invent per-incident detail nobody
+# wrote; it's the same kind of description a policy or training document
+# would already give that strategy.
+INTERVENTION_DETAIL = {
+    "CPI Supportive stance":  "Used a supportive, non-threatening body stance (CPI) — angled rather than square-on, at a safe distance",
+    "Offered break":          "Offered a short break before returning to the task",
+    "Reduced demand":         "Reduced the task demand — fewer steps or a lower-effort version of the task",
+    "Provided choices":       "Offered a choice between two options rather than a single imposed demand",
+    "Removed audience":       "Removed the audience — moved nearby peers/onlookers away as a de-escalation measure",
+    "Visual supports":        "Used a visual support (schedule, cue card, or written prompt) to reduce reliance on verbal instruction",
+    "Co-regulation":          "Stayed alongside the student and modelled calm breathing/tone to support co-regulation",
+    "Prompted coping skill":  "Prompted use of a previously taught coping strategy (e.g. breathing, movement, quiet space)",
+    "Redirection":            "Redirected attention to a different activity or focus to interrupt the escalation",
+}
+
+
 def _polish_intervention_list(text: str) -> str:
     """Intervention is a multi-select of short strategy names (e.g.
-    'CPI Supportive stance, Removed audience'). Capitalise each item so
-    it at least reads as a clean list — this can't turn short strategy
-    names into the Creator's full action sentences without inventing
-    wording nobody actually wrote, so it's a light polish, not a rewrite."""
+    'CPI Supportive stance, Removed audience'). Where an item matches
+    one of the fixed, known strategies, expand it to its full standard
+    description (INTERVENTION_DETAIL) to match the Creator's fuller
+    register. Anything that doesn't match a known strategy (free text,
+    a renamed option) is just capitalised rather than guessed at."""
     if not text or not isinstance(text, str):
         return text
     _items = [s.strip() for s in text.split(",") if s.strip()]
-    _items = [s[:1].upper() + s[1:] for s in _items]
+    _items = [INTERVENTION_DETAIL.get(s, s[:1].upper() + s[1:]) for s in _items]
     return "; ".join(_items)
 
 
@@ -2229,7 +2250,7 @@ def delete_placement_extension_from_db(extension_id):
 # staff/student-authored sections below are persisted.
 # ══════════════════════════════════════════════════════════════════════════
 SUPPORT_PLAN_FIELDS = [
-    "class_teacher", "support_staff", "parent_carer", "date_commenced", "review_date",
+    "class_teacher", "support_staff", "date_commenced", "review_date",
     "strengths", "interests", "purpose", "early_warning_signs",
     "proactive_strategies_additional", "teaching_strategies",
     "response_early_signs", "response_escalation", "safety_risk_management",
@@ -8493,7 +8514,7 @@ def render_support_plan_page():
 
     with st.form("support_plan_form"):
         st.markdown("**Plan details**")
-        pc1, pc2, pc3 = st.columns(3)
+        pc1, pc2 = st.columns(2)
         with pc1:
             _f_teacher = st.text_input("Class teacher", value=_plan.get("class_teacher","") or "")
             _f_start = st.date_input("Date commenced", value=(
@@ -8502,8 +8523,6 @@ def render_support_plan_page():
             _f_support = st.text_input("Support staff", value=_plan.get("support_staff","") or "")
             _f_review = st.date_input("Review date", value=(
                 datetime.fromisoformat(_plan["review_date"]).date() if _plan.get("review_date") else date.today()))
-        with pc3:
-            _f_parent = st.text_input("Parent/carer", value=_plan.get("parent_carer","") or "")
 
         st.markdown("**Student Profile**")
         _f_strengths = st.text_area("Strengths", value=_plan.get("strengths","") or "", height=80)
@@ -8549,7 +8568,7 @@ def render_support_plan_page():
                 if st.session_state.get("current_user") else "unknown"
             )
             _plan_data = {
-                "class_teacher": _f_teacher, "support_staff": _f_support, "parent_carer": _f_parent,
+                "class_teacher": _f_teacher, "support_staff": _f_support,
                 "date_commenced": _f_start.isoformat() if _f_start else None,
                 "review_date": _f_review.isoformat() if _f_review else None,
                 "strengths": _f_strengths, "interests": _f_interests, "purpose": _f_purpose,
@@ -8607,8 +8626,7 @@ def generate_support_plan_docx(student, plan, target_behaviours, function_text, 
 
     doc.add_heading(f"Behaviour Support Plan — {student['name']}", level=1)
     p = doc.add_paragraph()
-    p.add_run(f"Class teacher: {plan.get('class_teacher','—')}    Support staff: {plan.get('support_staff','—')}    "
-               f"Parent/carer: {plan.get('parent_carer','—')}")
+    p.add_run(f"Class teacher: {plan.get('class_teacher','—')}    Support staff: {plan.get('support_staff','—')}")
     p2 = doc.add_paragraph()
     p2.add_run(f"Date commenced: {plan.get('date_commenced','—')}    Review date: {plan.get('review_date','—')}")
 
