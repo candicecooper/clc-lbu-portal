@@ -6,7 +6,7 @@ Self-contained: diagrams are embedded as base64, no external assets needed.
 import streamlit as st
 import base64
 
-st.set_page_config(page_title="Connect PC to Classroom TV", page_icon="📺", layout="centered")
+st.set_page_config(page_title="Connect PC to TV", page_icon="📺", layout="centered")
 
 # ---------------------------------------------------------------
 # Embedded diagrams (base64 PNG) — generated once, no external files needed
@@ -70,7 +70,7 @@ TROUBLESHOOTING = [
     },
     {
         "title": "Updating the adapter's firmware",
-        "bullets": ['Install the free "Microsoft Wireless Display Adapter" app from the Microsoft Store.', 'Open the app and connect to the adapter — similar to steps 2–3 above.', 'Once connected, select Firmware in the navigation pane on the left.', "If an update is available, follow the on-screen prompts. Don't unplug the adapter or close the app while it runs."],
+        "bullets": ['Install the free [Microsoft Wireless Display Adapter app](https://apps.microsoft.com/detail/9wzdncrfjbb1) from the Microsoft Store.', 'Open the app and connect to the adapter — similar to steps 2–3 above.', 'Once connected, select Firmware in the navigation pane on the left.', "If an update is available, follow the on-screen prompts. Don't unplug the adapter or close the app while it runs."],
     },
 ]
 
