@@ -1563,10 +1563,23 @@ with tab1:
         )
 
     # ── Manual add ────────────────────────────────────────────────────────────
+    # The text box is cleared via a "pending clear" flag checked/applied
+    # HERE, before the widget below is instantiated — setting a widget's
+    # session_state key directly after it's already been rendered earlier in
+    # the same script run raises StreamlitWidgetAlreadyInstantiatedError
+    # (which is what crashed this section); the flag itself is a plain,
+    # non-widget key, so setting it from the button below is safe.
+    _new_agenda_mkey = st.session_state.current_staff_meeting_id or "new"
+    _new_agenda_key = f"new_agenda_item_{_new_agenda_mkey}"
+    _clear_flag_key = f"_clear_new_agenda_item_{_new_agenda_mkey}"
+    if st.session_state.get(_clear_flag_key):
+        st.session_state[_new_agenda_key] = ""
+        st.session_state[_clear_flag_key] = False
+
     st.write("")
     col_new, col_add = st.columns([4, 1])
     with col_new:
-        new_item = st.text_input("Add an agenda item", key="new_agenda_item",
+        new_item = st.text_input("Add an agenda item", key=_new_agenda_key,
                                  placeholder="Type item and click Add →",
                                  label_visibility="collapsed")
     with col_add:
@@ -1574,7 +1587,7 @@ with tab1:
             if new_item.strip():
                 additional_items.append(new_item.strip())
                 st.session_state[ss_key] = additional_items
-                st.session_state['new_agenda_item'] = ""
+                st.session_state[_clear_flag_key] = True
                 st.rerun()
 
     # Keep agenda_data in sync with session state list
