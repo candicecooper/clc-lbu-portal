@@ -516,9 +516,11 @@ def main():
     with tab3:
         term_view(sb)
 
-
-main()
-
+try:
+    main()
+except Exception as _page_err:
+    st.error("⚠️ Something went wrong loading this page — your sign-in should be unaffected. Details below:")
+    st.exception(_page_err)
 
 # ---------------------------------------------------------------------------
 # DEPLOYMENT CHECKLIST
