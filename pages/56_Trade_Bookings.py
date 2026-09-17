@@ -154,7 +154,10 @@ def fetch_bookings(sb, start_date=None, end_date=None, status_filter=None):
 
 
 def insert_booking(sb, record):
-    return sb.table(TABLE_NAME).insert(record).execute()
+    result = sb.table(TABLE_NAME).insert(record).execute()
+    if not getattr(result, "data", None):
+        raise RuntimeError("Supabase insert returned no data — the write may not have gone through.")
+    return result
 
 
 def update_booking(sb, booking_id, record):
@@ -290,13 +293,19 @@ def booking_form(sb, existing=None):
                 "status": status,
             }
 
+            try:
+                if is_edit:
+                    update_booking(sb, existing["id"], record)
+                else:
+                    insert_booking(sb, record)
+            except Exception as _save_err:
+                st.error(f"⚠️ Couldn't save this booking — nothing was recorded: {_save_err}")
+                return
+
+            saved_label = build_public_summary(work_type, work_summary)
+            st.success(f"✅ Saved: {booking_date.strftime('%A %-d %B')} — {saved_label} ({company_name})")
             if is_edit:
-                update_booking(sb, existing["id"], record)
-                st.success("Booking updated.")
-            else:
-                insert_booking(sb, record)
-                st.success("Booking added.")
-            st.rerun()
+                del st.session_state["editing_booking"]
 
 
 # ---------------------------------------------------------------------------
@@ -308,7 +317,7 @@ def list_view(sb):
 
     colf1, colf2, colf3 = st.columns(3)
     with colf1:
-        range_choice = st.selectbox("Show", ["Next 14 days", "This term (custom range)", "All"])
+        range_choice = st.selectbox("Show", ["All", "Next 14 days", "This term (custom range)"])
     with colf2:
         status_filter = st.selectbox("Status", ["All"] + STATUSES)
     with colf3:
