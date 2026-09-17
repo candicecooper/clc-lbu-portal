@@ -1,10 +1,20 @@
 """
-46_Staff_Reference.py — CLC-LBU Staff Portal
+48_Staff_Reference.py — CLC-LBU Staff Portal
 =============================================
 Staff Reference — policies & expectations, live from Supabase.
 
 STAFF VIEW (default): pick a document, expand sections to read,
 download the full branded Word document to print. View-only.
+
+Deep links — used by the "Staff References" dropdown tiles on the
+portal homepage so each category (or a single document) opens
+directly instead of landing on the full picker:
+    ?doc=<slug>          e.g. ?doc=daily-work-expectations
+    ?category=<name>     e.g. ?category=DfE%20Procedures
+                          (URL-encode spaces/& in the category name)
+If a category has exactly one document, the deep link opens that
+document directly; otherwise it opens the card grid filtered to
+just that category, with a "← All categories" button to clear it.
 
 ADMIN (password gated): edit section content/titles, reorder,
 add/remove sections, add documents, publish/unpublish, and a
@@ -807,11 +817,45 @@ def _ai_find_sections(question, candidates, top_n=3):
         return None, f"AI search failed ({e})."
 
 
+def _apply_deep_link(docs):
+    """Lets a portal tile jump straight into a document or category via
+    URL query params, e.g. ?doc=daily-work-expectations or
+    ?category=DfE%20Procedures. Applied once per session so the normal
+    '← All documents' / '← All categories' back buttons still work
+    afterwards without the link re-triggering."""
+    if "ref_qp_applied" in st.session_state:
+        return
+    st.session_state["ref_qp_applied"] = True
+
+    qp_doc = st.query_params.get("doc")
+    if isinstance(qp_doc, list):
+        qp_doc = qp_doc[0] if qp_doc else None
+    qp_cat = st.query_params.get("category")
+    if isinstance(qp_cat, list):
+        qp_cat = qp_cat[0] if qp_cat else None
+
+    if qp_doc:
+        match = next((d for d in docs if d.get("slug") == qp_doc), None)
+        if match:
+            st.session_state["ref_selected_doc_id"] = match["id"]
+        return
+
+    if qp_cat:
+        cat_docs = [d for d in docs if (d.get("category") or "Policies & Expectations") == qp_cat]
+        if len(cat_docs) == 1:
+            # Only one document in this category — skip the card grid and open it directly.
+            st.session_state["ref_selected_doc_id"] = cat_docs[0]["id"]
+        elif cat_docs:
+            st.session_state["ref_category_filter"] = qp_cat
+
+
 def staff_view():
     docs = fetch_documents()
     if not docs:
         st.info("No documents published yet. An administrator can seed or add documents in the Admin tab.")
         return
+
+    _apply_deep_link(docs)
 
     doc_labels = {f"{d.get('doc_code','')} {d['title']}".strip(): d for d in docs}
     scope_choice = st.selectbox("Search in", ["All documents"] + list(doc_labels.keys()), key="ref_search_scope")
@@ -895,8 +939,16 @@ def staff_view():
         _render_document(doc)
         return
 
-    st.caption("Browse by document type, or use search above.")
     cat_order, grouped = _group_by_category(docs)
+    active_filter = st.session_state.get("ref_category_filter")
+    if active_filter and active_filter in cat_order:
+        if st.button("← All categories"):
+            st.session_state.pop("ref_category_filter", None)
+            st.rerun()
+        cat_order = [active_filter]
+    else:
+        st.caption("Browse by document type, or use search above.")
+
     for cat in cat_order:
         st.markdown(f"<div class='cat-heading'>{_category_icon(cat)} {cat}</div>", unsafe_allow_html=True)
         cat_docs = grouped[cat]
