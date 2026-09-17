@@ -6,7 +6,7 @@ Self-contained: diagrams are embedded as base64, no external assets needed.
 import streamlit as st
 import base64
 
-st.set_page_config(page_title="Connect PC to TV", page_icon="📺", layout="centered")
+st.set_page_config(page_title="Connect PC to Classroom TV", page_icon="📺", layout="centered")
 
 # ---------------------------------------------------------------
 # Embedded diagrams (base64 PNG) — generated once, no external files needed
