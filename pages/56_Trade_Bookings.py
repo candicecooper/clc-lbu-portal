@@ -211,7 +211,7 @@ def booking_form(sb, existing=None):
         with col2:
             company_name = st.text_input("Company", value=existing.get("company_name", "") if is_edit else "")
             contact_name = st.text_input("Contact name", value=existing.get("contact_name", "") if is_edit else "")
-            contact_phone = st.text_input("Contact phone", value=existing.get("contact_phone", "") if is_edit else "")
+            contact_phone = st.text_input("Contact phone (optional)", value=existing.get("contact_phone", "") if is_edit else "")
             contact_email = st.text_input("Contact email (optional)", value=existing.get("contact_email", "") if is_edit else "")
             booked_by = st.text_input(
                 "Booked by",
@@ -268,8 +268,8 @@ def booking_form(sb, existing=None):
         submitted = st.form_submit_button("Save booking")
 
         if submitted:
-            if not company_name or not contact_name or not contact_phone or not work_summary:
-                st.error("Company, contact name, contact phone, and a short work summary are all required.")
+            if not company_name or not contact_name or not work_summary:
+                st.error("Company, contact name, and a short work summary are all required.")
                 return
 
             record = {
@@ -357,7 +357,8 @@ def list_view(sb):
             st.write(f"**Time:** {b.get('start_time','')} – {b.get('end_time','')}")
             st.write(f"**Location:** {b.get('location_onsite','')}")
             st.write(f"**Company:** {b.get('company_name','')}")
-            st.write(f"**Contact:** {b.get('contact_name','')} — {b.get('contact_phone','')}"
+            st.write(f"**Contact:** {b.get('contact_name','')}"
+                     + (f" — {b.get('contact_phone')}" if b.get('contact_phone') else "")
                      + (f" — {b.get('contact_email')}" if b.get('contact_email') else ""))
             st.write(f"**Booked by:** {b.get('booked_by','')}")
             if b.get("students_nearby"):
