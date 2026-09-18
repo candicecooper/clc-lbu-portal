@@ -292,11 +292,11 @@ def transition_bar_html(names, compact=False):
 # tell at a single glance whether anything today needs attention — without
 # clicking into any section. Each chip links to the section anchor that has
 # the detail. Replaces having to open every section just to check.
-def render_glance_strip(bulletin_data, notices_count, program_change_count):
+def render_glance_strip(bulletin_data, notices_count, program_change_count, trade_n=0):
     staff_n    = len([r for r in bulletin_data.get("staff_absent", [])   if (r.get("Staff Member") or "").strip() or (r.get("TRT") or "").strip()])
     student_n  = len([r for r in bulletin_data.get("student_absent", []) if (r.get("Student") or "").strip()])
     excursion_n = len([r for r in bulletin_data.get("excursions", [])       if any(v for v in r.values())])
-    visitor_n   = len([r for r in bulletin_data.get("visitors_on_site", []) if any(v for v in r.values())])
+    visitor_n   = len([r for r in bulletin_data.get("visitors_on_site", []) if any(v for v in r.values())]) + trade_n
     travel_chg_n = len([r for r in bulletin_data.get("travel_changes", [])  if any(v for v in r.values())])
 
     def chip(anchor, icon, n, label, alert=False):
@@ -676,6 +676,57 @@ def load_todays_meeting_room_bookings(for_date):
     except Exception:
         return []
 
+@st.cache_resource
+def _trade_bookings_client():
+    """Dedicated client for trade_bookings — deliberately NOT routed through
+    database.py's db.get_supabase(), because this portal uses more than one
+    Supabase project across different tools. This uses the exact same
+    st.secrets["SUPABASE_URL"]/["SUPABASE_KEY"] that 12_Calendar.py and
+    56_Trade_Bookings.py both read directly, so all three are guaranteed to
+    point at the same project/table."""
+    from supabase import create_client
+    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+
+def load_todays_trade_bookings(for_date):
+    """Load tradesperson/contractor bookings for a given date — public-safe only.
+    Full detail (company, contact, phone, internal notes) lives in
+    56_Trade_Bookings.py and is never requested here."""
+    try:
+        sb = _trade_bookings_client()
+        response = (
+            sb.table("trade_bookings")
+            .select("id,booking_date,start_time,end_time,display_category,work_summary,status")
+            .eq("booking_date", str(for_date))
+            .neq("status", "Cancelled")
+            .execute()
+        )
+        rows = response.data or []
+        st.session_state["_trade_bookings_last_error"] = None
+        return sorted(rows, key=lambda x: str(x.get("start_time") or ""))
+    except Exception as _tb_err:
+        st.session_state["_trade_bookings_last_error"] = str(_tb_err)
+        return []
+
+def trade_bookings_as_visitor_rows(for_date):
+    """Trade/contractor bookings reframed as Visitors-on-Site rows — same
+    sanitized fields as everywhere else (no company/contact/phone)."""
+    out = []
+    for b in load_todays_trade_bookings(for_date):
+        category = b.get("display_category") or "Onsite Works"
+        summary = b.get("work_summary") or ""
+        label = f"{category} - {summary}" if summary else category
+        start_t = (b.get("start_time") or "")[:5]
+        end_t = (b.get("end_time") or "")[:5]
+        out.append({
+            "Visitor Name": f"🔧 {label}",
+            "Reason": "Trade/Contractor",
+            "Staff Responsible": b.get("booked_by") or "",
+            "Arriving": start_t,
+            "Departing": end_t,
+            "Location": b.get("location_onsite") or "",
+        })
+    return out
+
 def load_notices(for_date=None):
     try:
         q = _get_sb().table("daily_notices").select("*").order("created_at", desc=False)
@@ -991,7 +1042,7 @@ if params.get("display") == "true":
     _student_rows = [r for r in d_data.get("student_absent", []) if (r.get("Student") or "").strip()]
     _sched = load_scheduled_meetings(today); _all_mtgs = list(d_data.get("staff_meetings") or []) + _sched
     kitchen = sr.get("kitchen_duties","") or "\u2014"
-    _vis_rows = [r for r in d_data.get("visitors_on_site", []) if any(r.get(k,"") for k in ["Visitor Name","Reason","Staff Responsible"])]
+    _vis_rows = [r for r in d_data.get("visitors_on_site", []) if any(r.get(k,"") for k in ["Visitor Name","Reason","Staff Responsible"])] + trade_bookings_as_visitor_rows(today)
     _transition_d = transition_students_by_program(d_data.get("student_absent", []))
     vb = d_data.get("vehicle_bookings",[])
     if isinstance(vb, dict): vb = []
@@ -1040,6 +1091,8 @@ if params.get("display") == "true":
     )
 
     st.markdown(f'<div class="dp-grid">{"".join(_cards)}</div>', unsafe_allow_html=True)
+    if st.session_state.get("_trade_bookings_last_error"):
+        st.warning(f"⚠️ Couldn't load trade bookings for {today}: {st.session_state['_trade_bookings_last_error']}")
 
     # ── Full-width, below the grid: things that deserve a second look
     # rather than being squeezed into a masonry column ───────────────
@@ -1280,7 +1333,7 @@ with page_tab:
     # \u2500\u2500 Today at a glance \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     # One-line summary chips so staff can tell at a glance whether
     # anything today needs attention, without opening every section.
-    render_glance_strip(bulletin_data, len(_admin_notices_today), len(_pcm_changes_today))
+    render_glance_strip(bulletin_data, len(_admin_notices_today), len(_pcm_changes_today), trade_n=len(trade_bookings_as_visitor_rows(current_date)))
 
     _admin_notices = _admin_notices_today
     if _admin_notices or edit:
@@ -1372,6 +1425,7 @@ with page_tab:
                     else: st.markdown('<div class="empty-state"><div class="icon">\U0001f4ad</div>No additional messages</div>', unsafe_allow_html=True)
 
             with card("visitors_on_site", "green", "\U0001f465", "Visitors on Site"):
+                _trade_vis_rows = trade_bookings_as_visitor_rows(current_date)
                 if edit:
                     _vis_raw = bulletin_data.get("visitors_on_site") or []
                     if not _vis_raw:
@@ -1380,10 +1434,19 @@ with page_tab:
                     vis_edited = st.data_editor(vis_df, key="vis_editor", hide_index=True, use_container_width=True, num_rows="dynamic",
                         column_config={"Reason": st.column_config.SelectboxColumn("Reason", options=VISITOR_REASON_OPTIONS, required=False)})
                     bulletin_data["visitors_on_site"] = vis_edited.to_dict("records")
+                    if _trade_vis_rows:
+                        st.caption("🔧 Auto-added from Trade Bookings — edit or cancel these there, not here:")
+                        st.markdown('<table class="data-table"><tr><th>Visitor</th><th>Reason</th><th>Staff Responsible</th><th>Arriving</th><th>Departing</th><th>Location</th></tr>'+"".join([f"<tr><td><strong>{r.get('Visitor Name','')}</strong></td><td>{r.get('Reason','')}</td><td>{r.get('Staff Responsible','')}</td><td>{r.get('Arriving','')}</td><td>{r.get('Departing','')}</td><td>{r.get('Location','')}</td></tr>" for r in _trade_vis_rows])+"</table>", unsafe_allow_html=True)
+                        st.markdown('<div style="margin-top:0.4rem;font-size:0.75rem;color:#6b7280;">📌 <a href="/Trade_Bookings" target="_self" style="color:#1a2e44;text-decoration:none;font-weight:600;">Manage Trade Bookings →</a></div>', unsafe_allow_html=True)
+                    elif st.session_state.get("_trade_bookings_last_error"):
+                        st.warning(f"⚠️ Couldn't load trade bookings: {st.session_state['_trade_bookings_last_error']}")
                 else:
-                    vis_rows = bulletin_data.get("visitors_on_site", []); has_vis = any(any(v for v in r.values()) for r in vis_rows)
+                    vis_rows = bulletin_data.get("visitors_on_site", []) + _trade_vis_rows
+                    has_vis = any(any(v for v in r.values()) for r in vis_rows)
                     if has_vis: st.markdown('<table class="data-table"><tr><th>Visitor</th><th>Reason</th><th>Staff Responsible</th><th>Arriving</th><th>Departing</th><th>Location</th></tr>'+"".join([f"<tr><td><strong>{r.get('Visitor Name','')}</strong></td><td>{r.get('Reason','')}</td><td>{r.get('Staff Responsible','')}</td><td>{r.get('Arriving','')}</td><td>{r.get('Departing','')}</td><td>{r.get('Location','')}</td></tr>" for r in vis_rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
                     else: st.markdown('<div class="empty-state"><div class="icon">\U0001f6b6</div>No visitors today</div>', unsafe_allow_html=True)
+                    if not _trade_vis_rows and st.session_state.get("_trade_bookings_last_error"):
+                        st.warning(f"⚠️ Couldn't load trade bookings: {st.session_state['_trade_bookings_last_error']}")
 
     section_divider("sec-travel", 2, "\U0001f68c", "Travel & Vehicles")
     if True:
