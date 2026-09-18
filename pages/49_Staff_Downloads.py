@@ -1,13 +1,20 @@
 """
+49_Staff_Downloads.py — CLC-LBU Staff Portal
+=============================================
 Staff Downloads
 ----------------
 A simple, always-open reference page linking staff straight to the official
 download/install pages for the firmware, apps and software used on CLC-LBU
-devices (e.g. setting up a brand-new laptop or replacement device).
+devices (e.g. setting up a brand-new laptop or replacement device, or
+reinstalling a webcam's firmware/companion app).
 
 No database needed — this list is just a Python dict below. To add, edit or
 remove a link: open this file in GitHub, edit the DOWNLOADS dict, commit.
 No admin panel, no Supabase table, nothing to break.
+
+Linked from the "Staff References" dropdown on the portal homepage
+(clc-portal.pages.dev), alongside Policies & Expectations, DfE Procedures,
+Role Expectations, and Connecting Laptop to Screen.
 """
 
 import streamlit as st
@@ -19,6 +26,10 @@ st.set_page_config(page_title="Staff Downloads", page_icon="⬇️", layout="wid
 # Each category is a list of items: name, short description, and the URL to
 # send staff to. Prefer the official vendor/download page over a direct file
 # link, since those break when a version updates.
+#
+# Tip when adding a new category by hand: the closing "}" for the whole
+# DOWNLOADS dict must come right after the LAST category's "]", before any
+# comment lines — easy to miss since it's just one character on its own line.
 # --------------------------------------------------------------------------
 DOWNLOADS = {
     "New device setup": [
