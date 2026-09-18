@@ -8,6 +8,7 @@ import uuid
 import random
 import json
 import re
+import difflib
 import requests
 import urllib.parse
 from io import BytesIO
@@ -1154,14 +1155,44 @@ def render_before_after(ba: dict):
 # ── Location normalisation ────────────────────────────────────────────────────
 LOCATION_ALIASES = {
     "JP Classroom": "JP Room", "JP classroom": "JP Room", "Junior Primary": "JP Room",
+    "JP class room": "JP Room", "JP Class Room": "JP Room", "Jnr Primary": "JP Room",
+    "Jnr Primary Room": "JP Room", "Jnr Primary Classroom": "JP Room",
     "PY Classroom": "PY Room", "PY classroom": "PY Room", "Primary Years": "PY Room",
+    "PY class room": "PY Room", "PY Class Room": "PY Room", "PY class": "PY Room",
     "SY Classroom": "SY Room", "SY classroom": "SY Room", "Senior Years": "SY Room",
+    "SY class room": "SY Room", "SY Class Room": "SY Room",
     "Playground": "Yard", "playground": "Yard",
+    "Front Office": "Office", "front office": "Office", "Reception": "Office",
+    "Kitchen area": "Kitchen", "kitchen area": "Kitchen",
+    "Toilet": "Toilets", "toilet": "Toilets", "Bathroom": "Toilets", "bathroom": "Toilets",
 }
 
 def normalise_location(loc: str) -> str:
-    """Map historical location aliases to canonical labels."""
-    return LOCATION_ALIASES.get(str(loc).strip(), str(loc).strip()) if loc else ""
+    """Map free-text location entries to a canonical label. Critical
+    incidents record location as free text (staff type it), while the
+    Quick Incident Log uses a fixed dropdown (LOCATIONS) — so the same
+    physical place easily ends up logged two different ways (e.g. 'JP
+    classroom' vs 'JP Room'), and without normalisation they'd show as
+    separate bars on every location chart.
+
+    Checks the exact-alias dict first (LOCATION_ALIASES, fast and
+    predictable), then falls back to fuzzy matching against the
+    canonical LOCATIONS list for close-but-not-identical wording a
+    fixed alias list can't fully anticipate. Falls back to the original
+    text unchanged if nothing matches closely enough — this only ever
+    merges genuinely similar wording, never guesses at something new."""
+    if not loc:
+        return ""
+    _clean = str(loc).strip()
+    if _clean in LOCATION_ALIASES:
+        return LOCATION_ALIASES[_clean]
+    _canonical_lower = {c.lower(): c for c in LOCATIONS}
+    if _clean.lower() in _canonical_lower:
+        return _canonical_lower[_clean.lower()]
+    _matches = difflib.get_close_matches(_clean.lower(), list(_canonical_lower.keys()), n=1, cutoff=0.75)
+    if _matches:
+        return _canonical_lower[_matches[0]]
+    return _clean
 
 
 # ── Clinical behaviour terminology ───────────────────────────────────────────
@@ -2474,7 +2505,7 @@ SUPPORT_PLAN_FIELDS = [
     "proactive_strategies_additional", "teaching_strategies",
     "response_early_signs", "response_escalation", "safety_risk_management",
     "post_incident_repair", "reinforcement", "adjustments_supports",
-    "short_term_goals", "student_voice",
+    "short_term_goals", "student_voice", "recovery_time",
 ]
 
 
@@ -4499,6 +4530,8 @@ def render_student_analysis_page():
         for _col in ["location", "session"]:
             if _col not in crit_df.columns:
                 crit_df[_col] = crit_df["ABCH_primary"].apply(lambda d: d.get(_col, "") if isinstance(d, dict) else "")
+        if "location" in crit_df.columns:
+            crit_df["location"] = crit_df["location"].apply(normalise_location)
 
     full_df = pd.concat([quick_df, crit_df], ignore_index=True).sort_values("date_parsed")
     # Drop any record with an unparseable/missing date — a handful of charts
@@ -7319,6 +7352,8 @@ def render_student_dashboard():
                 crit_df[_col] = crit_df["ABCH_primary"].apply(
                     lambda d: d.get(_col, "") if isinstance(d, dict) else ""
                 ) if "ABCH_primary" in crit_df.columns else ""
+        if "location" in crit_df.columns:
+            crit_df["location"] = crit_df["location"].apply(normalise_location)
     full_df = (
         pd.concat([quick_df, crit_df], ignore_index=True)
         .sort_values("date_parsed", na_position="last")
@@ -8681,6 +8716,8 @@ def render_support_plan_page():
             lambda d: d.get("context", "") if isinstance(d, dict) else "") if "ABCH_primary" in crit_df.columns else ""
         crit_df["location"] = crit_df["ABCH_primary"].apply(
             lambda d: d.get("location", "") if isinstance(d, dict) else "") if "ABCH_primary" in crit_df.columns else ""
+        if "location" in crit_df.columns:
+            crit_df["location"] = crit_df["location"].apply(normalise_location)
     full_df = pd.concat([quick_df, crit_df], ignore_index=True) if not quick_df.empty or not crit_df.empty else pd.DataFrame()
     if not full_df.empty and "date_parsed" in full_df.columns:
         full_df = full_df.dropna(subset=["date_parsed"])
@@ -8790,6 +8827,10 @@ def render_support_plan_page():
         st.caption("Relate, then reason — reconnect with the student first; a debrief or consequence conversation only lands once they're genuinely calm.")
         _f_repair = st.text_area("Post-incident and repair process", value=_plan.get("post_incident_repair","") or "", height=90, label_visibility="collapsed")
 
+        st.markdown("**Recovery Time**")
+        st.caption("Roughly how long this student typically needs to regulate/recover — appears in the student-friendly version as 'How long I need.'")
+        _f_recovery = st.text_input("Recovery time", value=_plan.get("recovery_time","") or "", placeholder="e.g. Usually 10-15 minutes in the quiet space", label_visibility="collapsed")
+
         st.markdown("**Reinforcement**")
         _f_reinforce = st.text_area("How positive behaviour is reinforced", value=_plan.get("reinforcement","") or "", height=80, label_visibility="collapsed")
 
@@ -8815,7 +8856,7 @@ def render_support_plan_page():
                 "early_warning_signs": _f_ews, "proactive_strategies_additional": _f_proactive_add,
                 "teaching_strategies": _f_teaching, "response_early_signs": _f_resp_early,
                 "response_escalation": _f_resp_esc, "safety_risk_management": _f_safety,
-                "post_incident_repair": _f_repair, "reinforcement": _f_reinforce,
+                "post_incident_repair": _f_repair, "recovery_time": _f_recovery, "reinforcement": _f_reinforce,
                 "adjustments_supports": _f_adjustments, "short_term_goals": _f_goals,
                 "student_voice": _f_voice,
             }
@@ -8841,7 +8882,7 @@ def render_support_plan_page():
             )
     with _dl_col2:
         if st.button("🧒 Generate Student-Friendly Version (Word)", key="sp_kid_btn", use_container_width=True):
-            _sp_kid_docx = generate_student_friendly_plan_docx(student, _plan, _sp_strategies)
+            _sp_kid_docx = generate_student_friendly_plan_docx(student, _plan, _sp_strategies, _sp_triggers)
             st.download_button(
                 "📄 Download My Plan (Word)", _sp_kid_docx,
                 file_name=f"MyPlan_{student['name'].replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.docx",
@@ -8948,21 +8989,34 @@ def get_arasaac_symbol_bytes(keyword: str):
     return None
 
 
-def generate_student_friendly_plan_docx(student, plan, strategies):
+CHALLENGE_SIMPLE = {
+    "Peer": "Getting along with other kids",
+    "Transition": "Changing from one thing to another",
+    "Instructions": "Being told what to do",
+    "Engagement": "Schoolwork that feels hard",
+    "Sensory": "Loud noises, bright lights, or busy spaces",
+    "Other": "Unexpected changes",
+}
+
+
+def generate_student_friendly_plan_docx(student, plan, strategies, triggers=None):
     """A short, plain-language version of the same saved plan, for the
     student themselves. Deliberately leaves out anything clinical
-    (possible function, triggers, escalation/safety protocols) — those
-    stay in the staff version. Content is the same words staff wrote,
-    just trimmed to a few short lines per section rather than rewritten,
-    so nothing appears here that a real person didn't actually say.
+    (possible function, escalation/safety protocols) — those stay in the
+    staff version. Content is the same words staff wrote, just trimmed to
+    a few short lines per section rather than rewritten, so nothing
+    appears here that a real person didn't actually say. The one
+    exception is "Things I Find Really Challenging," which translates
+    the auto-detected trigger categories into plain child-friendly words.
 
     Formatted along Easy Read principles (a widely-used accessible-document
     standard in the disability sector): one idea per line, a picture
-    anchoring every idea, large plain text, high-contrast colour, and
-    generous white space. Uses emoji as the visual anchor since licensed
-    symbol sets (Widgit, Makaton, Boardmaker) aren't something this tool
-    has access to — staff can swap in real symbols afterward since it's
-    an editable Word file."""
+    anchoring every idea, large plain text, and generous white space.
+    Cards use a light background with a coloured border rather than solid
+    colour blocks, for a gentler look. Uses emoji as the visual anchor
+    since licensed symbol sets (Widgit, Makaton, Boardmaker) aren't
+    something this tool has access to — staff can swap in real symbols
+    afterward since it's an editable Word file."""
     from docx import Document
     from docx.shared import Pt, Cm, RGBColor
     from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -8975,13 +9029,15 @@ def generate_student_friendly_plan_docx(student, plan, strategies):
         shd.set(qn('w:val'), 'clear'); shd.set(qn('w:color'), 'auto'); shd.set(qn('w:fill'), hex_color)
         tcPr.append(shd)
 
-    def _no_border(cell):
-        # Cards read as solid colour blocks, not boxes-within-boxes
+    def _set_border(cell, hex_color, sz=28):
+        # A visible coloured border on all four sides — the "gentler" look
+        # (light background, colour on the frame) instead of a solid block.
         tcPr = cell._tc.get_or_add_tcPr()
         borders = OxmlElement('w:tcBorders')
         for side in ('top', 'left', 'bottom', 'right'):
             b = OxmlElement(f'w:{side}')
-            b.set(qn('w:val'), 'nil')
+            b.set(qn('w:val'), 'single'); b.set(qn('w:sz'), str(sz))
+            b.set(qn('w:space'), '4'); b.set(qn('w:color'), hex_color)
             borders.append(b)
         tcPr.append(borders)
 
@@ -8990,10 +9046,15 @@ def generate_student_friendly_plan_docx(student, plan, strategies):
     sec.page_width, sec.page_height = Cm(21), Cm(29.7)
     sec.left_margin = sec.right_margin = sec.top_margin = sec.bottom_margin = Cm(1.8)
 
-    # ── Title band ───────────────────────────────────────────────────────
+    # ── Title band — this one stays a solid colour, as the one "banner" moment ──
     tt = doc.add_table(rows=1, cols=1); tt.autofit = True
     tt_c = tt.rows[0].cells[0]
-    _set_bg(tt_c, "1A7A6E"); _no_border(tt_c)
+    _set_bg(tt_c, "1A7A6E")
+    _no_border_tcPr = tt_c._tc.get_or_add_tcPr()
+    _nb = OxmlElement('w:tcBorders')
+    for side in ('top', 'left', 'bottom', 'right'):
+        b = OxmlElement(f'w:{side}'); b.set(qn('w:val'), 'nil'); _nb.append(b)
+    _no_border_tcPr.append(_nb)
     tt_c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
     r1 = tt_c.paragraphs[0].add_run("⭐ My Plan ⭐")
     r1.font.size = Pt(32); r1.font.bold = True; r1.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
@@ -9002,16 +9063,20 @@ def generate_student_friendly_plan_docx(student, plan, strategies):
     r2.font.size = Pt(20); r2.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
     doc.add_paragraph("")
 
-    # ── One bright, high-contrast card per section ──────────────────────
-    _CARD_ICONS = {"about": "🖐️", "helps": "✅", "goals": "🎯", "voice": "💬"}
-    _CARD_SYMBOLS = {"about": "me", "helps": "help", "goals": "goal", "voice": "talk"}
+    # ── One bordered, light-background card per section ─────────────────
+    _CARD_SYMBOLS = {"about": "me", "challenging": "difficult", "want": "choose",
+                      "need": "help", "long": "time", "voice": "talk"}
+
+    def _hex_to_rgb(hex_color):
+        return RGBColor(int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16))
 
     def _card(hex_color, icon, heading, lines, italic=False, symbol_keyword=None):
         if not lines:
             return
         tbl = doc.add_table(rows=1, cols=1); tbl.autofit = True
         cell = tbl.rows[0].cells[0]
-        _set_bg(cell, hex_color); _no_border(cell)
+        _set_border(cell, hex_color)
+        _rgb = _hex_to_rgb(hex_color)
         p_h = cell.paragraphs[0]
         if symbol_keyword:
             _sym_bytes = get_arasaac_symbol_bytes(symbol_keyword)
@@ -9021,7 +9086,7 @@ def generate_student_friendly_plan_docx(student, plan, strategies):
                 p_img.add_run().add_picture(BytesIO(_sym_bytes), width=Cm(2.2))
                 p_h = cell.add_paragraph()
         rh = p_h.add_run(f"{icon}  {heading}")
-        rh.font.size = Pt(24); rh.font.bold = True; rh.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+        rh.font.size = Pt(22); rh.font.bold = True; rh.font.color.rgb = _rgb
         p_h.alignment = WD_ALIGN_PARAGRAPH.CENTER
         p_h.paragraph_format.space_after = Pt(6)
         for line in lines:
@@ -9029,25 +9094,43 @@ def generate_student_friendly_plan_docx(student, plan, strategies):
             _bullet_icon = "💬" if italic else "⭐"
             r = p.add_run(line if italic else f"{_bullet_icon}  {line}")
             r.font.size = Pt(17)
-            r.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+            r.font.color.rgb = RGBColor(0x1E, 0x29, 0x3B)
             if italic:
                 r.font.italic = True
             p.paragraph_format.space_after = Pt(8)
         doc.add_paragraph("")
 
+    # 1. A little bit about me
     _about_me = _first_lines(plan.get("strengths"), 3) + _first_lines(plan.get("interests"), 2)
-    _card("3B82F6", _CARD_ICONS["about"], "About Me", _about_me, symbol_keyword=_CARD_SYMBOLS["about"])
+    _card("3B82F6", "🖐️", "A Little Bit About Me", _about_me, symbol_keyword=_CARD_SYMBOLS["about"])
 
-    _helps_me = (
+    # 2. Things I find really challenging — auto, translated into plain words
+    _challenges = []
+    for cat in (triggers or [])[:2]:
+        _plain = CHALLENGE_SIMPLE.get(cat)
+        if _plain:
+            _challenges.append(_plain)
+    _challenges += _first_lines(plan.get("early_warning_signs"), 2)
+    _card("EF4444", "⚡", "Things I Find Really Challenging", _challenges[:4], symbol_keyword=_CARD_SYMBOLS["challenging"])
+
+    # 3. Things I want to do when things are challenging
+    _want_to_do = _first_lines(plan.get("teaching_strategies"), 4)
+    _card("22C55E", "🙋", "Things I Want To Do When Things Are Hard", _want_to_do, symbol_keyword=_CARD_SYMBOLS["want"])
+
+    # 4. Things I need others to do
+    _need_others = (
         _first_lines(plan.get("proactive_strategies_additional"), 2)
         + _first_lines(plan.get("adjustments_supports"), 2)
         + [s["strategy"] for s in (strategies or [])[:2]]
     )
-    _card("22C55E", _CARD_ICONS["helps"], "Things That Help Me", _helps_me[:4], symbol_keyword=_CARD_SYMBOLS["helps"])
+    _card("8B5CF6", "🤝", "Things I Need Others To Do", _need_others[:4], symbol_keyword=_CARD_SYMBOLS["need"])
 
-    _card("F59E0B", _CARD_ICONS["goals"], "My Goals", _first_lines(plan.get("short_term_goals"), 3), symbol_keyword=_CARD_SYMBOLS["goals"])
+    # 5. How long I need
+    _recovery = _first_lines(plan.get("recovery_time"), 2)
+    _card("F59E0B", "⏳", "How Long I Need", _recovery, symbol_keyword=_CARD_SYMBOLS["long"])
 
-    _card("8B5CF6", _CARD_ICONS["voice"], "In My Own Words", _first_lines(plan.get("student_voice"), 4), italic=True, symbol_keyword=_CARD_SYMBOLS["voice"])
+    # 6. In my own words
+    _card("EC4899", "💬", "In My Own Words", _first_lines(plan.get("student_voice"), 4), italic=True, symbol_keyword=_CARD_SYMBOLS["voice"])
 
     doc.add_paragraph("")
     p_note = doc.add_paragraph(
