@@ -38,6 +38,42 @@ def get_supabase():
 
 sb = get_supabase()
 
+# ---------------------------------------------------------------------------
+# Default job lists — from the CLC-LBU paper "End of Term actions" checklist.
+# These can be loaded into a term via the Admin tab, and edited/added to
+# freely afterwards — they're just a starting point, not fixed.
+# ---------------------------------------------------------------------------
+
+DEFAULT_STANDARD_JOBS = [
+    "All communication with parents uploaded to EMS",
+    "Program Notebooks all up to date",
+    "Checklists for each student up to date",
+    "EMS attendance updated",
+    "Classroom is clean (surface tops clear)",
+    "Spill out is clean and organised - items stored away",
+    "Program phones are locked away in Admin Safe",
+    "Classroom door, light and heater turned off and locked",
+    "Own absences are entered on to Edi",
+    "Desk in planning room cleared and items in cupboard",
+    "Laptops locked away if not taken home",
+    "Term database entered on OneNote",
+    "Staff kitchen fridge/freezer - take home anything you don't want thrown out",
+    "Walkie talkies on charge",
+]
+
+DEFAULT_ADDITIONAL_JOBS = [
+    "Staff kitchen cleaning - fridge, benches, microwave",
+    "Student kitchen pantry",
+    "Student kitchen fridge - JP",
+    "Student kitchen fridge - PY",
+    "Student kitchen fridge - SY",
+    "Van cleaning - wash, vac and fill with petrol (Friday)",
+    "Kia - wash, vac and fill with petrol",
+    "Teacher prep room - ensure every desk is clean and clear, all items stored in cupboards",
+    "Staff kitchen - empty of all items and clean fridge and freezer",
+    "Move vans to yard (Friday arvo)",
+]
+
 # Try to use the portal's shared staff-level auth module if it exists;
 # otherwise fall back to a simple password check. Different portal tools may
 # have called the gate function different things, so try the common names
@@ -80,7 +116,7 @@ def get_active_term():
     terms = sb.table("eot_terms").select("*").eq("is_active", True).order("id", desc=True).limit(1).execute().data
     return terms[0] if terms else None
 
-def create_term(label, instructions, meeting_details, copy_jobs_from_term_id=None):
+def create_term(label, instructions, meeting_details, copy_jobs_from_term_id=None, seed_defaults=False):
     # deactivate any currently active term
     sb.table("eot_terms").update({"is_active": False}).eq("is_active", True).execute()
     new_term = sb.table("eot_terms").insert({
@@ -105,7 +141,34 @@ def create_term(label, instructions, meeting_details, copy_jobs_from_term_id=Non
                 "action_text": j["action_text"],
                 "order_index": j["order_index"],
             }).execute()
+    elif seed_defaults:
+        for i, text in enumerate(DEFAULT_STANDARD_JOBS):
+            sb.table("eot_standard_jobs").insert({"term_id": new_term["id"], "action_text": text, "order_index": i}).execute()
+        for i, text in enumerate(DEFAULT_ADDITIONAL_JOBS):
+            sb.table("eot_additional_jobs").insert({"term_id": new_term["id"], "action_text": text, "order_index": i}).execute()
     return new_term
+
+def load_default_standard_jobs(term_id):
+    """Add any default standard jobs not already present in this term (matched by text)."""
+    existing = {j["action_text"].strip().lower() for j in get_standard_jobs(term_id)}
+    current_max = len(existing)
+    added = 0
+    for text in DEFAULT_STANDARD_JOBS:
+        if text.strip().lower() not in existing:
+            sb.table("eot_standard_jobs").insert({"term_id": term_id, "action_text": text, "order_index": current_max + added}).execute()
+            added += 1
+    return added
+
+def load_default_additional_jobs(term_id):
+    """Add any default additional jobs not already present in this term (matched by text)."""
+    existing = {j["action_text"].strip().lower() for j in get_additional_jobs(term_id)}
+    current_max = len(existing)
+    added = 0
+    for text in DEFAULT_ADDITIONAL_JOBS:
+        if text.strip().lower() not in existing:
+            sb.table("eot_additional_jobs").insert({"term_id": term_id, "action_text": text, "order_index": current_max + added}).execute()
+            added += 1
+    return added
 
 def get_staff(active_only=True):
     q = sb.table("eot_staff").select("*").order("name")
@@ -327,15 +390,18 @@ with tab_admin:
             new_instructions = st.text_area("Instructions", value="Please hand this checklist to Annette at check in Friday arvo at 2:15 in the planning room")
             new_meeting = st.text_input("End of term meeting details", placeholder="e.g. End of Term Staff Meeting Wednesday 3:00 start - all Staff Kent Town Hotel")
             copy_from = st.selectbox(
-                "Copy job list from",
-                ["Start blank"] + [t["label"] for t in terms],
+                "Job list to start with",
+                ["Start blank", "Use the standard CLC-LBU list"] + [t["label"] for t in terms],
             )
             if st.button("Create new term", type="primary"):
                 if new_label.strip():
                     copy_id = None
-                    if copy_from != "Start blank":
+                    seed = False
+                    if copy_from == "Use the standard CLC-LBU list":
+                        seed = True
+                    elif copy_from != "Start blank":
                         copy_id = next(t["id"] for t in terms if t["label"] == copy_from)
-                    create_term(new_label.strip(), new_instructions.strip(), new_meeting.strip(), copy_id)
+                    create_term(new_label.strip(), new_instructions.strip(), new_meeting.strip(), copy_id, seed_defaults=seed)
                     st.success(f"Created and activated '{new_label}'.")
                     st.rerun()
                 else:
@@ -367,6 +433,10 @@ with tab_admin:
         if term:
             st.markdown("---")
             st.markdown("### Standard checklist items (individual, per staff member)")
+            if st.button("Load standard CLC-LBU list (adds any missing items)"):
+                n = load_default_standard_jobs(term["id"])
+                st.success(f"Added {n} item(s) from the standard list." if n else "Everything from the standard list is already here.")
+                st.rerun()
             jobs = get_standard_jobs(term["id"])
             for j in jobs:
                 c1, c2 = st.columns([5, 1])
@@ -382,6 +452,10 @@ with tab_admin:
 
             st.markdown("---")
             st.markdown("### Additional jobs (shared list)")
+            if st.button("Load standard CLC-LBU additional jobs (adds any missing items)"):
+                n = load_default_additional_jobs(term["id"])
+                st.success(f"Added {n} item(s) from the standard list." if n else "Everything from the standard list is already here.")
+                st.rerun()
             add_jobs = get_additional_jobs(term["id"])
             for j in add_jobs:
                 c1, c2 = st.columns([5, 1])
