@@ -1,5 +1,5 @@
 """
-62_End_of_Term_Checklist.py
+62_end_of_term_checklist.py
 ----------------------------
 End of Term actions checklist for CLC-LBU staff portal.
 
@@ -10,19 +10,29 @@ version:
   - A shared "Additional Jobs" list is visible to everyone; staff can assign
     themselves (or be assigned by admin) and tick jobs complete.
   - Admin can add/remove staff, add/delete standard + additional jobs, start
-    a new term (optionally copying last term's job list as a template), and
-    see an at-a-glance overview of who has finished / signed off.
+    a new term (optionally seeding the standard CLC-LBU list or copying last
+    term's job list), and see an at-a-glance overview of who has finished /
+    signed off.
 
 Requires a Supabase project with the tables in eot_checklist_schema.sql.
 Uses st.secrets["SUPABASE_URL"] / st.secrets["SUPABASE_KEY"] (same pattern as
 the rest of the portal). If your portal has a shared staff_auth.py module for
-the staff-level password gate, this file will use it automatically; otherwise
-it falls back to a simple password stored in st.secrets["EOT_ADMIN_PASSWORD"].
+the staff-level password gate, this file will try to use it automatically;
+otherwise it falls back to a simple password stored in
+st.secrets["EOT_ADMIN_PASSWORD"].
 """
 
-import streamlit as st
+import time
 from datetime import datetime, timezone
+
+import streamlit as st
+import httpx
 from supabase import create_client
+
+try:
+    import httpcore
+except ImportError:  # pragma: no cover - httpcore ships as an httpx dependency
+    httpcore = None
 
 # ---------------------------------------------------------------------------
 # Setup
@@ -37,6 +47,73 @@ def get_supabase():
     return create_client(url, key)
 
 sb = get_supabase()
+
+# Transient network errors between Render and Supabase (dropped HTTP/2
+# connections, "Resource temporarily unavailable", etc.) happen occasionally
+# and aren't caused by anything wrong with the data. Retry a couple of times
+# before giving up, so a checkbox click or a page load doesn't crash on a
+# one-off blip.
+_TRANSIENT_ERRORS = tuple(
+    e for e in [
+        getattr(httpx, "ReadError", None),
+        getattr(httpx, "ConnectError", None),
+        getattr(httpx, "RemoteProtocolError", None),
+        getattr(httpx, "TimeoutException", None),
+        getattr(httpx, "NetworkError", None),
+        getattr(httpcore, "ReadError", None) if httpcore else None,
+        getattr(httpcore, "ConnectError", None) if httpcore else None,
+    ] if e is not None
+)
+
+def _run(query, retries=2, delay=0.6):
+    """Execute a Supabase query builder, retrying on transient network errors."""
+    last_exc = None
+    for attempt in range(retries + 1):
+        try:
+            return query.execute()
+        except _TRANSIENT_ERRORS as e:
+            last_exc = e
+            if attempt < retries:
+                time.sleep(delay)
+                continue
+    st.error(
+        "Lost connection to the database for a moment — this is usually just a "
+        "network blip. Please try again in a few seconds (refresh the page if "
+        "it keeps happening)."
+    )
+    st.stop()
+    raise last_exc  # unreachable, keeps linters happy
+
+# Try to use the portal's shared staff-level auth module if it exists;
+# otherwise fall back to a simple password check. Different portal tools may
+# have called the gate function different things, so try the common names
+# before giving up and using our own password field.
+def admin_gate() -> bool:
+    try:
+        import staff_auth
+        for fn_name in ("check_password", "verify_password", "authenticate",
+                         "staff_login", "require_staff_password", "password_gate",
+                         "login", "check_staff_password", "require_login"):
+            fn = getattr(staff_auth, fn_name, None)
+            if callable(fn):
+                return fn()
+        st.warning(
+            "Found staff_auth module but couldn't find a recognised gate function "
+            "on it — falling back to a simple password below. Let Candice know "
+            "the function name so this can be wired up properly."
+        )
+    except ImportError:
+        pass
+
+    pw = st.text_input("Admin password", type="password", key="eot_admin_pw")
+    correct = st.secrets.get("EOT_ADMIN_PASSWORD", "")
+    if not correct:
+        st.warning("No EOT_ADMIN_PASSWORD set in secrets — admin tab is unlocked for now.")
+        return True
+    return pw == correct
+
+def now_iso():
+    return datetime.now(timezone.utc).isoformat()
 
 # ---------------------------------------------------------------------------
 # Default job lists — from the CLC-LBU paper "End of Term actions" checklist.
@@ -74,78 +151,47 @@ DEFAULT_ADDITIONAL_JOBS = [
     "Move vans to yard (Friday arvo)",
 ]
 
-# Try to use the portal's shared staff-level auth module if it exists;
-# otherwise fall back to a simple password check. Different portal tools may
-# have called the gate function different things, so try the common names
-# before giving up and using our own password field.
-def admin_gate() -> bool:
-    try:
-        import staff_auth
-        for fn_name in ("check_password", "verify_password", "authenticate",
-                         "staff_login", "require_staff_password", "password_gate",
-                         "login", "check_staff_password", "require_login"):
-            fn = getattr(staff_auth, fn_name, None)
-            if callable(fn):
-                return fn()
-        st.warning(
-            "Found staff_auth module but couldn't find a recognised gate function "
-            "on it — falling back to a simple password below. Let Candice know "
-            "the function name so this can be wired up properly."
-        )
-    except ImportError:
-        pass
-
-    pw = st.text_input("Admin password", type="password", key="eot_admin_pw")
-    correct = st.secrets.get("EOT_ADMIN_PASSWORD", "")
-    if not correct:
-        st.warning("No EOT_ADMIN_PASSWORD set in secrets — admin tab is unlocked for now.")
-        return True
-    return pw == correct
-
-def now_iso():
-    return datetime.now(timezone.utc).isoformat()
-
 # ---------------------------------------------------------------------------
 # Data access helpers
 # ---------------------------------------------------------------------------
 
 def get_terms():
-    return sb.table("eot_terms").select("*").order("id", desc=True).execute().data
+    return _run(sb.table("eot_terms").select("*").order("id", desc=True)).data
 
 def get_active_term():
-    terms = sb.table("eot_terms").select("*").eq("is_active", True).order("id", desc=True).limit(1).execute().data
+    terms = _run(sb.table("eot_terms").select("*").eq("is_active", True).order("id", desc=True).limit(1)).data
     return terms[0] if terms else None
 
 def create_term(label, instructions, meeting_details, copy_jobs_from_term_id=None, seed_defaults=False):
     # deactivate any currently active term
-    sb.table("eot_terms").update({"is_active": False}).eq("is_active", True).execute()
-    new_term = sb.table("eot_terms").insert({
+    _run(sb.table("eot_terms").update({"is_active": False}).eq("is_active", True))
+    new_term = _run(sb.table("eot_terms").insert({
         "label": label,
         "instructions": instructions,
         "meeting_details": meeting_details,
         "is_active": True,
-    }).execute().data[0]
+    })).data[0]
 
     if copy_jobs_from_term_id:
-        std_jobs = sb.table("eot_standard_jobs").select("*").eq("term_id", copy_jobs_from_term_id).order("order_index").execute().data
+        std_jobs = _run(sb.table("eot_standard_jobs").select("*").eq("term_id", copy_jobs_from_term_id).order("order_index")).data
         for j in std_jobs:
-            sb.table("eot_standard_jobs").insert({
+            _run(sb.table("eot_standard_jobs").insert({
                 "term_id": new_term["id"],
                 "action_text": j["action_text"],
                 "order_index": j["order_index"],
-            }).execute()
-        add_jobs = sb.table("eot_additional_jobs").select("*").eq("term_id", copy_jobs_from_term_id).order("order_index").execute().data
+            }))
+        add_jobs = _run(sb.table("eot_additional_jobs").select("*").eq("term_id", copy_jobs_from_term_id).order("order_index")).data
         for j in add_jobs:
-            sb.table("eot_additional_jobs").insert({
+            _run(sb.table("eot_additional_jobs").insert({
                 "term_id": new_term["id"],
                 "action_text": j["action_text"],
                 "order_index": j["order_index"],
-            }).execute()
+            }))
     elif seed_defaults:
         for i, text in enumerate(DEFAULT_STANDARD_JOBS):
-            sb.table("eot_standard_jobs").insert({"term_id": new_term["id"], "action_text": text, "order_index": i}).execute()
+            _run(sb.table("eot_standard_jobs").insert({"term_id": new_term["id"], "action_text": text, "order_index": i}))
         for i, text in enumerate(DEFAULT_ADDITIONAL_JOBS):
-            sb.table("eot_additional_jobs").insert({"term_id": new_term["id"], "action_text": text, "order_index": i}).execute()
+            _run(sb.table("eot_additional_jobs").insert({"term_id": new_term["id"], "action_text": text, "order_index": i}))
     return new_term
 
 def load_default_standard_jobs(term_id):
@@ -155,7 +201,7 @@ def load_default_standard_jobs(term_id):
     added = 0
     for text in DEFAULT_STANDARD_JOBS:
         if text.strip().lower() not in existing:
-            sb.table("eot_standard_jobs").insert({"term_id": term_id, "action_text": text, "order_index": current_max + added}).execute()
+            _run(sb.table("eot_standard_jobs").insert({"term_id": term_id, "action_text": text, "order_index": current_max + added}))
             added += 1
     return added
 
@@ -166,7 +212,7 @@ def load_default_additional_jobs(term_id):
     added = 0
     for text in DEFAULT_ADDITIONAL_JOBS:
         if text.strip().lower() not in existing:
-            sb.table("eot_additional_jobs").insert({"term_id": term_id, "action_text": text, "order_index": current_max + added}).execute()
+            _run(sb.table("eot_additional_jobs").insert({"term_id": term_id, "action_text": text, "order_index": current_max + added}))
             added += 1
     return added
 
@@ -174,89 +220,89 @@ def get_staff(active_only=True):
     q = sb.table("eot_staff").select("*").order("name")
     if active_only:
         q = q.eq("active", True)
-    return q.execute().data
+    return _run(q).data
 
 def add_staff(name):
     name = name.strip()
-    existing = sb.table("eot_staff").select("*").ilike("name", name).execute().data
+    existing = _run(sb.table("eot_staff").select("*").ilike("name", name)).data
     if existing:
         # Name already exists (likely previously removed/inactive) — reactivate it
         # rather than trying to insert a duplicate, which the unique constraint blocks.
-        sb.table("eot_staff").update({"active": True}).eq("id", existing[0]["id"]).execute()
+        _run(sb.table("eot_staff").update({"active": True}).eq("id", existing[0]["id"]))
     else:
-        sb.table("eot_staff").insert({"name": name}).execute()
+        _run(sb.table("eot_staff").insert({"name": name}))
 
 def remove_staff(staff_id):
-    sb.table("eot_staff").update({"active": False}).eq("id", staff_id).execute()
+    _run(sb.table("eot_staff").update({"active": False}).eq("id", staff_id))
 
 def get_standard_jobs(term_id):
-    return sb.table("eot_standard_jobs").select("*").eq("term_id", term_id).order("order_index").execute().data
+    return _run(sb.table("eot_standard_jobs").select("*").eq("term_id", term_id).order("order_index")).data
 
 def add_standard_job(term_id, text, order_index):
-    sb.table("eot_standard_jobs").insert({"term_id": term_id, "action_text": text, "order_index": order_index}).execute()
+    _run(sb.table("eot_standard_jobs").insert({"term_id": term_id, "action_text": text, "order_index": order_index}))
 
 def delete_standard_job(job_id):
-    sb.table("eot_standard_jobs").delete().eq("id", job_id).execute()
+    _run(sb.table("eot_standard_jobs").delete().eq("id", job_id))
 
 def get_completions(term_id, staff_id):
-    rows = sb.table("eot_staff_completions").select("*").eq("term_id", term_id).eq("staff_id", staff_id).execute().data
+    rows = _run(sb.table("eot_staff_completions").select("*").eq("term_id", term_id).eq("staff_id", staff_id)).data
     return {r["job_id"]: r for r in rows}
 
 def set_completion(term_id, staff_id, job_id, completed):
-    existing = sb.table("eot_staff_completions").select("id").eq("term_id", term_id).eq("staff_id", staff_id).eq("job_id", job_id).execute().data
+    existing = _run(sb.table("eot_staff_completions").select("id").eq("term_id", term_id).eq("staff_id", staff_id).eq("job_id", job_id)).data
     payload = {"completed": completed, "completed_at": now_iso() if completed else None}
     if existing:
-        sb.table("eot_staff_completions").update(payload).eq("id", existing[0]["id"]).execute()
+        _run(sb.table("eot_staff_completions").update(payload).eq("id", existing[0]["id"]))
     else:
         payload.update({"term_id": term_id, "staff_id": staff_id, "job_id": job_id})
-        sb.table("eot_staff_completions").insert(payload).execute()
+        _run(sb.table("eot_staff_completions").insert(payload))
 
 def get_signoff(term_id, staff_id):
-    rows = sb.table("eot_staff_signoff").select("*").eq("term_id", term_id).eq("staff_id", staff_id).execute().data
+    rows = _run(sb.table("eot_staff_signoff").select("*").eq("term_id", term_id).eq("staff_id", staff_id)).data
     return rows[0] if rows else None
 
 def sign_off(term_id, staff_id, signature_name):
     existing = get_signoff(term_id, staff_id)
     payload = {"signed": True, "signature_name": signature_name, "signed_at": now_iso()}
     if existing:
-        sb.table("eot_staff_signoff").update(payload).eq("id", existing["id"]).execute()
+        _run(sb.table("eot_staff_signoff").update(payload).eq("id", existing["id"]))
     else:
         payload.update({"term_id": term_id, "staff_id": staff_id})
-        sb.table("eot_staff_signoff").insert(payload).execute()
+        _run(sb.table("eot_staff_signoff").insert(payload))
 
 def unsign(term_id, staff_id):
     existing = get_signoff(term_id, staff_id)
     if existing:
-        sb.table("eot_staff_signoff").update({"signed": False}).eq("id", existing["id"]).execute()
+        _run(sb.table("eot_staff_signoff").update({"signed": False}).eq("id", existing["id"]))
 
 def get_additional_jobs(term_id):
-    return sb.table("eot_additional_jobs").select("*").eq("term_id", term_id).order("order_index").execute().data
+    return _run(sb.table("eot_additional_jobs").select("*").eq("term_id", term_id).order("order_index")).data
 
 def add_additional_job(term_id, text, order_index):
-    sb.table("eot_additional_jobs").insert({"term_id": term_id, "action_text": text, "order_index": order_index}).execute()
+    _run(sb.table("eot_additional_jobs").insert({"term_id": term_id, "action_text": text, "order_index": order_index}))
 
 def delete_additional_job(job_id):
-    sb.table("eot_additional_assignments").delete().eq("additional_job_id", job_id).execute()
-    sb.table("eot_additional_jobs").delete().eq("id", job_id).execute()
+    _run(sb.table("eot_additional_assignments").delete().eq("additional_job_id", job_id))
+    _run(sb.table("eot_additional_jobs").delete().eq("id", job_id))
 
 def get_assignments(term_id):
-    rows = sb.table("eot_additional_assignments").select("*, eot_staff(name)").eq("term_id", term_id).execute().data
+    rows = _run(sb.table("eot_additional_assignments").select("*, eot_staff(name)").eq("term_id", term_id)).data
     by_job = {}
     for r in rows:
         by_job.setdefault(r["additional_job_id"], []).append(r)
     return by_job
 
 def assign_staff(term_id, job_id, staff_id):
-    existing = sb.table("eot_additional_assignments").select("id").eq("additional_job_id", job_id).eq("staff_id", staff_id).execute().data
+    existing = _run(sb.table("eot_additional_assignments").select("id").eq("additional_job_id", job_id).eq("staff_id", staff_id)).data
     if not existing:
-        sb.table("eot_additional_assignments").insert({"term_id": term_id, "additional_job_id": job_id, "staff_id": staff_id}).execute()
+        _run(sb.table("eot_additional_assignments").insert({"term_id": term_id, "additional_job_id": job_id, "staff_id": staff_id}))
 
 def unassign_staff(job_id, staff_id):
-    sb.table("eot_additional_assignments").delete().eq("additional_job_id", job_id).eq("staff_id", staff_id).execute()
+    _run(sb.table("eot_additional_assignments").delete().eq("additional_job_id", job_id).eq("staff_id", staff_id))
 
 def set_additional_complete(job_id, completed, by_name=""):
     payload = {"completed": completed, "completed_at": now_iso() if completed else None, "completed_by": by_name if completed else ""}
-    sb.table("eot_additional_jobs").update(payload).eq("id", job_id).execute()
+    _run(sb.table("eot_additional_jobs").update(payload).eq("id", job_id))
 
 # ---------------------------------------------------------------------------
 # UI
@@ -295,10 +341,10 @@ with tab_mine:
             jobs = get_standard_jobs(term["id"])
             completions = get_completions(term["id"], staff["id"])
 
+            done_count = 0
             if not jobs:
                 st.info("No standard checklist items have been set up for this term yet.")
             else:
-                done_count = 0
                 st.markdown("---")
                 for job in jobs:
                     existing = completions.get(job["id"])
