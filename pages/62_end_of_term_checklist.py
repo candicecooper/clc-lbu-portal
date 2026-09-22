@@ -3,18 +3,17 @@
 ----------------------------
 End of Term actions checklist for CLC-LBU staff portal.
 
-Replaces the paper "End of Term actions" sign-off sheet with an interactive
-version:
-  - Staff open the tool, pick whichever term is currently open for checking,
-    pick their own name, and see their own checklist of standard end-of-term
-    jobs to tick off and digitally sign.
-  - A shared "Additional Jobs" list is visible to everyone; staff can assign
-    themselves to a job. Admin can also assign staff directly.
-  - Admin (password protected) can add/remove staff, add/delete/modify
-    standard + additional jobs, assign staff to additional jobs, open or
-    close terms for checking, start a new term (optionally seeding the
-    standard CLC-LBU list or copying a previous term's job list), and see an
-    at-a-glance overview of who has finished / signed off.
+Landing page is deliberately minimal: pick your name (or go to Admin).
+Once a name is picked, the page opens straight to that person's checklist,
+split into two clearly labelled sections:
+  1. Jobs everyone is expected to complete (the standard checklist)
+  2. Your allocated jobs (the shared additional-jobs list, highlighting
+     what's assigned to you, with the option to pick up more)
+...then a sign-off section that requires everything to be ticked before
+signing (or a Leadership-agreed override from Admin).
+
+Admin (password protected) manages staff, jobs, term status and assignments,
+and can see an overview of who's done what.
 
 Requires a Supabase project with the tables in eot_checklist_schema.sql.
 Uses st.secrets["SUPABASE_URL"] / st.secrets["SUPABASE_KEY"] (same pattern as
@@ -38,7 +37,7 @@ except ImportError:  # pragma: no cover - httpcore ships as an httpx dependency
 # Setup
 # ---------------------------------------------------------------------------
 
-st.set_page_config(page_title="End of Term Checklist", page_icon="✅", layout="wide")
+st.set_page_config(page_title="End of Term Checklist", page_icon="✅", layout="centered")
 
 ADMIN_PASSWORD_DEFAULT = "secret2026"
 
@@ -49,6 +48,117 @@ def get_supabase():
     return create_client(url, key)
 
 sb = get_supabase()
+
+# ---------------------------------------------------------------------------
+# Styling
+# ---------------------------------------------------------------------------
+
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@600;700&family=Inter:wght@400;500;600;700&display=swap');
+
+html, body, [class*="css"] {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+h1, h2, h3, .eot-brand {
+    font-family: 'Poppins', 'Inter', sans-serif !important;
+}
+
+:root {
+    --eot-primary: #1F6F6B;
+    --eot-primary-dark: #14504D;
+    --eot-accent: #E8935B;
+    --eot-bg: #FAF7F2;
+    --eot-card: #FFFFFF;
+    --eot-text: #22323B;
+    --eot-muted: #6B7B80;
+    --eot-border: #E4E0D6;
+}
+
+.stApp {
+    background: var(--eot-bg);
+}
+
+.eot-hero {
+    background: linear-gradient(135deg, var(--eot-primary) 0%, var(--eot-primary-dark) 100%);
+    color: white;
+    padding: 1.8rem 1.6rem;
+    border-radius: 18px;
+    margin-bottom: 1.6rem;
+    box-shadow: 0 6px 18px rgba(20, 80, 77, 0.25);
+}
+.eot-hero h1 {
+    color: white !important;
+    margin: 0 0 0.2rem 0;
+    font-size: 1.6rem;
+}
+.eot-hero p {
+    color: #DDEDEB;
+    margin: 0;
+    font-size: 0.95rem;
+}
+
+.eot-section-label {
+    display: inline-block;
+    font-family: 'Poppins', sans-serif;
+    font-weight: 600;
+    font-size: 0.78rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--eot-primary-dark);
+    background: #E4F1EF;
+    padding: 0.3rem 0.7rem;
+    border-radius: 999px;
+    margin-bottom: 0.6rem;
+}
+.eot-section-label.allocated {
+    color: #8A4B1F;
+    background: #FBE7D6;
+}
+.eot-section-sub {
+    color: var(--eot-muted);
+    font-size: 0.88rem;
+    margin-top: -0.4rem;
+    margin-bottom: 0.8rem;
+}
+
+[data-testid="stVerticalBlockBorderWrapper"] {
+    background: var(--eot-card);
+    border: 1px solid var(--eot-border) !important;
+    border-radius: 14px !important;
+    padding: 0.2rem 0.4rem;
+}
+
+.stButton > button {
+    border-radius: 10px;
+    font-weight: 600;
+    border: none;
+}
+.stButton > button[kind="primary"] {
+    background: var(--eot-primary);
+}
+.stButton > button[kind="primary"]:hover {
+    background: var(--eot-primary-dark);
+}
+
+.stProgress > div > div > div > div {
+    background-color: var(--eot-primary);
+}
+
+div[data-baseweb="select"] > div {
+    border-radius: 10px;
+}
+
+.eot-signed-badge {
+    display: inline-block;
+    background: #E4F1EF;
+    color: var(--eot-primary-dark);
+    padding: 0.5rem 0.9rem;
+    border-radius: 10px;
+    font-weight: 600;
+}
+</style>
+""", unsafe_allow_html=True)
 
 # Transient network errors between Render and Supabase (dropped HTTP/2
 # connections, "Resource temporarily unavailable", etc.) happen occasionally
@@ -192,7 +302,6 @@ def create_term(label, instructions, meeting_details, copy_jobs_from_term_id=Non
     return new_term
 
 def load_default_standard_jobs(term_id):
-    """Add any default standard jobs not already present in this term (matched by text)."""
     existing = {j["action_text"].strip().lower() for j in get_standard_jobs(term_id)}
     current_max = len(existing)
     added = 0
@@ -203,7 +312,6 @@ def load_default_standard_jobs(term_id):
     return added
 
 def load_default_additional_jobs(term_id):
-    """Add any default additional jobs not already present in this term (matched by text)."""
     existing = {j["action_text"].strip().lower() for j in get_additional_jobs(term_id)}
     current_max = len(existing)
     added = 0
@@ -223,8 +331,6 @@ def add_staff(name):
     name = name.strip()
     existing = _run(sb.table("eot_staff").select("*").ilike("name", name)).data
     if existing:
-        # Name already exists (likely previously removed/inactive) — reactivate it
-        # rather than trying to insert a duplicate, which the unique constraint blocks.
         _run(sb.table("eot_staff").update({"active": True}).eq("id", existing[0]["id"]))
     else:
         _run(sb.table("eot_staff").insert({"name": name}))
@@ -308,144 +414,204 @@ def set_additional_complete(job_id, completed, by_name=""):
     _run(sb.table("eot_additional_jobs").update(payload).eq("id", job_id))
 
 # ---------------------------------------------------------------------------
-# UI
+# Session state / navigation
 # ---------------------------------------------------------------------------
 
-st.title("✅ End of Term Checklist")
+if "eot_view" not in st.session_state:
+    st.session_state.eot_view = "landing"
+if "eot_staff_id" not in st.session_state:
+    st.session_state.eot_staff_id = None
+if "eot_term_id" not in st.session_state:
+    st.session_state.eot_term_id = None
+
+def go_to(view):
+    st.session_state.eot_view = view
+    st.rerun()
+
+def go_home():
+    st.session_state.eot_view = "landing"
+    st.session_state.eot_staff_id = None
+    st.session_state.eot_term_id = None
+    st.rerun()
+
+# ---------------------------------------------------------------------------
+# Hero header (shown on every screen)
+# ---------------------------------------------------------------------------
+
+st.markdown(
+    """
+    <div class="eot-hero">
+        <h1>✅ End of Term Checklist</h1>
+        <p>Cowandilla Learning Centre — Learning &amp; Behaviour Unit</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 all_terms = get_terms()
 open_terms = get_open_terms(all_terms)
 
-tab_mine, tab_additional, tab_admin = st.tabs(["📋 My Checklist", "🧹 Additional Jobs", "🔐 Admin"])
+# ---------------------------------------------------------------------------
+# Landing — just term (if needed), name, or Admin
+# ---------------------------------------------------------------------------
 
-# ---- My Checklist -----------------------------------------------------
-
-with tab_mine:
+if st.session_state.eot_view == "landing":
     if not open_terms:
-        st.info("No term is currently open for checking. Check back once your admin opens one.")
+        st.info("No term is currently open for checking. Check back once your admin opens one, or go to Admin below.")
+        term = None
+    elif len(open_terms) == 1:
+        term = open_terms[0]
+        st.caption(f"Open term: **{term['label']}**")
     else:
-        term_label = st.selectbox("Term", [t["label"] for t in open_terms], key="mine_term")
+        term_label = st.selectbox("Term", [t["label"] for t in open_terms], key="landing_term")
         term = next(t for t in open_terms if t["label"] == term_label)
 
-        if term.get("instructions"):
-            st.info(term["instructions"])
-        if term.get("meeting_details"):
-            st.markdown(f"**{term['meeting_details']}**")
+    staff_list = get_staff()
+    name_options = ["— Select your name —"] + [s["name"] for s in staff_list]
+    picked = st.selectbox("Who are you?", name_options, key="landing_who")
 
-        staff_list = get_staff()
-        if not staff_list:
-            st.warning("No staff have been added yet. Ask an admin to add staff in the Admin tab.")
+    if picked != "— Select your name —" and term:
+        staff = next(s for s in staff_list if s["name"] == picked)
+        st.session_state.eot_staff_id = staff["id"]
+        st.session_state.eot_term_id = term["id"]
+        go_to("staff")
+
+    st.markdown("<div style='text-align:center; color:#9AA5A9; margin: 1.2rem 0 0.6rem;'>— or —</div>", unsafe_allow_html=True)
+    _, mid, _ = st.columns([1, 1, 1])
+    with mid:
+        if st.button("🔐 Admin", use_container_width=True):
+            go_to("admin")
+
+# ---------------------------------------------------------------------------
+# Staff view — everyone's jobs, then allocated jobs, then sign-off
+# ---------------------------------------------------------------------------
+
+elif st.session_state.eot_view == "staff":
+    staff_list = get_staff()
+    term = next((t for t in all_terms if t["id"] == st.session_state.eot_term_id), None)
+    staff = next((s for s in staff_list if s["id"] == st.session_state.eot_staff_id), None)
+
+    if not term or not staff:
+        go_home()
+
+    if st.button("⬅ Back"):
+        go_home()
+
+    st.markdown(f"### Hi {staff['name']} 👋")
+    st.caption(term["label"])
+    if term.get("instructions"):
+        st.info(term["instructions"])
+    if term.get("meeting_details"):
+        st.markdown(f"**{term['meeting_details']}**")
+
+    signoff = get_signoff(term["id"], staff["id"])
+    is_signed = bool(signoff and signoff["signed"])
+
+    # --- Section 1: everyone's jobs -------------------------------------
+    st.markdown('<span class="eot-section-label">Everyone\'s jobs</span>', unsafe_allow_html=True)
+    st.markdown('<div class="eot-section-sub">These are expected of every staff member before you leave for the holidays.</div>', unsafe_allow_html=True)
+
+    jobs = get_standard_jobs(term["id"])
+    completions = get_completions(term["id"], staff["id"])
+    done_count = 0
+    with st.container(border=True):
+        if not jobs:
+            st.caption("No standard checklist items have been set up for this term yet.")
         else:
-            names = [s["name"] for s in staff_list]
-            picked = st.selectbox("Who are you?", names, key="mine_who")
-            staff = next(s for s in staff_list if s["name"] == picked)
-
-            signoff = get_signoff(term["id"], staff["id"])
-            is_signed = bool(signoff and signoff["signed"])
-
-            jobs = get_standard_jobs(term["id"])
-            completions = get_completions(term["id"], staff["id"])
-
-            done_count = 0
-            if not jobs:
-                st.info("No standard checklist items have been set up for this term yet.")
-            else:
-                st.markdown("---")
-                for job in jobs:
-                    existing = completions.get(job["id"])
-                    checked = bool(existing and existing["completed"])
-                    if checked:
-                        done_count += 1
-                    new_val = st.checkbox(job["action_text"], value=checked, key=f"job_{job['id']}_{staff['id']}", disabled=is_signed)
-                    if new_val != checked:
-                        set_completion(term["id"], staff["id"], job["id"], new_val)
-                        st.rerun()
-
-                st.progress(done_count / len(jobs))
-                st.caption(f"{done_count} of {len(jobs)} items complete")
-
-            st.markdown("---")
-            st.subheader("Sign off")
-            if is_signed:
-                st.success(f"Signed by **{signoff['signature_name']}** on {signoff['signed_at'][:16].replace('T', ' ')}")
-                if st.button("Unlock to make changes"):
-                    unsign(term["id"], staff["id"])
-                    st.rerun()
-            else:
-                all_complete = (not jobs) or (done_count == len(jobs))
-                if not all_complete:
-                    st.warning(
-                        "All items above must be completed before you can sign off. "
-                        "If there is any reason you're unable to complete an item, "
-                        "this needs to be discussed with Leadership before signing."
-                    )
-                sig_name = st.text_input("Type your full name to sign", key="sig_name_input", disabled=not all_complete)
-                if st.button("Sign & Submit", type="primary", disabled=not all_complete):
-                    if sig_name.strip().lower() == staff["name"].strip().lower():
-                        sign_off(term["id"], staff["id"], sig_name.strip())
-                        st.rerun()
-                    else:
-                        st.error(f"Please type your name exactly as selected above ({staff['name']}) to confirm.")
-
-# ---- Additional Jobs (shared) -----------------------------------------
-
-with tab_additional:
-    if not open_terms:
-        st.info("No term is currently open for checking.")
-    else:
-        term_label = st.selectbox("Term", [t["label"] for t in open_terms], key="additional_term")
-        term = next(t for t in open_terms if t["label"] == term_label)
-
-        st.subheader("Additional Jobs — everyone can see this list")
-        staff_list = get_staff()
-        jobs = get_additional_jobs(term["id"])
-        assignments = get_assignments(term["id"])
-
-        if not staff_list:
-            st.warning("No staff have been added yet.")
-        elif not jobs:
-            st.info("No additional jobs have been set up for this term yet.")
-        else:
-            who_am_i = st.selectbox("Acting as", [s["name"] for s in staff_list], key="additional_who")
-            me = next(s for s in staff_list if s["name"] == who_am_i)
-
-            st.markdown("---")
             for job in jobs:
-                assigned = assignments.get(job["id"], [])
-                assigned_names = [a["eot_staff"]["name"] for a in assigned if a.get("eot_staff")]
-                i_am_assigned = me["name"] in assigned_names
+                existing = completions.get(job["id"])
+                checked = bool(existing and existing["completed"])
+                if checked:
+                    done_count += 1
+                new_val = st.checkbox(job["action_text"], value=checked, key=f"job_{job['id']}_{staff['id']}", disabled=is_signed)
+                if new_val != checked:
+                    set_completion(term["id"], staff["id"], job["id"], new_val)
+                    st.rerun()
+            st.progress(done_count / len(jobs) if jobs else 0)
+            st.caption(f"{done_count} of {len(jobs)} complete")
 
-                cols = st.columns([4, 3, 2])
+    # --- Section 2: allocated jobs ---------------------------------------
+    st.markdown('<span class="eot-section-label allocated">Your allocated jobs</span>', unsafe_allow_html=True)
+    st.markdown('<div class="eot-section-sub">Shared jobs specifically assigned to you.</div>', unsafe_allow_html=True)
+
+    add_jobs = get_additional_jobs(term["id"])
+    assignments = get_assignments(term["id"])
+    my_jobs = []
+    other_jobs = []
+    for j in add_jobs:
+        assigned = assignments.get(j["id"], [])
+        assigned_names = [a["eot_staff"]["name"] for a in assigned if a.get("eot_staff")]
+        if staff["name"] in assigned_names:
+            my_jobs.append((j, assigned_names))
+        else:
+            other_jobs.append((j, assigned_names))
+
+    with st.container(border=True):
+        if not my_jobs:
+            st.caption("Nothing has been specifically allocated to you yet.")
+        else:
+            for job, assigned_names in my_jobs:
+                others = [n for n in assigned_names if n != staff["name"]]
+                label = job["action_text"] + (f"  _(with {', '.join(others)})_" if others else "")
+                new_complete = st.checkbox(label, value=job["completed"], key=f"myaddcomplete_{job['id']}")
+                if new_complete != job["completed"]:
+                    set_additional_complete(job["id"], new_complete, by_name=staff["name"])
+                    st.rerun()
+
+    with st.expander("See other shared jobs — pick one up if you can help"):
+        if not other_jobs:
+            st.caption("Nothing else on the shared list right now.")
+        else:
+            for job, assigned_names in other_jobs:
+                cols = st.columns([4, 2])
                 with cols[0]:
                     label = job["action_text"]
                     if job["completed"]:
-                        st.markdown(f"~~{label}~~  ✅")
+                        st.markdown(f"~~{label}~~ ✅")
                     else:
                         st.markdown(label)
-                with cols[1]:
                     st.caption("Assigned: " + (", ".join(assigned_names) if assigned_names else "Unassigned"))
-                    if i_am_assigned:
-                        if st.button("Remove myself", key=f"unassign_{job['id']}"):
-                            unassign_staff(job["id"], me["id"])
-                            st.rerun()
-                    else:
-                        if st.button("Assign to me", key=f"assign_{job['id']}"):
-                            assign_staff(term["id"], job["id"], me["id"])
-                            st.rerun()
-                with cols[2]:
-                    new_complete = st.checkbox("Done", value=job["completed"], key=f"addcomplete_{job['id']}")
-                    if new_complete != job["completed"]:
-                        set_additional_complete(job["id"], new_complete, by_name=me["name"])
+                with cols[1]:
+                    if st.button("Assign to me", key=f"assign_other_{job['id']}"):
+                        assign_staff(term["id"], job["id"], staff["id"])
                         st.rerun()
-                st.markdown("---")
 
-# ---- Admin --------------------------------------------------------------
+    # --- Sign off ----------------------------------------------------------
+    st.markdown('<span class="eot-section-label">Sign off</span>', unsafe_allow_html=True)
+    with st.container(border=True):
+        if is_signed:
+            st.markdown(f'<div class="eot-signed-badge">✅ Signed by {signoff["signature_name"]} on {signoff["signed_at"][:16].replace("T", " ")}</div>', unsafe_allow_html=True)
+            if st.button("Unlock to make changes"):
+                unsign(term["id"], staff["id"])
+                st.rerun()
+        else:
+            all_complete = (not jobs) or (done_count == len(jobs))
+            if not all_complete:
+                st.warning(
+                    "All items above must be completed before you can sign off. "
+                    "If there is any reason you're unable to complete an item, "
+                    "this needs to be discussed with Leadership before signing."
+                )
+            sig_name = st.text_input("Type your full name to sign", key="sig_name_input", disabled=not all_complete)
+            if st.button("Sign & Submit", type="primary", disabled=not all_complete):
+                if sig_name.strip().lower() == staff["name"].strip().lower():
+                    sign_off(term["id"], staff["id"], sig_name.strip())
+                    st.rerun()
+                else:
+                    st.error(f"Please type your name exactly as selected above ({staff['name']}) to confirm.")
 
-with tab_admin:
-    st.subheader("Admin")
+# ---------------------------------------------------------------------------
+# Admin view
+# ---------------------------------------------------------------------------
+
+elif st.session_state.eot_view == "admin":
+    if st.button("⬅ Back"):
+        go_home()
+
+    st.markdown('<span class="eot-section-label">Admin</span>', unsafe_allow_html=True)
     if admin_gate():
 
-        st.markdown("### Terms")
+        st.markdown("#### Terms")
         with st.expander("Open / close terms for checking", expanded=not open_terms):
             if not all_terms:
                 st.caption("No terms yet — create one below.")
@@ -483,7 +649,7 @@ with tab_admin:
             st.info("Create a term above to manage its jobs, staff and assignments.")
         else:
             st.markdown("---")
-            st.markdown("### Manage a term")
+            st.markdown("#### Manage a term")
             default_idx = 0
             if open_terms:
                 default_idx = all_terms.index(open_terms[0])
@@ -491,7 +657,7 @@ with tab_admin:
             manage_term = next(t for t in all_terms if t["label"] == manage_label)
 
             st.markdown("---")
-            st.markdown("### Staff")
+            st.markdown("#### Staff")
             staff_list = get_staff()
             col1, col2 = st.columns(2)
             with col1:
@@ -509,7 +675,7 @@ with tab_admin:
                         st.rerun()
 
             st.markdown("---")
-            st.markdown(f"### Standard checklist items — {manage_term['label']}")
+            st.markdown(f"#### Standard checklist items — {manage_term['label']}")
             if st.button("Load standard CLC-LBU list (adds any missing items)"):
                 n = load_default_standard_jobs(manage_term["id"])
                 st.success(f"Added {n} item(s) from the standard list." if n else "Everything from the standard list is already here.")
@@ -532,7 +698,7 @@ with tab_admin:
                     st.rerun()
 
             st.markdown("---")
-            st.markdown(f"### Additional jobs — {manage_term['label']}")
+            st.markdown(f"#### Additional jobs — {manage_term['label']}")
             if st.button("Load standard CLC-LBU additional jobs (adds any missing items)"):
                 n = load_default_additional_jobs(manage_term["id"])
                 st.success(f"Added {n} item(s) from the standard list." if n else "Everything from the standard list is already here.")
@@ -555,7 +721,7 @@ with tab_admin:
                     st.rerun()
 
             st.markdown("---")
-            st.markdown(f"### Assign staff to additional jobs — {manage_term['label']}")
+            st.markdown(f"#### Assign staff to additional jobs — {manage_term['label']}")
             assignments = get_assignments(manage_term["id"])
             if not add_jobs:
                 st.caption("Add some additional jobs above first.")
@@ -578,7 +744,7 @@ with tab_admin:
                         st.rerun()
 
             st.markdown("---")
-            st.markdown(f"### Overview — who's done what — {manage_term['label']}")
+            st.markdown(f"#### Overview — who's done what — {manage_term['label']}")
             std_jobs_for_overview = get_standard_jobs(manage_term["id"])
             rows = []
             for s in staff_list:
