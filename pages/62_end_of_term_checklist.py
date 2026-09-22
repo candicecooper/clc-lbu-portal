@@ -39,18 +39,32 @@ def get_supabase():
 sb = get_supabase()
 
 # Try to use the portal's shared staff-level auth module if it exists;
-# otherwise fall back to a simple password check.
+# otherwise fall back to a simple password check. Different portal tools may
+# have called the gate function different things, so try the common names
+# before giving up and using our own password field.
 def admin_gate() -> bool:
     try:
-        import staff_auth  # shared module used by other portal tools
-        return staff_auth.check_password()
+        import staff_auth
+        for fn_name in ("check_password", "verify_password", "authenticate",
+                         "staff_login", "require_staff_password", "password_gate",
+                         "login", "check_staff_password", "require_login"):
+            fn = getattr(staff_auth, fn_name, None)
+            if callable(fn):
+                return fn()
+        st.warning(
+            "Found staff_auth module but couldn't find a recognised gate function "
+            "on it — falling back to a simple password below. Let Candice know "
+            "the function name so this can be wired up properly."
+        )
     except ImportError:
-        pw = st.text_input("Admin password", type="password", key="eot_admin_pw")
-        correct = st.secrets.get("EOT_ADMIN_PASSWORD", "")
-        if not correct:
-            st.warning("No EOT_ADMIN_PASSWORD set in secrets — admin tab is unlocked for now.")
-            return True
-        return pw == correct
+        pass
+
+    pw = st.text_input("Admin password", type="password", key="eot_admin_pw")
+    correct = st.secrets.get("EOT_ADMIN_PASSWORD", "")
+    if not correct:
+        st.warning("No EOT_ADMIN_PASSWORD set in secrets — admin tab is unlocked for now.")
+        return True
+    return pw == correct
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
