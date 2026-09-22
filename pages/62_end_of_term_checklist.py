@@ -177,7 +177,14 @@ def get_staff(active_only=True):
     return q.execute().data
 
 def add_staff(name):
-    sb.table("eot_staff").insert({"name": name.strip()}).execute()
+    name = name.strip()
+    existing = sb.table("eot_staff").select("*").ilike("name", name).execute().data
+    if existing:
+        # Name already exists (likely previously removed/inactive) — reactivate it
+        # rather than trying to insert a duplicate, which the unique constraint blocks.
+        sb.table("eot_staff").update({"active": True}).eq("id", existing[0]["id"]).execute()
+    else:
+        sb.table("eot_staff").insert({"name": name}).execute()
 
 def remove_staff(staff_id):
     sb.table("eot_staff").update({"active": False}).eq("id", staff_id).execute()
