@@ -1036,12 +1036,62 @@ with tab2:
             st.caption("Log the request details — no outcome yet. This moves them into Extension Decision once saved.")
 
             eligible = [r for r in allocated_data if not _has_pending_request(r)]
+
+            # ── Missing-student finder: explains exactly why a name isn't in the dropdown ──
+            with st.expander("🔎 Can't find a student? Search here to see why"):
+                lookup = st.text_input("Type part of the student's name", key="ext_missing_lookup")
+                if lookup.strip():
+                    matches = [r for r in all_students.data
+                               if lookup.strip().lower() in (r.get("student_name") or "").lower()]
+                    if not matches:
+                        st.warning(
+                            "No row with that name exists in `allocation_students` at all. "
+                            "Check the spelling, or add them through New Allocations (or the Excel sync) first."
+                        )
+                    for r in matches:
+                        name = r.get("student_name") or "(no name)"
+                        outcome = r.get("outcome")
+                        status = r.get("current_status")
+                        if outcome is None or str(outcome).strip() == "":
+                            reason = ("Still a **draft** in New Allocations (no outcome recorded). "
+                                      "Finalise them as *Allocated* in New Allocations → Stage 2 first.")
+                        elif str(outcome).strip().lower() != "allocated":
+                            reason = (f"Outcome is **{outcome!r}**, not *Allocated*, so they aren't treated "
+                                      "as a placed student. Correct the outcome if this is wrong.")
+                        elif str(status or "").strip().lower() == "inactive":
+                            reason = ("Marked **Inactive** in Current_Status, so they're hidden. "
+                                      "Change Current_Status back to Active if they're still attending.")
+                        elif _has_pending_request(r):
+                            reason = (f"Already has an **open request** (weeks: {clean_num_display(r.get('extension_weeks')) or '—'}, "
+                                      f"proposed finish: {r.get('proposed_extension_finish_date') or '—'}) with no decision date. "
+                                      "Find them under **✅ Extension Decision** instead. If that request is old "
+                                      "imported data rather than a real request, use the button below to clear it.")
+                        else:
+                            reason = "Should be in the dropdown — look for their name with the school and year level beside it."
+                        st.markdown(f"**{name}** — {r.get('school') or 'no school'}: {reason}")
+
+                        if (str(outcome or "").strip().lower() == "allocated" and _has_pending_request(r)):
+                            if st.button(f"🧹 Clear stale request for {name}", key=f"clear_stale_{r['id']}"):
+                                try:
+                                    supabase.table("allocation_students").update({
+                                        "extension_weeks": None,
+                                        "proposed_extension_finish_date": None,
+                                    }).eq("id", r["id"]).execute()
+                                    st.success(f"Cleared — {name} will now appear in the dropdown.")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+
             if eligible:
                 sorted_students = sorted(eligible, key=lambda r: (r.get('student_name') or '').lower())
-                options = {
-                    f"{r['student_name']} — {r.get('school', 'no school')} (Year {r.get('year_level', '?')})": r
-                    for r in sorted_students
-                }
+                options = {}
+                for r in sorted_students:
+                    label = f"{r.get('student_name') or '(no name)'} — {r.get('school') or 'no school'} (Year {r.get('year_level') or '?'})"
+                    # Two rows with identical name/school/year would otherwise overwrite each
+                    # other in this dict and silently drop a student from the list.
+                    if label in options:
+                        label = f"{label} [record {r['id']}]"
+                    options[label] = r
                 chosen = st.selectbox(f"Select allocated student ({len(options)} total — type to search)", list(options.keys()))
                 record = options[chosen]
 
@@ -1083,11 +1133,13 @@ with tab2:
             pending = [r for r in allocated_data if _has_pending_request(r)]
             if pending:
                 sorted_pending = sorted(pending, key=lambda r: (r.get('student_name') or '').lower())
-                options = {
-                    f"{r['student_name']} — {r.get('school', 'no school')} "
-                    f"(requested {r.get('extension_weeks') or '?'} wks)": r
-                    for r in sorted_pending
-                }
+                options = {}
+                for r in sorted_pending:
+                    label = (f"{r.get('student_name') or '(no name)'} — {r.get('school') or 'no school'} "
+                             f"(requested {clean_num_display(r.get('extension_weeks')) or '?'} wks)")
+                    if label in options:
+                        label = f"{label} [record {r['id']}]"
+                    options[label] = r
                 chosen = st.selectbox(f"Select pending request ({len(options)} total)", list(options.keys()))
                 record = options[chosen]
 
