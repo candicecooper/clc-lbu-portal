@@ -6,16 +6,21 @@ End of Term actions checklist for CLC-LBU staff portal.
 Landing page is deliberately minimal: pick your name (or go to Admin).
 Once a name is picked, the page opens straight to that person's checklist,
 split into two clearly labelled sections:
-  1. Jobs everyone is expected to complete (the standard checklist)
-  2. Your allocated jobs (the shared additional-jobs list, highlighting
-     what's assigned to you, with the option to pick up more)
+  1. Their role's standard jobs — "Teaching Staff Jobs" or "Admin Staff Jobs"
+     depending on the role set against their name (the two lists are managed
+     separately in Admin, so teaching staff and admin staff can have
+     different expectations).
+  2. Their allocated jobs — the shared additional-jobs list, highlighting
+     what's assigned to them, with the option to pick up more.
 ...then a sign-off section that requires everything to be ticked before
 signing (or a Leadership-agreed override from Admin).
 
-Admin (password protected) manages staff, jobs, term status and assignments,
-and can see an overview of who's done what.
+Admin (password protected) manages staff (incl. role), jobs per role, term
+status and assignments, and can see an overview of who's done what.
 
-Requires a Supabase project with the tables in eot_checklist_schema.sql.
+Requires a Supabase project with the tables/migration in
+eot_checklist_schema.sql — including the `role` column on eot_staff and
+eot_standard_jobs added for this version.
 Uses st.secrets["SUPABASE_URL"] / st.secrets["SUPABASE_KEY"] (same pattern as
 the rest of the portal). Admin password defaults to "secret2026" — set
 st.secrets["EOT_ADMIN_PASSWORD"] to override it.
@@ -40,6 +45,11 @@ except ImportError:  # pragma: no cover - httpcore ships as an httpx dependency
 st.set_page_config(page_title="End of Term Checklist", page_icon="✅", layout="centered")
 
 ADMIN_PASSWORD_DEFAULT = "secret2026"
+
+ROLE_TEACHING = "teaching"
+ROLE_ADMIN = "admin"
+ROLE_LABELS = {ROLE_TEACHING: "Teaching Staff", ROLE_ADMIN: "Admin Staff"}
+ROLE_CHOICES = [ROLE_TEACHING, ROLE_ADMIN]
 
 @st.cache_resource
 def get_supabase():
@@ -221,11 +231,13 @@ def now_iso():
 
 # ---------------------------------------------------------------------------
 # Default job lists — from the CLC-LBU paper "End of Term actions" checklist.
-# These can be loaded into a term via the Admin tab, and edited/added to
-# freely afterwards — they're just a starting point, not fixed.
+# These were the "All staff" items on the paper sheet, which map most closely
+# to teaching staff duties (classroom, EMS, program notebooks etc). They can
+# be loaded into a term via Admin, and edited/added to freely afterwards.
+# There's no default list for Admin Staff jobs — add those directly.
 # ---------------------------------------------------------------------------
 
-DEFAULT_STANDARD_JOBS = [
+DEFAULT_TEACHING_JOBS = [
     "All communication with parents uploaded to EMS",
     "Program Notebooks all up to date",
     "Checklists for each student up to date",
@@ -285,6 +297,7 @@ def create_term(label, instructions, meeting_details, copy_jobs_from_term_id=Non
             _run(sb.table("eot_standard_jobs").insert({
                 "term_id": new_term["id"],
                 "action_text": j["action_text"],
+                "role": j.get("role", ROLE_TEACHING),
                 "order_index": j["order_index"],
             }))
         add_jobs = _run(sb.table("eot_additional_jobs").select("*").eq("term_id", copy_jobs_from_term_id).order("order_index")).data
@@ -295,19 +308,19 @@ def create_term(label, instructions, meeting_details, copy_jobs_from_term_id=Non
                 "order_index": j["order_index"],
             }))
     elif seed_defaults:
-        for i, text in enumerate(DEFAULT_STANDARD_JOBS):
-            _run(sb.table("eot_standard_jobs").insert({"term_id": new_term["id"], "action_text": text, "order_index": i}))
+        for i, text in enumerate(DEFAULT_TEACHING_JOBS):
+            _run(sb.table("eot_standard_jobs").insert({"term_id": new_term["id"], "action_text": text, "role": ROLE_TEACHING, "order_index": i}))
         for i, text in enumerate(DEFAULT_ADDITIONAL_JOBS):
             _run(sb.table("eot_additional_jobs").insert({"term_id": new_term["id"], "action_text": text, "order_index": i}))
     return new_term
 
-def load_default_standard_jobs(term_id):
-    existing = {j["action_text"].strip().lower() for j in get_standard_jobs(term_id)}
+def load_default_teaching_jobs(term_id):
+    existing = {j["action_text"].strip().lower() for j in get_standard_jobs(term_id, ROLE_TEACHING)}
     current_max = len(existing)
     added = 0
-    for text in DEFAULT_STANDARD_JOBS:
+    for text in DEFAULT_TEACHING_JOBS:
         if text.strip().lower() not in existing:
-            _run(sb.table("eot_standard_jobs").insert({"term_id": term_id, "action_text": text, "order_index": current_max + added}))
+            _run(sb.table("eot_standard_jobs").insert({"term_id": term_id, "action_text": text, "role": ROLE_TEACHING, "order_index": current_max + added}))
             added += 1
     return added
 
@@ -321,28 +334,36 @@ def load_default_additional_jobs(term_id):
             added += 1
     return added
 
-def get_staff(active_only=True):
+def get_staff(active_only=True, role=None):
     q = sb.table("eot_staff").select("*").order("name")
     if active_only:
         q = q.eq("active", True)
+    if role:
+        q = q.eq("role", role)
     return _run(q).data
 
-def add_staff(name):
+def add_staff(name, role=ROLE_TEACHING):
     name = name.strip()
     existing = _run(sb.table("eot_staff").select("*").ilike("name", name)).data
     if existing:
-        _run(sb.table("eot_staff").update({"active": True}).eq("id", existing[0]["id"]))
+        # Name already exists (likely previously removed/inactive) — reactivate it
+        # and update its role, rather than trying to insert a duplicate (which
+        # the unique constraint blocks).
+        _run(sb.table("eot_staff").update({"active": True, "role": role}).eq("id", existing[0]["id"]))
     else:
-        _run(sb.table("eot_staff").insert({"name": name}))
+        _run(sb.table("eot_staff").insert({"name": name, "role": role}))
+
+def set_staff_role(staff_id, role):
+    _run(sb.table("eot_staff").update({"role": role}).eq("id", staff_id))
 
 def remove_staff(staff_id):
     _run(sb.table("eot_staff").update({"active": False}).eq("id", staff_id))
 
-def get_standard_jobs(term_id):
-    return _run(sb.table("eot_standard_jobs").select("*").eq("term_id", term_id).order("order_index")).data
+def get_standard_jobs(term_id, role):
+    return _run(sb.table("eot_standard_jobs").select("*").eq("term_id", term_id).eq("role", role).order("order_index")).data
 
-def add_standard_job(term_id, text, order_index):
-    _run(sb.table("eot_standard_jobs").insert({"term_id": term_id, "action_text": text, "order_index": order_index}))
+def add_standard_job(term_id, text, role, order_index):
+    _run(sb.table("eot_standard_jobs").insert({"term_id": term_id, "action_text": text, "role": role, "order_index": order_index}))
 
 def update_standard_job(job_id, text):
     _run(sb.table("eot_standard_jobs").update({"action_text": text}).eq("id", job_id))
@@ -483,7 +504,7 @@ if st.session_state.eot_view == "landing":
             go_to("admin")
 
 # ---------------------------------------------------------------------------
-# Staff view — everyone's jobs, then allocated jobs, then sign-off
+# Staff view — role-specific jobs, then allocated jobs, then sign-off
 # ---------------------------------------------------------------------------
 
 elif st.session_state.eot_view == "staff":
@@ -497,8 +518,11 @@ elif st.session_state.eot_view == "staff":
     if st.button("⬅ Back"):
         go_home()
 
+    role = staff.get("role", ROLE_TEACHING)
+    role_label = ROLE_LABELS.get(role, "Staff")
+
     st.markdown(f"### Hi {staff['name']} 👋")
-    st.caption(term["label"])
+    st.caption(f"{term['label']} · {role_label}")
     if term.get("instructions"):
         st.info(term["instructions"])
     if term.get("meeting_details"):
@@ -507,16 +531,16 @@ elif st.session_state.eot_view == "staff":
     signoff = get_signoff(term["id"], staff["id"])
     is_signed = bool(signoff and signoff["signed"])
 
-    # --- Section 1: everyone's jobs -------------------------------------
-    st.markdown('<span class="eot-section-label">Everyone\'s jobs</span>', unsafe_allow_html=True)
-    st.markdown('<div class="eot-section-sub">These are expected of every staff member before you leave for the holidays.</div>', unsafe_allow_html=True)
+    # --- Section 1: role-specific standard jobs --------------------------
+    st.markdown(f'<span class="eot-section-label">{role_label} Jobs</span>', unsafe_allow_html=True)
+    st.markdown(f'<div class="eot-section-sub">These are expected of every {role_label.lower()} member before you leave for the holidays.</div>', unsafe_allow_html=True)
 
-    jobs = get_standard_jobs(term["id"])
+    jobs = get_standard_jobs(term["id"], role)
     completions = get_completions(term["id"], staff["id"])
     done_count = 0
     with st.container(border=True):
         if not jobs:
-            st.caption("No standard checklist items have been set up for this term yet.")
+            st.caption(f"No {role_label.lower()} checklist items have been set up for this term yet.")
         else:
             for job in jobs:
                 existing = completions.get(job["id"])
@@ -629,13 +653,13 @@ elif st.session_state.eot_view == "admin":
             new_meeting = st.text_input("End of term meeting details", placeholder="e.g. End of Term Staff Meeting Wednesday 3:00 start - all Staff Kent Town Hotel")
             copy_from = st.selectbox(
                 "Job list to start with",
-                ["Start blank", "Use the standard CLC-LBU list"] + [t["label"] for t in all_terms],
+                ["Start blank", "Use the standard CLC-LBU list (Teaching Staff jobs only)"] + [t["label"] for t in all_terms],
             )
             if st.button("Create new term", type="primary"):
                 if new_label.strip():
                     copy_id = None
                     seed = False
-                    if copy_from == "Use the standard CLC-LBU list":
+                    if copy_from.startswith("Use the standard CLC-LBU list"):
                         seed = True
                     elif copy_from != "Start blank":
                         copy_id = next(t["id"] for t in all_terms if t["label"] == copy_from)
@@ -662,9 +686,11 @@ elif st.session_state.eot_view == "admin":
             col1, col2 = st.columns(2)
             with col1:
                 new_name = st.text_input("Add staff member", key="add_staff_name")
+                new_role_label = st.radio("Role", [ROLE_LABELS[ROLE_TEACHING], ROLE_LABELS[ROLE_ADMIN]], key="add_staff_role", horizontal=True)
+                new_role = ROLE_TEACHING if new_role_label == ROLE_LABELS[ROLE_TEACHING] else ROLE_ADMIN
                 if st.button("Add staff"):
                     if new_name.strip():
-                        add_staff(new_name)
+                        add_staff(new_name, new_role)
                         st.rerun()
             with col2:
                 if staff_list:
@@ -674,31 +700,67 @@ elif st.session_state.eot_view == "admin":
                         remove_staff(sid)
                         st.rerun()
 
+            if staff_list:
+                with st.expander("Current staff & roles"):
+                    for s in staff_list:
+                        c1, c2, c3 = st.columns([3, 2, 1])
+                        c1.write(s["name"])
+                        current_role_label = ROLE_LABELS.get(s.get("role", ROLE_TEACHING), ROLE_LABELS[ROLE_TEACHING])
+                        new_label = c2.selectbox(
+                            "Role", [ROLE_LABELS[ROLE_TEACHING], ROLE_LABELS[ROLE_ADMIN]],
+                            index=[ROLE_LABELS[ROLE_TEACHING], ROLE_LABELS[ROLE_ADMIN]].index(current_role_label),
+                            key=f"role_select_{s['id']}", label_visibility="collapsed",
+                        )
+                        new_role_val = ROLE_TEACHING if new_label == ROLE_LABELS[ROLE_TEACHING] else ROLE_ADMIN
+                        if c3.button("Save", key=f"role_save_{s['id']}"):
+                            if new_role_val != s.get("role", ROLE_TEACHING):
+                                set_staff_role(s["id"], new_role_val)
+                                st.rerun()
+
             st.markdown("---")
-            st.markdown(f"#### Standard checklist items — {manage_term['label']}")
+            st.markdown(f"#### Teaching Staff Jobs — {manage_term['label']}")
             if st.button("Load standard CLC-LBU list (adds any missing items)"):
-                n = load_default_standard_jobs(manage_term["id"])
+                n = load_default_teaching_jobs(manage_term["id"])
                 st.success(f"Added {n} item(s) from the standard list." if n else "Everything from the standard list is already here.")
                 st.rerun()
-            std_jobs = get_standard_jobs(manage_term["id"])
-            for j in std_jobs:
+            teaching_jobs = get_standard_jobs(manage_term["id"], ROLE_TEACHING)
+            for j in teaching_jobs:
                 c1, c2, c3 = st.columns([4, 1, 1])
-                edited = c1.text_input("Item text", value=j["action_text"], key=f"edit_std_{j['id']}", label_visibility="collapsed")
-                if c2.button("Save", key=f"save_std_{j['id']}"):
+                edited = c1.text_input("Item text", value=j["action_text"], key=f"edit_teach_{j['id']}", label_visibility="collapsed")
+                if c2.button("Save", key=f"save_teach_{j['id']}"):
                     if edited.strip() and edited.strip() != j["action_text"]:
                         update_standard_job(j["id"], edited.strip())
                         st.rerun()
-                if c3.button("Delete", key=f"del_std_{j['id']}"):
+                if c3.button("Delete", key=f"del_teach_{j['id']}"):
                     delete_standard_job(j["id"])
                     st.rerun()
-            new_job = st.text_input("Add a standard checklist item", key="new_std_job")
-            if st.button("Add item"):
-                if new_job.strip():
-                    add_standard_job(manage_term["id"], new_job.strip(), len(std_jobs))
+            new_teach_job = st.text_input("Add a Teaching Staff checklist item", key="new_teach_job")
+            if st.button("Add item", key="add_teach_job_btn"):
+                if new_teach_job.strip():
+                    add_standard_job(manage_term["id"], new_teach_job.strip(), ROLE_TEACHING, len(teaching_jobs))
                     st.rerun()
 
             st.markdown("---")
-            st.markdown(f"#### Additional jobs — {manage_term['label']}")
+            st.markdown(f"#### Admin Staff Jobs — {manage_term['label']}")
+            admin_jobs = get_standard_jobs(manage_term["id"], ROLE_ADMIN)
+            for j in admin_jobs:
+                c1, c2, c3 = st.columns([4, 1, 1])
+                edited = c1.text_input("Item text", value=j["action_text"], key=f"edit_adminjob_{j['id']}", label_visibility="collapsed")
+                if c2.button("Save", key=f"save_adminjob_{j['id']}"):
+                    if edited.strip() and edited.strip() != j["action_text"]:
+                        update_standard_job(j["id"], edited.strip())
+                        st.rerun()
+                if c3.button("Delete", key=f"del_adminjob_{j['id']}"):
+                    delete_standard_job(j["id"])
+                    st.rerun()
+            new_admin_job = st.text_input("Add an Admin Staff checklist item", key="new_admin_job")
+            if st.button("Add item", key="add_admin_job_btn"):
+                if new_admin_job.strip():
+                    add_standard_job(manage_term["id"], new_admin_job.strip(), ROLE_ADMIN, len(admin_jobs))
+                    st.rerun()
+
+            st.markdown("---")
+            st.markdown(f"#### Additional jobs (shared) — {manage_term['label']}")
             if st.button("Load standard CLC-LBU additional jobs (adds any missing items)"):
                 n = load_default_additional_jobs(manage_term["id"])
                 st.success(f"Added {n} item(s) from the standard list." if n else "Everything from the standard list is already here.")
@@ -745,16 +807,18 @@ elif st.session_state.eot_view == "admin":
 
             st.markdown("---")
             st.markdown(f"#### Overview — who's done what — {manage_term['label']}")
-            std_jobs_for_overview = get_standard_jobs(manage_term["id"])
             rows = []
             for s in staff_list:
+                s_role = s.get("role", ROLE_TEACHING)
+                s_jobs = get_standard_jobs(manage_term["id"], s_role)
                 comps = get_completions(manage_term["id"], s["id"])
                 done = sum(1 for v in comps.values() if v["completed"])
                 signoff = get_signoff(manage_term["id"], s["id"])
                 is_signed = bool(signoff and signoff["signed"])
                 rows.append({
                     "Staff": s["name"],
-                    "Standard items done": f"{done}/{len(std_jobs_for_overview)}" if std_jobs_for_overview else "0/0",
+                    "Role": ROLE_LABELS.get(s_role, "Teaching Staff"),
+                    "Standard items done": f"{done}/{len(s_jobs)}" if s_jobs else "0/0",
                     "Signed off": "✅ " + signoff["signature_name"] if is_signed else "—",
                 })
             if rows:
