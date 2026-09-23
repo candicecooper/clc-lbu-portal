@@ -53,145 +53,149 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    html, body, [data-testid="stAppViewContainer"] {
-        background-color: #0a0e27 !important;
-        color: #ffffff !important;
+    /* Light theme: pale background, dark text, teal accents.
+       Matches Streamlit's own light components (tables, alerts,
+       expanders, dropdowns) so every section stays readable. */
+    html, body, .stApp,
+    [data-testid="stAppViewContainer"],
+    [data-testid="stMain"],
+    [data-testid="stHeader"] {
+        background-color: #f3f7f7 !important;
+        color: #1c2b33 !important;
     }
-    
-    h1 {
-        color: #00e5ff !important;
-        text-shadow: 0 0 20px rgba(0, 229, 255, 0.5) !important;
-        border-bottom: 2px solid rgba(26, 122, 122, 0.3) !important;
-        padding-bottom: 15px !important;
-    }
-    
-    h2, h3 {
-        color: #ffd93d !important;
-    }
-    
-    /* General text - brightened for readability */
-    p, span, label, li, div {
-        color: #f5f7fa !important;
+    [data-testid="stSidebar"] {
+        background-color: #e6efef !important;
     }
 
-    /* Markdown body text */
+    h1 {
+        color: #145f5f !important;
+        border-bottom: 3px solid #1A7A7A !important;
+        padding-bottom: 12px !important;
+    }
+    h2, h3 {
+        color: #1A7A7A !important;
+    }
+    h4, h5, h6 {
+        color: #1c2b33 !important;
+    }
+
+    /* General text */
+    p, span, label, li,
     [data-testid="stMarkdownContainer"] p,
     [data-testid="stMarkdownContainer"] li,
-    [data-testid="stMarkdownContainer"] span {
-        color: #f5f7fa !important;
-    }
-
-    /* Radio buttons (View Type selector) */
+    [data-testid="stMarkdownContainer"] span,
+    [data-testid="stWidgetLabel"] p,
     [data-testid="stRadio"] label,
     [data-testid="stRadio"] label p,
-    .stRadio label {
-        color: #ffffff !important;
-    }
-
-    /* Selectbox label + selected value + dropdown options */
-    /* Selectbox label */
     .stSelectbox label {
-        color: #ffffff !important;
+        color: #1c2b33 !important;
     }
 
-    /* Selectbox closed control box - dark background, light text */
+    /* Selectbox - white box, dark text */
     [data-baseweb="select"] > div {
-        background-color: #12193f !important;
-        border: 1px solid rgba(0, 229, 255, 0.4) !important;
+        background-color: #ffffff !important;
+        border: 1px solid #9cc4c4 !important;
     }
     [data-baseweb="select"] div,
     [data-baseweb="select"] span,
     [data-baseweb="select"] input {
-        color: #ffffff !important;
+        color: #1c2b33 !important;
     }
 
-    /* Open dropdown menu (popover) - dark surface so options are readable */
-    [data-baseweb="popover"] div,
+    /* Open dropdown menu */
+    [data-baseweb="popover"] ul,
     [data-baseweb="menu"],
-    [data-baseweb="menu"] ul,
-    ul[role="listbox"] {
-        background-color: #12193f !important;
-    }
+    ul[role="listbox"],
     [role="option"] {
-        background-color: #12193f !important;
-        color: #ffffff !important;
+        background-color: #ffffff !important;
+        color: #1c2b33 !important;
     }
     [role="option"]:hover,
     [role="option"][aria-selected="true"] {
-        background-color: #1f2a5a !important;
-        color: #ffffff !important;
+        background-color: #dcecec !important;
+        color: #1c2b33 !important;
     }
 
-    /* Tab labels */
-    [data-baseweb="tab"] {
-        color: #ffffff !important;
-    }
+    /* Tabs */
+    [data-baseweb="tab"],
     [data-baseweb="tab"] p {
-        color: #ffffff !important;
+        color: #1c2b33 !important;
+    }
+    [data-baseweb="tab"][aria-selected="true"] p {
+        color: #145f5f !important;
+        font-weight: 700 !important;
     }
 
-    /* Number / text input values */
+    /* Inputs */
     .stNumberInput input,
     .stTextInput input {
-        color: #ffffff !important;
+        background-color: #ffffff !important;
+        color: #1c2b33 !important;
     }
 
-    /* Regular buttons - teal, white text (readable without hover) */
+    /* Buttons - solid teal, white text */
     .stButton > button {
-        background: linear-gradient(135deg, #1A7A7A 0%, #14a3a3 100%) !important;
+        background: #1A7A7A !important;
         color: #ffffff !important;
-        border: 1px solid rgba(0, 229, 255, 0.6) !important;
+        border: 1px solid #145f5f !important;
         border-radius: 10px !important;
         font-weight: 600 !important;
     }
     .stButton > button:hover {
-        background: linear-gradient(135deg, #14a3a3 0%, #1A7A7A 100%) !important;
+        background: #145f5f !important;
         color: #ffffff !important;
-        border: 1px solid #ffffff !important;
     }
     .stButton > button * {
         color: #ffffff !important;
     }
 
-    /* Download buttons - match the Program/Term/Year selector boxes */
+    /* Download buttons - white with teal outline */
     .stDownloadButton > button {
-        background-color: #12193f !important;
-        color: #ffffff !important;
-        border: 1px solid rgba(0, 229, 255, 0.4) !important;
+        background-color: #ffffff !important;
+        color: #145f5f !important;
+        border: 2px solid #1A7A7A !important;
         border-radius: 8px !important;
         font-weight: 600 !important;
         width: 100% !important;
     }
     .stDownloadButton > button:hover {
-        background-color: #1f2a5a !important;
-        color: #ffffff !important;
-        border: 1px solid rgba(0, 229, 255, 0.8) !important;
+        background-color: #dcecec !important;
     }
     .stDownloadButton > button * {
-        color: #ffffff !important;
-    }
-    
-    [data-testid="metric-container"] {
-        background: linear-gradient(135deg, rgba(26, 122, 122, 0.3) 0%, rgba(0, 229, 255, 0.08) 100%) !important;
-        border: 1px solid rgba(0, 229, 255, 0.4) !important;
-        border-left: 5px solid rgba(0, 229, 255, 0.9) !important;
-        border-radius: 12px !important;
+        color: #145f5f !important;
     }
 
-    /* Metric label + value text - brightened */
+    /* Metric cards */
+    [data-testid="metric-container"],
+    [data-testid="stMetric"] {
+        background: #ffffff !important;
+        border: 1px solid #c7dddd !important;
+        border-left: 5px solid #1A7A7A !important;
+        border-radius: 12px !important;
+        padding: 10px 14px !important;
+    }
     [data-testid="stMetricLabel"],
-    [data-testid="stMetricLabel"] p,
-    [data-testid="stMetricLabel"] div {
-        color: #f5f7fa !important;
+    [data-testid="stMetricLabel"] p {
+        color: #3d525c !important;
     }
-    [data-testid="stMetricValue"] {
-        color: #ffffff !important;
+    [data-testid="stMetricValue"],
+    [data-testid="stMetricValue"] div {
+        color: #145f5f !important;
     }
-    
-    .stInfo {
-        background: linear-gradient(135deg, rgba(26, 122, 122, 0.25) 0%, rgba(0, 229, 255, 0.1) 100%) !important;
-        border-left: 5px solid #00e5ff !important;
+
+    /* Expanders */
+    [data-testid="stExpander"] details {
+        background-color: #ffffff !important;
+        border: 1px solid #c7dddd !important;
         border-radius: 10px !important;
+    }
+    [data-testid="stExpander"] summary p {
+        color: #1c2b33 !important;
+    }
+
+    /* Divider lines */
+    hr {
+        border-color: #c7dddd !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -463,9 +467,12 @@ def render_sounds_write_chart(collated, program):
         labels={'value': 'Number of Students', 'variable': 'Performance Level'}
     )
     fig_sw.update_layout(
-        plot_bgcolor='rgba(10, 14, 39, 0.8)',
-        paper_bgcolor='rgba(10, 14, 39, 0.8)',
-        font=dict(color='#e8e8e8'),
+        plot_bgcolor='#ffffff',
+        paper_bgcolor='#ffffff',
+        font=dict(color='#1c2b33'),
+        title_font=dict(color='#145f5f'),
+        xaxis=dict(gridcolor='#e3ecec'),
+        yaxis=dict(gridcolor='#e3ecec'),
         hovermode='x unified',
         height=400
     )
@@ -497,9 +504,12 @@ def render_word_aware_chart(collated, program):
         labels={'Students': 'Number of Students', 'Word Band': 'Words Explicitly Taught'}
     )
     fig_wa.update_layout(
-        plot_bgcolor='rgba(10, 14, 39, 0.8)',
-        paper_bgcolor='rgba(10, 14, 39, 0.8)',
-        font=dict(color='#e8e8e8'),
+        plot_bgcolor='#ffffff',
+        paper_bgcolor='#ffffff',
+        font=dict(color='#1c2b33'),
+        title_font=dict(color='#145f5f'),
+        xaxis=dict(gridcolor='#e3ecec'),
+        yaxis=dict(gridcolor='#e3ecec'),
         hovermode='x unified',
         height=400,
         showlegend=False
@@ -534,9 +544,12 @@ def render_smartar_chart(collated, program):
         labels={'value': 'Number of Students', 'variable': 'Outcome Level'}
     )
     fig_smartar.update_layout(
-        plot_bgcolor='rgba(10, 14, 39, 0.8)',
-        paper_bgcolor='rgba(10, 14, 39, 0.8)',
-        font=dict(color='#e8e8e8'),
+        plot_bgcolor='#ffffff',
+        paper_bgcolor='#ffffff',
+        font=dict(color='#1c2b33'),
+        title_font=dict(color='#145f5f'),
+        xaxis=dict(gridcolor='#e3ecec'),
+        yaxis=dict(gridcolor='#e3ecec'),
         hovermode='x unified',
         height=400
     )
