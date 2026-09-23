@@ -146,6 +146,126 @@ FIELD_MAP = {
     'Referral_Occurrence': None, 'Referral_ID': None, 'BSE': 'bse', 'Exclusion_Start_Date': 'exclusion_start_date',
 }
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# EXCEL → TOOL IMPORT
+# The tool only ever reads from Supabase, so edits made directly in the master
+# Excel file don't show up here until they're imported with this.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _field_types_from_db(records):
+    """Work out each Supabase field's type from existing values, so Excel values are
+    converted to what the column expects (e.g. integer columns get ints, not '2.0')."""
+    types = {}
+    for rec in records:
+        for k, v in rec.items():
+            if k not in types and v is not None and v != "":
+                types[k] = type(v)
+    return types
+
+def _excel_to_db_value(v, target_type):
+    if v is None:
+        return None
+    if isinstance(v, float) and pd.isna(v):
+        return None
+    if isinstance(v, (datetime, date)):
+        return v.date().isoformat() if isinstance(v, datetime) else v.isoformat()
+    if isinstance(v, str):
+        v = v.strip()
+        if v == "":
+            return None
+    if target_type is int:
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            return None
+    if target_type is float:
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+    if target_type is bool:
+        return str(v).strip().lower() in ("yes", "true", "1", "y")
+    # Text column: whole-number floats from Excel (e.g. year level 7.0) become "7"
+    if isinstance(v, float) and v == int(v):
+        return str(int(v))
+    return str(v)
+
+def _norm_for_compare(v):
+    if v is None:
+        return ""
+    s = str(v).strip()
+    if len(s) >= 10 and s[4:5] == "-" and s[7:8] == "-":
+        return s[:10]  # compare dates on the date part only
+    try:
+        f = float(s)
+        return str(int(f)) if f == int(f) else str(f)
+    except ValueError:
+        return s.lower()
+
+def diff_excel_against_db(uploaded_bytes, db_records):
+    """
+    Read the master workbook and compare every row (matched by Student_Name) against
+    Supabase. Blank Excel cells never overwrite existing data.
+    Returns (sheet_name, changes, new_rows, ambiguous, name_column_found) where
+      changes  = [{"id", "student_name", "fields": {db_field: (old, new)}}]
+      new_rows = [{"student_name", "record": {...}}]   # in Excel but not in the tool
+      ambiguous = [names that match more than one tool record]
+    """
+    wb = openpyxl.load_workbook(BytesIO(uploaded_bytes), data_only=True)
+    sheet_name = next((c for c in ("Data_Model", "Sheet1") if c in wb.sheetnames), wb.sheetnames[0])
+    ws = wb[sheet_name]
+
+    headers = [str(c.value).strip() if c.value is not None else "" for c in ws[1]]
+    if "Student_Name" not in headers:
+        return sheet_name, [], [], [], False
+    name_idx = headers.index("Student_Name")
+
+    by_name = {}
+    for rec in db_records:
+        key = (rec.get("student_name") or "").strip().lower()
+        if key:
+            by_name.setdefault(key, []).append(rec)
+
+    field_types = _field_types_from_db(db_records)
+    changes, new_rows, ambiguous = [], [], []
+
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        raw_name = row[name_idx] if name_idx < len(row) else None
+        name = str(raw_name).strip() if raw_name else ""
+        if not name:
+            continue
+
+        excel_record = {}
+        for idx, header in enumerate(headers):
+            db_field = FIELD_MAP.get(header)
+            if not db_field or idx >= len(row):
+                continue
+            val = _excel_to_db_value(row[idx], field_types.get(db_field))
+            if val is not None:
+                excel_record[db_field] = val
+
+        matches = by_name.get(name.lower(), [])
+        if len(matches) > 1:
+            ambiguous.append(name)
+            continue
+        if not matches:
+            new_rows.append({"student_name": name, "record": excel_record})
+            continue
+
+        db_rec = matches[0]
+        diffs = {}
+        for field, new_val in excel_record.items():
+            if field == "student_name":
+                continue
+            old_val = db_rec.get(field)
+            if _norm_for_compare(old_val) != _norm_for_compare(new_val):
+                diffs[field] = (old_val, new_val)
+        if diffs:
+            changes.append({"id": db_rec["id"], "student_name": db_rec.get("student_name"), "fields": diffs})
+
+    return sheet_name, changes, new_rows, ambiguous, True
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SCHOOL / PARTNERSHIP LIST — loaded from school_partnerships.csv (same folder)
 # Falls back to a short embedded list if the file isn't deployed yet, so the
@@ -1608,6 +1728,91 @@ with tab6:
         st.stop()
 
     st.success("✅ Access granted")
+
+    # ── Excel → Tool import ──────────────────────────────────────────────────
+    with st.expander("📥 Update the tool from the master Excel file", expanded=True):
+        st.caption(
+            "Use this after editing students directly in the master Excel file. The tool only reads "
+            "its own database, so Excel edits don't appear here until they're imported. Students are "
+            "matched by name. Blank Excel cells are ignored — they never wipe data in the tool. "
+            "You'll see every change before anything is saved."
+        )
+        import_file = st.file_uploader(
+            "Upload master Excel file (e.g. CLC_Allocation_Dashboard_2026_WithNames.xlsx)",
+            type=["xlsx"], key="excel_import_upload"
+        )
+        if import_file:
+            try:
+                db_records = supabase.table("allocation_students").select("*").execute().data
+                sheet_name, changes, new_rows, ambiguous, name_found = diff_excel_against_db(
+                    import_file.getvalue(), db_records
+                )
+                if not name_found:
+                    st.error(f"No `Student_Name` column found in sheet **{sheet_name}** — check the header row.")
+                else:
+                    st.write(f"Reading sheet **{sheet_name}**.")
+
+                    if ambiguous:
+                        st.warning(
+                            "These names match more than one record in the tool, so they were skipped "
+                            "to avoid updating the wrong student: " + ", ".join(sorted(set(ambiguous)))
+                        )
+
+                    if not changes and not new_rows:
+                        st.success("✅ The tool already matches the Excel file — nothing to import.")
+
+                    selected_ids = []
+                    if changes:
+                        st.markdown(f"**{len(changes)} existing student(s) have changes in Excel:**")
+                        for ch in changes:
+                            with st.container(border=True):
+                                keep = st.checkbox(
+                                    f"Update **{ch['student_name']}** ({len(ch['fields'])} field(s))",
+                                    value=True, key=f"imp_{ch['id']}"
+                                )
+                                st.dataframe(pd.DataFrame([
+                                    {"Field": f, "In tool now": "" if o is None else str(o), "From Excel": str(n)}
+                                    for f, (o, n) in ch["fields"].items()
+                                ]), hide_index=True, use_container_width=True)
+                                if keep:
+                                    selected_ids.append(ch["id"])
+
+                    add_new = False
+                    if new_rows:
+                        st.markdown(f"**{len(new_rows)} student(s) are in Excel but not in the tool:**")
+                        st.write(", ".join(r["student_name"] for r in new_rows))
+                        add_new = st.checkbox("Also add these as new records in the tool", value=False)
+
+                    if (changes or new_rows) and st.button("📥 Import selected changes", type="primary",
+                                                           use_container_width=True):
+                        done, failed = [], []
+                        for ch in changes:
+                            if ch["id"] not in selected_ids:
+                                continue
+                            try:
+                                payload = {f: n for f, (o, n) in ch["fields"].items()}
+                                supabase.table("allocation_students").update(payload).eq("id", ch["id"]).execute()
+                                done.append(ch["student_name"])
+                            except Exception as e:
+                                failed.append(f"{ch['student_name']}: {e}")
+                        if add_new:
+                            for nr in new_rows:
+                                try:
+                                    supabase.table("allocation_students").insert(nr["record"]).execute()
+                                    done.append(f"{nr['student_name']} (new)")
+                                except Exception as e:
+                                    failed.append(f"{nr['student_name']}: {e}")
+                        if done:
+                            st.success(f"✅ Imported {len(done)}: " + ", ".join(done))
+                        for f in failed:
+                            st.error(f"❌ {f}")
+            except Exception as e:
+                st.error(f"Import error: {e}")
+                import traceback
+                st.code(traceback.format_exc())
+
+    st.markdown("---")
+    st.subheader("Manage Dropdown Lists")
 
     MANAGED_LISTS = {
         "Focus Teacher": ("focus_teacher", DEFAULT_STAFF_NAMES),
