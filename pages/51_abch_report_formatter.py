@@ -7,10 +7,12 @@ reformats it into the landscape Word (.docx) layout, with one incident
 Consequence) running across the page.
 
 Also supports re-uploading a hand-edited copy of a previously generated
-report: it reads the edited Word document back in and rebuilds it, and can
-call Groq to re-derive the AI-Generated Hypothesis / Incident Summary /
-Tagging from the edited phases, noting plainly whether the edits actually
-changed the picture.
+report (see the "Recreate after manual edits" section), and converting an
+OLDER-format ABCH document — the single-row form without phases, CPI
+levels, or an AI-Generated Hypothesis — into the current format, with the
+Hypothesis/IRMS Summary/Tagging generated fresh (see "Convert an
+old-format ABCH"). Both of these call Groq to re-derive or reformat
+content, noting plainly what changed or what couldn't be found.
 
 PRIVACY: The paste-and-format flow does NOT save, store, log, or transmit
 anything — everything happens in memory for this browser session only, and
@@ -886,6 +888,155 @@ def _groq_chat_call(client, model, prompt, max_tokens=1000):
     return response.choices[0].message.content
 
 
+# ----------------------------------------------------------------------
+# Converting an OLD-FORMAT ABCH document (pre-dates phases, CPI levels,
+# and AI-generated Hypothesis/IRMS/Tagging — a single-row form with a
+# checkbox-based outcomes grid) into the current format.
+# ----------------------------------------------------------------------
+
+def extract_any_docx_text(file_bytes):
+    """General-purpose docx → readable text dump. Unlike
+    docx_to_report_text (which expects OUR OWN template's table layout),
+    this makes no assumptions about structure at all — it just walks
+    every paragraph and table in document order and renders them as
+    plain, readable text, so an old/differently-structured ABCH form can
+    still be read. Table rows become ' | '-separated lines; empty cells
+    are dropped so the wall of blank checkbox-grid cells doesn't drown
+    out the real content."""
+    doc = Document(io.BytesIO(file_bytes))
+    lines = []
+    for block in _iter_block_items(doc):
+        if isinstance(block, DocxTable):
+            for row in block.rows:
+                cell_texts = [_cell_text(c) for c in row.cells]
+                cell_texts = [c for c in cell_texts if c]
+                # Collapse consecutive duplicate cells (merged/rowspan
+                # cells repeat their text across every cell they span
+                # when read this way) so the same phrase doesn't appear
+                # three times in a row.
+                deduped = []
+                for c in cell_texts:
+                    if not deduped or deduped[-1] != c:
+                        deduped.append(c)
+                if deduped:
+                    lines.append(" | ".join(deduped))
+        else:
+            text = block.text.strip()
+            if text:
+                lines.append(text)
+    return "\n".join(lines)
+
+
+def convert_old_format_with_ai(old_text):
+    """Call Groq to reformat an old-style ABCH document's extracted text
+    into the CURRENT plain-text report format this tool already knows how
+    to parse (same headings/labels build_docx and parse_report expect),
+    faithfully preserving every real detail, and to generate the
+    AI-Generated Hypothesis / IRMS Summary / Tagging the old format never
+    had. Returns (report_text, note) or (None, error_message)."""
+    if not _GROQ_AVAILABLE:
+        return None, "The groq package isn't installed in this environment."
+    try:
+        client = _make_groq_client()
+    except Exception as e:
+        return None, f"Couldn't set up the Groq client ({e}). Check GROQ_API_KEY is configured."
+
+    prompt = f"""You are converting an OLD-FORMAT ABC-H critical incident report (extracted below as raw text from a Word document) into the CURRENT ABC-H report format used by Cowandilla Learning Centre. The old format has no "phases", no CPI levels, and no AI-generated hypothesis/summary/tagging — you must add those. Follow these rules exactly.
+
+CRITICAL — DO NOT INVENT OR SUMMARISE FACTS:
+- Every factual detail (names, times, locations, what was said, what was done) must come directly from the extracted text below. Never invent, guess, or fill a gap with something plausible.
+- Do NOT summarise or shorten the Behaviour and Consequence content — copy it FAITHFULLY, preserving as much of the original wording as possible, just reformatted into the structure below. This is a factual incident record; every original detail matters.
+- If a field genuinely isn't in the source text, write "[not found in original document]" for that field rather than guessing.
+- The old format has NO phase breaks — treat the whole incident as ONE PHASE (PHASE 1) unless the source text clearly describes genuinely separate, distinctly-timed incidents (rare). Do not artificially split it into multiple phases.
+- CLC-LBU does not use or support physical intervention. Never mention physical intervention anywhere, including stating that it wasn't used.
+- The old format's checkbox-style "outcomes" grid (things like property damage, absconding, ED155, emergency services, notifications) should be turned into plain sentences under the relevant heading below, based on which boxes/items were actually marked/ticked in the source — do not list unmarked/blank checkbox options.
+
+ONLY these sections, in this order, using this EXACT plain text format (no markdown, no asterisks, no tables):
+
+ABCH – [STUDENT NAME]
+
+STUDENT DETAILS
+Name: [from source]
+DOB: [from source]
+EDSAS ID: [from source]
+Program: [from source, e.g. JP/PY/SY — the old form may use PR/SEC, map PR→PY and SEC→SY]
+Home School: [from source, or "[not found in original document]"]
+Witnesses: [from source]
+Other students involved: [from source]
+
+INCIDENT DETAILS
+Incident Date: [from source]
+Incident Time: [earliest time given in the source]
+Incident End Time: [latest time given in the source, if any]
+Location: [from source]
+Reporting Staff: [from source — "Report by"]
+
+INCIDENT TIMELINE – ABC-H
+
+PHASE 1
+Time: [time range covering the incident]
+Location: [from source]
+Context / Antecedent: [from source — what was going on / said / done before the behaviour, staff and environment only, not the student's own actions]
+Behaviour (Student): [from source, VERBATIM — every distinct thing the student did/said, preserving the original wording and level of detail; multiple distinct actions can stay as separate lines within this one field]
+Consequence (Staff / Others): [from source, VERBATIM — every distinct thing staff/others did/said in response, preserving original wording; multiple distinct actions can stay as separate lines within this one field]
+
+HARM / OUTCOMES
+[plain sentence(s) based on which outcome items were actually marked in the source, e.g. property damage, injury]
+
+ED155
+[only include this section if the source indicates an ED155 was required/submitted; state what's known]
+
+EMERGENCY SERVICES
+[state which service was involved and any reference/report number given, or "Not required" if none was marked]
+
+STAFF RESPONSES
+[any general statement about staff response/management from the source, if present]
+
+NOTIFICATIONS
+[state what the source says about parent/carer and line manager notification]
+
+STAFF DECLARATION
+Signed: [Report by name from source]
+Report completed on: [Incident Date from source]
+
+AI-GENERATED HYPOTHESIS
+Pattern: [derive from the phase content — 1-2 sentences]
+Function: [Get or Avoid, plus what specifically — 1-2 sentences]
+Why behaviour continued: [1-2 sentences]
+Key insight: [1-2 sentences]
+
+INCIDENT SUMMARY (IRMS)
+[3-5 sentences summarising the incident, suitable for a formal incident management system]
+
+INCIDENT TAGGING
+Trigger Type: [short phrase]
+Behaviour Type: [short phrase]
+Function: [short phrase]
+Escalation Level: [one of: Anxiety / Defensive / Risk Behaviour / Tension Reduction — or a range — using CPI's Crisis Development Model, based on the highest level reached]
+
+---
+
+EXTRACTED OLD DOCUMENT TEXT:
+{old_text}"""
+
+    try:
+        text = None
+        last_error = None
+        for model in GROQ_MODEL_CHAIN:
+            try:
+                text = _groq_chat_call(client, model, prompt, max_tokens=3500)
+                break
+            except Exception as e:
+                last_error = e
+                continue
+        if text is None:
+            return None, f"Groq API call failed on all models: {last_error}"
+    except Exception as e:
+        return None, f"Groq API call failed: {e}"
+
+    return text.strip(), "Converted from the old format — please check the result against the original before relying on it, especially the Behaviour and Consequence detail and anything marked '[not found in original document]'."
+
+
 def rejig_hypothesis_with_ai(parsed, original_hypothesis=None):
     """Call Groq to re-derive the AI-Generated Hypothesis / IRMS summary
     / tagging from the (possibly edited) phases, and say plainly whether
@@ -1058,6 +1209,92 @@ if go:
             # a rerun, so it needs this stashed rather than recomputed).
             st.session_state["abch_last_parsed"] = parsed
             st.session_state["abch_last_fname_student"] = fname_student
+
+
+st.divider()
+st.subheader("📜 Convert an old-format ABCH")
+st.caption(
+    "Have an older ABCH document — the single-row form without phases, CPI "
+    "levels, or an AI-Generated Hypothesis? Upload it here and it'll be "
+    "reformatted into the current template, with the Hypothesis, Incident "
+    "Summary (IRMS), and Tagging generated fresh since the old format never "
+    "had them. Every factual detail (names, times, what was said and done) "
+    "is preserved from the original — nothing is invented, and anything the "
+    "conversion couldn't find is marked clearly rather than guessed."
+)
+st.caption(
+    "⚠️ This sends the extracted document content to the Groq API to do the "
+    "reformatting and generate the hypothesis. Nothing is sent unless you "
+    "click the convert button below. **Always check the converted report "
+    "against the original before relying on it** — this is a conversion "
+    "aid, not a replacement for review."
+)
+
+old_file = st.file_uploader("Upload the old-format ABCH Word document (.docx)", type=["docx"], key="abch_old_upload")
+
+if old_file is not None:
+    old_col1, old_col2 = st.columns([1, 4])
+    with old_col1:
+        convert_go = st.button("Convert to current format", type="primary", use_container_width=True)
+
+    if convert_go:
+        with st.spinner("Reading the old document..."):
+            try:
+                old_text = extract_any_docx_text(old_file.getvalue())
+            except Exception as e:
+                old_text = None
+                st.error(f"Couldn't read that file: {e}")
+
+        if old_text:
+            with st.spinner("Converting to the current format — this can take a moment..."):
+                converted_text, note = convert_old_format_with_ai(old_text)
+
+            if converted_text is None:
+                st.error(f"Couldn't convert the document: {note}")
+            else:
+                converted_parsed = parse_report(converted_text)
+                if not converted_parsed["phases"]:
+                    st.error(
+                        "The conversion didn't come back in a recognisable format. "
+                        "You can try again, or paste the original document's text "
+                        "into the box at the top of this page instead."
+                    )
+                else:
+                    st.success("Converted.")
+                    st.warning(note)
+
+                    with st.expander("Converted report — review before downloading", expanded=True):
+                        st.markdown(f"**Student:** {converted_parsed['student'].get('Name', '[not found]')}")
+                        for ph in converted_parsed["phases"]:
+                            st.write(f"**Phase {ph['number']} — {ph.get('Location','')}**")
+                            st.write(f"Context/Antecedent: {ph.get('Context','')}")
+                            st.write(f"Behaviour: {ph.get('Behaviour','')}")
+                            st.write(f"Consequence: {ph.get('Consequence','')}")
+                        st.write("**AI-Generated Hypothesis:**")
+                        for k, v in converted_parsed["hypothesis"].items():
+                            st.write(f"{k}: {v}")
+                        st.write(f"**Incident Summary (IRMS):** {converted_parsed['irms']}")
+
+                    converted_docx = build_docx(converted_parsed)
+                    fname_student = re.sub(
+                        r"[^A-Za-z0-9]+", "_", converted_parsed["student"].get("Name", "student")
+                    ).strip("_") or "student"
+                    converted_fname = f"ABCH_{fname_student}_converted.docx"
+
+                    st.download_button(
+                        "⬇️ Download converted report",
+                        data=converted_docx,
+                        file_name=converted_fname,
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        type="primary",
+                        key="abch_old_convert_download",
+                    )
+
+                    st.caption(
+                        "The uploaded file and the converted version both exist only "
+                        "in this browser session — nothing is saved, logged, or "
+                        "stored here either."
+                    )
 
 
 st.divider()
