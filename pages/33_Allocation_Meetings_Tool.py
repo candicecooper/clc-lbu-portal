@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta, date
 import os
+import re
 from io import BytesIO
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
@@ -168,7 +169,7 @@ def _field_types_from_db(records):
 DATE_FIELDS = {
     'date_of_birth', 'referral_date', 'meeting_date', 'waitlist_date', 'extension_date',
     'finishing_date', 'exclusion_end_date', 'proposed_extension_finish_date',
-    'actual_finish_date', 'exclusion_start_date',
+    'actual_finish_date', 'exclusion_start_date', 'start_after',
 }
 BLANK_MARKERS = {"", "na", "n/a", "n.a.", "nil", "none", "-", "--", "tbc", "tba", "unknown", "?"}
 _BAD_DATE = object()  # sentinel: a value was present but couldn't be read as a date
@@ -214,6 +215,71 @@ def _meeting_week_from_date(iso_date):
     term_name, start = applicable
     week = ((d - _monday_of_week(start)).days // 7) + 1
     return f"Week {max(1, min(week, 10))} {term_name}" if week <= 11 else None
+
+def _detect_date_fields(db_records):
+    """Known date columns, plus any column whose existing values look like ISO dates
+    or whose name says it's a date — catches columns added to the table later."""
+    found = set(DATE_FIELDS)
+    iso = re.compile(r"^\d{4}-\d{2}-\d{2}")
+    for rec in db_records:
+        for k, v in rec.items():
+            if k in found or v is None:
+                continue
+            if isinstance(v, str) and iso.match(v) and k not in ("id", "created_at", "updated_at"):
+                found.add(k)
+    for field in FIELD_MAP.values():
+        if field and field.endswith("_date"):
+            found.add(field)
+    return found
+
+def _wednesday_from_meeting_week(label):
+    """'Week 3 Term 2' -> ISO date of that week's Wednesday (2026 term dates)."""
+    m = re.match(r"^\s*Week\s+(\d+)\s+(Term\s+\d)\s*$", str(label or ""), re.I)
+    if not m:
+        return None
+    term = m.group(2).title()
+    if term not in TERM_DATES_2026:
+        return None
+    return get_wednesday_date(int(m.group(1)), term, 2026).isoformat()
+
+def _write_with_repair(write_fn, payload, max_attempts=4):
+    """
+    Run a Supabase write, repairing the payload if Postgres rejects a value:
+      - a date it can't read (e.g. "30/06/2026" or "NA") is converted or dropped
+      - a brief network hiccup ("Resource temporarily unavailable") is retried
+    Returns (ok, notes, error_text).
+    """
+    import time
+    payload = dict(payload)
+    notes = []
+    last_err = ""
+    for attempt in range(max_attempts):
+        try:
+            write_fn(payload)
+            return True, notes, ""
+        except Exception as e:
+            last_err = str(e)
+            m = re.search(r'(?:out of range|type date|type timestamp[^:]*): "([^"]*)"', last_err)
+            if m:
+                bad = m.group(1)
+                culprits = [k for k, v in payload.items() if str(v) == bad]
+                if not culprits:
+                    break
+                for k in culprits:
+                    fixed = _parse_date_value(bad)
+                    if fixed is None or fixed is _BAD_DATE:
+                        payload.pop(k)
+                        notes.append(f"{k} = {bad!r} skipped (not a date)")
+                    else:
+                        payload[k] = fixed
+                        notes.append(f"{k} converted {bad} → {fixed}")
+                continue
+            if "temporarily unavailable" in last_err.lower() or "errno 11" in last_err.lower() \
+                    or "timed out" in last_err.lower():
+                time.sleep(1 + attempt)
+                continue
+            break
+    return False, notes, last_err
 
 def _excel_to_db_value(v, target_type):
     if v is None:
@@ -280,6 +346,7 @@ def diff_excel_against_db(uploaded_bytes, db_records):
             by_name.setdefault(key, []).append(rec)
 
     field_types = _field_types_from_db(db_records)
+    date_fields = _detect_date_fields(db_records)
     changes, new_rows, ambiguous = [], [], []
 
     for row in ws.iter_rows(min_row=2, values_only=True):
@@ -293,7 +360,7 @@ def diff_excel_against_db(uploaded_bytes, db_records):
             db_field = FIELD_MAP.get(header)
             if not db_field or idx >= len(row):
                 continue
-            if db_field in DATE_FIELDS:
+            if db_field in date_fields:
                 val = _parse_date_value(row[idx])
                 if val is _BAD_DATE:
                     warnings.append(f"{header} = {row[idx]!r} isn't a readable date — left unchanged")
@@ -313,6 +380,16 @@ def diff_excel_against_db(uploaded_bytes, db_records):
                 derived = _meeting_week_from_date(excel_record.get("meeting_date", ""))
                 excel_record["meeting_week"] = derived or "Imported from Excel"
                 warnings.append(f"No Meeting_Week in Excel — set to '{excel_record['meeting_week']}'")
+            if not excel_record.get("meeting_date"):
+                # meeting_date is also required in the database
+                fallback = _wednesday_from_meeting_week(excel_record.get("meeting_week"))
+                if fallback:
+                    excel_record["meeting_date"] = fallback
+                    warnings.append(f"No Meeting_Date in Excel — set to {fallback} (Wednesday of that week)")
+                else:
+                    excel_record["meeting_date"] = excel_record.get("referral_date") or date.today().isoformat()
+                    warnings.append(f"No Meeting_Date in Excel — set to {excel_record['meeting_date']} "
+                                    "as a placeholder. Please correct it.")
             new_rows.append({"student_name": name, "record": excel_record, "warnings": warnings})
             continue
 
@@ -1854,25 +1931,34 @@ with tab6:
 
                     if (changes or new_rows) and st.button("📥 Import selected changes", type="primary",
                                                            use_container_width=True):
-                        done, failed = [], []
+                        done, failed, fixed_notes = [], [], []
                         for ch in changes:
                             if ch["id"] not in selected_ids:
                                 continue
-                            try:
-                                payload = {f: n for f, (o, n) in ch["fields"].items()}
-                                supabase.table("allocation_students").update(payload).eq("id", ch["id"]).execute()
-                                done.append(ch["student_name"])
-                            except Exception as e:
-                                failed.append(f"{ch['student_name']}: {e}")
+                            payload = {f: n for f, (o, n) in ch["fields"].items()}
+                            ok, notes, err = _write_with_repair(
+                                lambda p, _id=ch["id"]: supabase.table("allocation_students")
+                                .update(p).eq("id", _id).execute(),
+                                payload,
+                            )
+                            (done if ok else failed).append(
+                                ch["student_name"] if ok else f"{ch['student_name']}: {err}")
+                            fixed_notes.extend(f"{ch['student_name']}: {n}" for n in notes)
                         if add_new:
                             for nr in new_rows:
-                                try:
-                                    supabase.table("allocation_students").insert(nr["record"]).execute()
-                                    done.append(f"{nr['student_name']} (new)")
-                                except Exception as e:
-                                    failed.append(f"{nr['student_name']}: {e}")
+                                ok, notes, err = _write_with_repair(
+                                    lambda p: supabase.table("allocation_students").insert(p).execute(),
+                                    nr["record"],
+                                )
+                                (done if ok else failed).append(
+                                    f"{nr['student_name']} (new)" if ok else f"{nr['student_name']}: {err}")
+                                fixed_notes.extend(f"{nr['student_name']}: {n}" for n in notes)
                         if done:
                             st.success(f"✅ Imported {len(done)}: " + ", ".join(done))
+                        if fixed_notes:
+                            with st.expander(f"⚠️ {len(fixed_notes)} value(s) adjusted or skipped during import"):
+                                for n in fixed_notes:
+                                    st.write(n)
                         for f in failed:
                             st.error(f"❌ {f}")
             except Exception as e:
