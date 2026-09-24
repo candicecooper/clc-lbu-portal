@@ -163,6 +163,58 @@ def _field_types_from_db(records):
                 types[k] = type(v)
     return types
 
+# Supabase date columns. Excel often holds these as typed text in Australian
+# DD/MM/YYYY format (or "NA"), which Postgres can't read — so they're parsed here.
+DATE_FIELDS = {
+    'date_of_birth', 'referral_date', 'meeting_date', 'waitlist_date', 'extension_date',
+    'finishing_date', 'exclusion_end_date', 'proposed_extension_finish_date',
+    'actual_finish_date', 'exclusion_start_date',
+}
+BLANK_MARKERS = {"", "na", "n/a", "n.a.", "nil", "none", "-", "--", "tbc", "tba", "unknown", "?"}
+_BAD_DATE = object()  # sentinel: a value was present but couldn't be read as a date
+
+def _parse_date_value(v):
+    """Return an ISO date string, None for blank/NA, or _BAD_DATE if unreadable."""
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v.date().isoformat()
+    if isinstance(v, date):
+        return v.isoformat()
+    if isinstance(v, (int, float)):
+        if isinstance(v, float) and pd.isna(v):
+            return None
+        if 20000 <= v <= 60000:  # Excel serial date number
+            return (date(1899, 12, 30) + timedelta(days=int(v))).isoformat()
+        return _BAD_DATE
+    text = str(v).strip()
+    if text.lower() in BLANK_MARKERS:
+        return None
+    text = text.split(" 00:00")[0].strip()
+    for fmt in ("%d/%m/%Y", "%d/%m/%y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d",
+                "%d %B %Y", "%d %b %Y", "%B %d %Y", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(text, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return _BAD_DATE
+
+def _meeting_week_from_date(iso_date):
+    """Best-effort 'Week N Term X' label from a meeting date, for rows imported without one."""
+    try:
+        d = datetime.fromisoformat(iso_date).date()
+    except Exception:
+        return None
+    applicable = None
+    for term_name, start in TERM_DATES_2026.items():
+        if start.year == d.year and start <= d:
+            applicable = (term_name, start)
+    if not applicable:
+        return None
+    term_name, start = applicable
+    week = ((d - _monday_of_week(start)).days // 7) + 1
+    return f"Week {max(1, min(week, 10))} {term_name}" if week <= 11 else None
+
 def _excel_to_db_value(v, target_type):
     if v is None:
         return None
@@ -236,12 +288,18 @@ def diff_excel_against_db(uploaded_bytes, db_records):
         if not name:
             continue
 
-        excel_record = {}
+        excel_record, warnings = {}, []
         for idx, header in enumerate(headers):
             db_field = FIELD_MAP.get(header)
             if not db_field or idx >= len(row):
                 continue
-            val = _excel_to_db_value(row[idx], field_types.get(db_field))
+            if db_field in DATE_FIELDS:
+                val = _parse_date_value(row[idx])
+                if val is _BAD_DATE:
+                    warnings.append(f"{header} = {row[idx]!r} isn't a readable date — left unchanged")
+                    continue
+            else:
+                val = _excel_to_db_value(row[idx], field_types.get(db_field))
             if val is not None:
                 excel_record[db_field] = val
 
@@ -250,7 +308,12 @@ def diff_excel_against_db(uploaded_bytes, db_records):
             ambiguous.append(name)
             continue
         if not matches:
-            new_rows.append({"student_name": name, "record": excel_record})
+            if not excel_record.get("meeting_week"):
+                # meeting_week is required in the database
+                derived = _meeting_week_from_date(excel_record.get("meeting_date", ""))
+                excel_record["meeting_week"] = derived or "Imported from Excel"
+                warnings.append(f"No Meeting_Week in Excel — set to '{excel_record['meeting_week']}'")
+            new_rows.append({"student_name": name, "record": excel_record, "warnings": warnings})
             continue
 
         db_rec = matches[0]
@@ -262,7 +325,8 @@ def diff_excel_against_db(uploaded_bytes, db_records):
             if _norm_for_compare(old_val) != _norm_for_compare(new_val):
                 diffs[field] = (old_val, new_val)
         if diffs:
-            changes.append({"id": db_rec["id"], "student_name": db_rec.get("student_name"), "fields": diffs})
+            changes.append({"id": db_rec["id"], "student_name": db_rec.get("student_name"),
+                            "fields": diffs, "warnings": warnings})
 
     return sheet_name, changes, new_rows, ambiguous, True
 
@@ -1774,6 +1838,8 @@ with tab6:
                                     {"Field": f, "In tool now": "" if o is None else str(o), "From Excel": str(n)}
                                     for f, (o, n) in ch["fields"].items()
                                 ]), hide_index=True, use_container_width=True)
+                                for w in ch.get("warnings", []):
+                                    st.caption(f"⚠️ {w}")
                                 if keep:
                                     selected_ids.append(ch["id"])
 
@@ -1781,6 +1847,9 @@ with tab6:
                     if new_rows:
                         st.markdown(f"**{len(new_rows)} student(s) are in Excel but not in the tool:**")
                         st.write(", ".join(r["student_name"] for r in new_rows))
+                        for nr in new_rows:
+                            for w in nr.get("warnings", []):
+                                st.caption(f"⚠️ {nr['student_name']}: {w}")
                         add_new = st.checkbox("Also add these as new records in the tool", value=False)
 
                     if (changes or new_rows) and st.button("📥 Import selected changes", type="primary",
