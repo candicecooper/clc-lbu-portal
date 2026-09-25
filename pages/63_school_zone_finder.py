@@ -74,7 +74,7 @@ def zones_dir() -> Path:
 def classify_zip(name: str):
     """Return (kind, year) from a DfE zip file name, or (None, None)."""
     low = name.lower()
-    kind = "primary" if "primary" in low else "high" if ("high" in low or "secondary" in low) else None
+    kind = "primary" if ("primary" in low or "prim" in low) else "high" if ("high" in low or "secondary" in low) else None
     m = re.search(r"(20\d{2})", low)
     return kind, (int(m.group(1)) if m else None)
 
@@ -92,24 +92,43 @@ def pick_name_field(field_names):
     return field_names[0] if field_names else None
 
 
+def _collect_shapefiles(data: bytes, found=None, depth=0):
+    """Find every shapefile in a zip, including zips nested inside the zip."""
+    found = [] if found is None else found
+    zf = zipfile.ZipFile(io.BytesIO(data))
+    names = [n for n in zf.namelist() if not n.startswith("__MACOSX")]
+    for n in names:
+        low = n.lower()
+        if low.endswith(".zip") and depth < 3:
+            _collect_shapefiles(zf.read(n), found, depth + 1)
+        elif low.endswith(".shp"):
+            stem = n[:-4]
+            parts = {}
+            for ext in (".shp", ".shx", ".dbf", ".prj"):
+                m = next((x for x in names if x.lower() == (stem + ext).lower()), None)
+                if m:
+                    parts[ext] = zf.read(m)
+            found.append((n, parts))
+    return found
+
+
 def load_zip_bytes(data: bytes):
     """Read a zipped shapefile → dict with polygons (in native CRS) + CRS info."""
-    zf = zipfile.ZipFile(io.BytesIO(data))
-    names = zf.namelist()
-    shp = next((n for n in names if n.lower().endswith(".shp")), None)
-    if shp is None:
-        raise ValueError("No .shp file inside the zip")
-    stem = shp[:-4]
-
-    def member(ext):
-        for n in names:
-            if n.lower() == (stem + ext).lower():
-                return io.BytesIO(zf.read(n))
-        return None
-
-    prj = member(".prj")
-    prj_wkt = prj.read().decode("utf-8", "ignore") if prj else ""
-    reader = shapefile.Reader(shp=member(".shp"), dbf=member(".dbf"), shx=member(".shx"))
+    candidates = []
+    for shp_name, parts in _collect_shapefiles(data):
+        if ".dbf" not in parts:
+            continue
+        try:
+            r = shapefile.Reader(shp=io.BytesIO(parts[".shp"]), dbf=io.BytesIO(parts[".dbf"]),
+                                 shx=io.BytesIO(parts[".shx"]) if ".shx" in parts else None)
+            if r.shapeType in (shapefile.POLYGON, shapefile.POLYGONZ, shapefile.POLYGONM):
+                candidates.append((len(r), shp_name, r, parts))
+        except Exception:
+            continue
+    if not candidates:
+        raise ValueError("No polygon shapefile found inside the zip (checked nested zips too)")
+    _, shp, reader, parts = max(candidates, key=lambda c: c[0])
+    prj_wkt = parts.get(".prj", b"").decode("utf-8", "ignore")
     fields = [f[0] for f in reader.fields[1:]]
     name_field = pick_name_field(fields)
 
@@ -136,7 +155,8 @@ def load_zip_bytes(data: bytes):
             "prepared": prep(geom),
         })
     return {"zones": zones, "fields": fields, "name_field": name_field,
-            "to_native": to_native, "to_wgs84": to_wgs84}
+            "to_native": to_native, "to_wgs84": to_wgs84, "shp": shp,
+            "crs_note": (CRS.from_wkt(prj_wkt).name if prj_wkt else "no .prj — assumed lat/lon")}
 
 
 @st.cache_resource(show_spinner="Loading school zone boundaries…")
@@ -145,16 +165,27 @@ def load_dataset(path_str: str, mtime: float):
 
 
 def available_datasets():
-    """{'primary': {2025: Path, ...}, 'high': {...}}"""
-    out = {"primary": {}, "high": {}}
+    """{'primary': {2025: Path, ...}, 'high': {...}, 'unrecognised': [names]}"""
+    out = {"primary": {}, "high": {}, "unrecognised": []}
     d = zones_dir()
     if not d.is_dir():
         return out
-    for p in sorted(d.glob("*.zip")):
+    for p in sorted(d.iterdir()):
+        if p.name.lower() == "readme.md" or p.is_dir():
+            continue
         kind, year = classify_zip(p.name)
-        if kind and year:
+        if p.suffix.lower() == ".zip" and kind and year:
             out[kind][year] = p
+        else:
+            out["unrecognised"].append(p.name)
     return out
+
+
+def safe_load(p: Path):
+    try:
+        return load_dataset(str(p), p.stat().st_mtime), None
+    except Exception as e:
+        return None, f"{e.__class__.__name__}: {e}"
 
 
 def zones_containing(ds, lon, lat):
@@ -214,6 +245,25 @@ with st.sidebar:
         else:
             st.caption(f"{label}: no file uploaded")
     st.caption("Source: SA Department for Education via data.sa.gov.au (CC BY 4.0)")
+    with st.expander("Data check"):
+        st.caption(f"Folder: `{zones_dir()}`")
+        for kind, label in (("primary", "Primary"), ("high", "High school")):
+            if kind not in chosen:
+                st.markdown(f"**{label}:** ❌ no recognised file")
+                continue
+            p = datasets[kind][chosen[kind]]
+            ds_chk, err = safe_load(p)
+            if err:
+                st.markdown(f"**{label}:** ❌ `{p.name}` failed to load")
+                st.code(err)
+            else:
+                st.markdown(f"**{label}:** ✅ `{p.name}` — {len(ds_chk['zones'])} zones  \n"
+                            f"Name field: `{ds_chk['name_field']}` · CRS: {ds_chk['crs_note']}")
+        if datasets["unrecognised"]:
+            st.markdown("**Ignored files** (name must be a .zip containing a year and "
+                        "'primary' or 'high'):")
+            for n in datasets["unrecognised"]:
+                st.markdown(f"- `{n}`")
 
 this_year = date.today().year
 stale = [f"{'Primary' if k == 'primary' else 'High school'} zones are for {y}"
@@ -272,11 +322,15 @@ if hits:
                 st.caption("No zone file uploaded for this level.")
                 continue
             p = datasets[kind][chosen[kind]]
-            ds = load_dataset(str(p), p.stat().st_mtime)
+            ds, err = safe_load(p)
+            if err:
+                st.error(f"Couldn't read `{p.name}` — see Data check in the sidebar.")
+                continue
             matches = zones_containing(ds, lon, lat)
             if not matches:
                 st.markdown(
-                    "**Not inside a zoned school.** In SA, schools without a zone take students "
+                    "**Not inside a zoned school.** Only some SA schools have a zone "
+                    f"({len(ds['zones'])} {'primary' if kind == 'primary' else 'high school'} zones in this file). In SA, schools without a zone take students "
                     "from any area — usually the closest school is the local option. "
                     f"Check the [DfE tool]({DFE_FIND_TOOL}) for the closest school."
                 )
