@@ -1342,6 +1342,37 @@ with tab_students:
     st.subheader("Students by program")
     st.caption("Pick a program, click a student, then read or add their entries.")
 
+    with st.expander("🔎 Can't find a student? Trace them here"):
+        _q = st.text_input("Type the student's initials or register code",
+                           key="stu_trace").strip().upper()
+        if _q:
+            _rs_t, _ = fetch_register_students(reg_client or client)
+            _in_reg = [(_i, _p) for _r, _i, _p in _rs_t
+                       if _q == _i or _q == base_of(_i) or base_of(_q) == base_of(_i)]
+            _reg_arch = register_archived_initials(reg_client or client)
+            _comm_arch = set(get_archived_codes(client))
+            _in_opts = [(lbl, c) for (lbl, c) in active_options
+                        if _q == c or _q == base_of(c) or base_of(_q) == base_of(c)]
+            st.write("**In the register (active):** " +
+                     (", ".join(f"{i} ({p or 'no program'})" for i, p in _in_reg)
+                      if _in_reg else "❌ not found among active register students"))
+            st.write("**In the Comm Log student list:** " +
+                     (", ".join(c for _l, c in _in_opts) if _in_opts
+                      else "❌ not in the built list"))
+            _flag_hits = [a for a in (_reg_arch | _comm_arch)
+                          if base_of(a) == base_of(_q)]
+            st.write("**Archive flags on these initials:** " +
+                     (", ".join(sorted(_flag_hits)) if _flag_hits else "none"))
+            if _in_reg and not _in_opts:
+                st.error("They're active in the register but excluded from the list. "
+                         "The cause is above — usually an archive flag "
+                         f"({', '.join(_flag_hits) or 'none found'}) or an initials mismatch "
+                         "between the register and the archive flag. Tell Claude exactly what "
+                         "this box shows.")
+            elif _in_opts:
+                st.success("They ARE in the list — they should appear in a column below "
+                           "(check the Unassigned column too).")
+
     _archived = set(get_archived_codes(client))
 
     # map each register student's code/initials -> their program, so we can group
@@ -1356,12 +1387,13 @@ with tab_students:
             _reg_prog_map[_ini] = _prog
             _reg_prog_map[f"{_ini}-{_prog}"] = _prog
 
+    # active_options already excludes register-archived students and keeps
+    # register-active ones (even if a stale comm-log flag exists), so DON'T
+    # re-filter on _archived here — that was hiding active students again.
     _groups = {p: [] for p in PROGRAMS}
     _groups["Unassigned"] = []
     _groups["Not on register"] = []
     for lbl, code in active_options:
-        if code in _archived:
-            continue
         if "(not on register)" in lbl:
             _groups["Not on register"].append((lbl, code))
             continue
