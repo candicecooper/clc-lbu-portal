@@ -700,12 +700,16 @@ def build_active_students(op_client, reg_client=None):
 
     options, seen_codes, hidden, reactivated = [], set(), 0, 0
     reg_codes = set()
+    # an ACTIVE register row always wins over an archived duplicate of the same
+    # initials, so never hide a student who has an active register row
+    _reg_archived_effective = {a for a in reg_archived
+                               if base_of(a) not in reg_active_bases and a not in reg_active_codes}
     for _rid, ini, prog in reg_students:
         code = f"{ini}-{prog}" if prog else ini
         reg_codes.add(code)
         reg_codes.add(ini)                     # tolerate older logs stored under bare initials
-        # only hide if the REGISTER archived them; ignore a stale comm-log flag
-        if code in reg_archived or ini in reg_archived:
+        # only hide if the register archived them AND they have no active row
+        if code in _reg_archived_effective or ini in _reg_archived_effective:
             hidden += 1
             continue
         if code in comm_archived or ini in comm_archived:
