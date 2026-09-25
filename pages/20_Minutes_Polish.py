@@ -66,78 +66,29 @@ label[data-testid="stWidgetLabel"] p{font-size:.72rem!important;font-weight:600!
 </style>
 """, unsafe_allow_html=True)
 
-# ══════════════════════════════════════════════════════════════════════════
-# RESILIENT GROQ AI HELPER
-# Fixes the recurring portal-wide Groq issue (Aug 2026), which turned out to
-# have three stacked causes:
-#   1) A stale groq/httpx combo can raise
-#      "Client.__init__() got an unexpected keyword argument 'proxies'" on
-#      client creation — worked around by retrying with an explicit http_client.
-#   2) Groq retired "llama-3.3-70b-versatile" for free/dev-tier accounts
-#      (16 Aug 2026), so any call hardcoded to that model can start failing
-#      with a model-not-found/decommissioned error — worked around by trying
-#      a small chain of current models instead of one hardcoded name.
-#   3) qwen/qwen3.6-27b is a hybrid-thinking model — left to its defaults it
-#      spends the whole max_tokens budget on a <think> chain-of-thought block
-#      before ever writing the actual answer, which showed up here as
-#      "Extra data"/parse errors. Scoped reasoning_effort="none" to that model
-#      only, since gpt-oss/llama don't accept that parameter.
-# It also self-heals 413 "request too large" errors by halving max_tokens
-# and retrying, instead of failing outright.
-# Use groq_ai_call(prompt, ...) anywhere in this file instead of building a
-# Groq client / calling chat.completions.create directly.
-# Matches the shared helper standardised across the portal (5_Behaviour_
-# Support.py etc.), extended with an optional `system` message param since
-# this tool's prompts rely on a system role.
-# ══════════════════════════════════════════════════════════════════════════
-_GROQ_MODEL_CHAIN = ["openai/gpt-oss-120b", "qwen/qwen3.6-27b", "llama-3.3-70b-versatile"]
-
-def _get_groq_client(api_key):
-    from groq import Groq
+# ── GROQ ──────────────────────────────────────────────────────
+def groq_call(prompt: str, max_tokens: int = 3000, system: str = "") -> str:
     try:
-        return Groq(api_key=api_key)
-    except TypeError:
-        import httpx
-        return Groq(api_key=api_key, http_client=httpx.Client())
-
-def groq_ai_call(prompt, max_tokens=1500, temperature=0.1, api_key=None, system=None):
-    """Resilient Groq chat-completion call. Returns the response text (str).
-    Raises the last error encountered if every model/retry combination fails."""
-    api_key = api_key or st.secrets.get("GROQ_API_KEY", "")
-    if not api_key:
-        raise RuntimeError("Groq API key not configured.")
-    client = _get_groq_client(api_key)
-
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
-
-    last_err = None
-    for model in _GROQ_MODEL_CHAIN:
-        tokens = max_tokens
-        for _attempt in range(2):  # original size, then one halved retry
+        from groq import Groq
+        client = Groq(api_key=st.secrets["GROQ_API_KEY"], timeout=120.0)
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        last_err = None
+        for attempt in range(2):  # one automatic retry on transient failure
             try:
-                kwargs = dict(model=model, messages=messages, max_tokens=tokens, temperature=temperature)
-                if model == "qwen/qwen3.6-27b":
-                    kwargs["reasoning_effort"] = "none"
-                resp = client.chat.completions.create(**kwargs)
+                resp = client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    max_tokens=max_tokens,
+                    temperature=0.1,  # low temperature — factual fidelity over creativity
+                    messages=messages
+                )
+                st.session_state["mp_last_finish"] = getattr(resp.choices[0], "finish_reason", "")
                 return resp.choices[0].message.content.strip()
             except Exception as e:
                 last_err = e
-                msg = str(e).lower()
-                if "413" in msg or "too large" in msg:
-                    tokens = max(256, tokens // 2)
-                    continue  # retry same model with a smaller token budget
-                break  # any other error: move on to the next model in the chain
-    raise last_err
-
-def groq_call(prompt: str, max_tokens: int = 3000, system: str = "") -> str:
-    """Thin wrapper kept so every existing call site in this file (which
-    expects a string back, including an "[AI error: ...]" string on failure
-    rather than a raised exception) doesn't need to change its error handling."""
-    try:
-        return groq_ai_call(prompt, max_tokens=max_tokens, temperature=0.1, system=system or None)
+        return f"[AI error: {last_err}]"
     except Exception as e:
         return f"[AI error: {e}]"
 
@@ -176,7 +127,39 @@ def parse_ai_json(raw: str) -> dict:
     # Match JSON string literals (handles escaped quotes) incl. any raw ctrl chars inside
     fixed = re.sub(r'"(?:[^"\\]|\\.)*"', _escape_ctrl, raw, flags=re.DOTALL)
     fixed = re.sub(r",\s*([}\]])", r"\1", fixed)  # trailing commas
-    return json.loads(fixed, strict=False)
+    try:
+        return json.loads(fixed, strict=False)
+    except json.JSONDecodeError:
+        pass
+    # 4) Response was cut off mid-way — salvage every complete item before the cut
+    salvaged = _salvage_truncated_json(fixed)
+    if salvaged is not None:
+        salvaged["_truncated"] = True
+        return salvaged
+    return json.loads(fixed, strict=False)  # raise the original error
+
+def _salvage_truncated_json(txt: str):
+    """Cut a truncated JSON object back to the last complete value and close it."""
+    stack, in_str, esc = [], False, False
+    last_good, last_stack = None, None
+    for i, ch in enumerate(txt):
+        if in_str:
+            if esc: esc = False
+            elif ch == "\\": esc = True
+            elif ch == '"': in_str = False
+            continue
+        if ch == '"': in_str = True
+        elif ch in "{[": stack.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if stack: stack.pop()
+            last_good, last_stack = i + 1, list(stack)
+    if last_good is None:
+        return None
+    candidate = txt[:last_good].rstrip().rstrip(",") + "".join(reversed(last_stack))
+    try:
+        return json.loads(candidate, strict=False)
+    except json.JSONDecodeError:
+        return None
 
 # ── FILE TEXT EXTRACTION ──────────────────────────────────────
 def extract_text(uploaded_file) -> str:
@@ -207,7 +190,7 @@ def init():
     defaults = {
         "mp_step": 1,
         "mp_meeting": {
-            "type": "Staff Meeting",
+            "type": "",
             "date": str(date.today()),
             "start_time": "",
             "end_time": "",
@@ -244,6 +227,7 @@ def export_draft_bytes() -> bytes:
         "mp_opening":  st.session_state.get("mp_opening",""),
         "mp_closing":  st.session_state.get("mp_closing",""),
         "mp_step":     st.session_state.mp_step,
+        "mp_speaker_map": st.session_state.get("mp_speaker_map", {}),
         "saved":       str(date.today()),
     }
     return json.dumps(draft, indent=2, ensure_ascii=False).encode("utf-8")
@@ -256,6 +240,7 @@ def restore_draft(uploaded_file) -> bool:
                 st.session_state[k] = draft[k]
         st.session_state["mp_opening"] = draft.get("mp_opening","")
         st.session_state["mp_closing"] = draft.get("mp_closing","")
+        st.session_state["mp_speaker_map"] = draft.get("mp_speaker_map", {})
         try:
             st.session_state.mp_step = max(1, min(int(draft.get("mp_step", 2)), 4))
         except (TypeError, ValueError):
@@ -298,9 +283,47 @@ MEETING_TYPES = [
     "PAC Meeting",
     "Committee Meeting",
     "Leadership Meeting",
+    "Managers Meeting",
     "Professional Development",
     "Other",
 ]
+
+def match_meeting_type(val: str) -> str:
+    """Map an AI-detected meeting type string onto the official list. Returns '' if no signal."""
+    v = (val or "").strip().lower()
+    if not v:
+        return ""
+    for t in MEETING_TYPES:
+        tl = t.lower()
+        if tl == v or tl in v or (len(v) > 8 and v in tl):
+            return t
+    # Keyword fallbacks
+    if "tac" in v: return "TAC Meeting"
+    if "pac" in v: return "PAC Meeting"
+    if "leadership" in v: return "Leadership Meeting"
+    if "manager" in v: return "Managers Meeting"
+    if "committee" in v: return "Committee Meeting"
+    if "professional development" in v or "training" in v or " pd" in f" {v}": return "Professional Development"
+    if "staff" in v: return "Staff Meeting"
+    return "Other"
+
+# ── SPEAKER MAPPING & TRANSCRIPT LIMITS ──────────────────────
+import re as _re
+TRANSCRIPT_LIMIT = 24000  # characters sent to the AI for the main polish
+
+def find_generic_speakers(text: str):
+    """Find generic transcript labels such as 'Speaker 1', 'Speaker 2' (Teams/Otter style)."""
+    found = _re.findall(r"\bSpeaker\s*(\d+)\b", text or "", flags=_re.IGNORECASE)
+    return sorted(set(found), key=int)
+
+def apply_speaker_map(text: str) -> str:
+    """Replace 'Speaker N' labels with the names the user has confirmed. Unmapped labels stay as-is."""
+    mapping = st.session_state.get("mp_speaker_map", {}) or {}
+    for num, name in mapping.items():
+        name = (name or "").strip()
+        if name:
+            text = _re.sub(rf"\bSpeaker\s*{num}\b", name, text, flags=_re.IGNORECASE)
+    return text
 
 # ── TOP NAV ───────────────────────────────────────────────────
 st.markdown("""
@@ -345,8 +368,16 @@ if st.session_state.mp_step == 1:
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        m["type"] = st.selectbox("Meeting type", MEETING_TYPES,
-            index=MEETING_TYPES.index(m["type"]) if m["type"] in MEETING_TYPES else 0)
+        TYPE_PLACEHOLDER = "— Select meeting type —"
+        type_options = [TYPE_PLACEHOLDER] + MEETING_TYPES
+        current_type = m.get("type","")
+        sel_type = st.selectbox(
+            "Meeting type (required)",
+            type_options,
+            index=type_options.index(current_type) if current_type in MEETING_TYPES else 0,
+            help="This appears in the document title block — please choose the correct meeting type, it is not assumed."
+        )
+        m["type"] = "" if sel_type == TYPE_PLACEHOLDER else sel_type
         m["date"] = st.text_input("Date", value=m["date"], placeholder="e.g. Monday 23 March 2026")
         m["subject"] = st.text_input("Subject / reason for meeting", value=m.get("subject",""),
             placeholder="e.g. Xavier Shilton Sumner — TAC Review  ·  Term 1 Staff Meeting",
@@ -402,8 +433,10 @@ if st.session_state.mp_step == 1:
     st.markdown('</div></div>', unsafe_allow_html=True)
 
     if st.button("Continue →", type="primary", use_container_width=True):
-        if not m["type"] or not m["date"]:
-            st.error("Please enter the meeting type and date.")
+        if not m["type"]:
+            st.error("Please select the meeting type — it appears on the minutes and is not assumed.")
+        elif not m["date"]:
+            st.error("Please enter the meeting date.")
         else:
             st.session_state.mp_step = 2; st.rerun()
 
@@ -454,16 +487,53 @@ elif st.session_state.mp_step == 2:
         word_count = len(st.session_state.mp_raw_text.split())
         st.markdown(f'<div style="font-size:.78rem;color:#4a7fb5;margin-top:.25rem;">📊 {word_count} words ready to polish</div>', unsafe_allow_html=True)
 
+        if len(st.session_state.mp_raw_text) > TRANSCRIPT_LIMIT:
+            pct = int(TRANSCRIPT_LIMIT / len(st.session_state.mp_raw_text) * 100)
+            st.warning(
+                f"⚠️ This transcript is long — only the first ~{pct}% will be read by the AI, so later "
+                "discussion may be missing from the minutes. Consider removing small talk at the start/end, "
+                "or polishing the meeting in two halves."
+            )
+
+        # ── Speaker mapping (Teams/Otter 'Speaker 1' style transcripts) ──
+        speakers = find_generic_speakers(st.session_state.mp_raw_text)
+        if speakers:
+            if "mp_speaker_map" not in st.session_state:
+                st.session_state.mp_speaker_map = {}
+            st.markdown('<div class="card"><div class="card-header teal"><h3>🗣️ Who is each speaker?</h3></div><div class="card-body">', unsafe_allow_html=True)
+            st.markdown(
+                '<div class="info-box">This transcript labels people as <strong>Speaker 1, Speaker 2…</strong> '
+                'The AI will not guess who they are — name each speaker below so the minutes can attribute '
+                'correctly. Leave a box blank if you are not sure, and that speaker\'s contributions will be '
+                'recorded neutrally.</div>', unsafe_allow_html=True)
+            attendee_names = [ln.split("(")[0].strip() for ln in m.get("present","").splitlines() if ln.strip()]
+            cols = st.columns(min(len(speakers), 4))
+            for idx, num in enumerate(speakers):
+                with cols[idx % len(cols)]:
+                    first_line = next((ln.strip() for ln in st.session_state.mp_raw_text.splitlines()
+                                       if _re.search(rf"\bSpeaker\s*{num}\b", ln, _re.IGNORECASE)), "")
+                    st.session_state.mp_speaker_map[num] = st.text_input(
+                        f"Speaker {num}",
+                        value=st.session_state.mp_speaker_map.get(num, ""),
+                        key=f"spk_{num}",
+                        placeholder=(", ".join(attendee_names[:3]) + "…") if attendee_names else "e.g. Candice",
+                        help=f"First appears: {first_line[:140]}" if first_line else None,
+                    )
+            mapped = sum(1 for v in st.session_state.mp_speaker_map.values() if (v or "").strip())
+            st.caption(f"{mapped} of {len(speakers)} speakers named. Hover the ⓘ to see where each speaker first talks.")
+            st.markdown('</div></div>', unsafe_allow_html=True)
+
         # ── Auto-extract meeting details from transcript ──────
         if st.button("🔍 Auto-detect meeting details from transcript", use_container_width=True, key="auto_detect"):
             with st.spinner("Reading transcript for meeting details…"):
                 detect_prompt = f"""Read this transcript carefully and extract meeting metadata.
 
 TRANSCRIPT:
-{st.session_state.mp_raw_text[:8000]}
+{apply_speaker_map(st.session_state.mp_raw_text)[:8000]}
 
 Return as JSON only (no markdown):
 {{
+  "meeting_type": "type of meeting if identifiable from the transcript — e.g. TAC Meeting, PAC Meeting, Staff Meeting, Team Meeting, Committee Meeting, Leadership Meeting, Professional Development — or empty string if unclear",
   "date": "full date mentioned e.g. Monday 23 March 2026 — extract exactly as stated",
   "start_time": "time meeting started e.g. 3:30 PM",
   "end_time": "time meeting closed if mentioned",
@@ -487,6 +557,9 @@ If a field is not mentioned, return an empty string or empty array."""
                 try:
                     detected = parse_ai_json(raw)
                     changed = []
+                    detected_type = match_meeting_type(detected.get("meeting_type",""))
+                    if detected_type and not m.get("type","").strip():
+                        m["type"] = detected_type; changed.append(f"meeting type ({detected_type})")
                     if detected.get("date","").strip() and not m.get("date","").strip():
                         m["date"] = detected["date"]; changed.append("date")
                     elif detected.get("date","").strip():
@@ -536,6 +609,11 @@ If a field is not mentioned, return an empty string or empty array."""
         st.markdown('<div class="card"><div class="card-header slate"><h3>📋 Current Meeting Details</h3></div><div class="card-body">', unsafe_allow_html=True)
         det1, det2 = st.columns(2)
         with det1:
+            s2_type_opts = ["— Select meeting type —"] + MEETING_TYPES
+            s2_cur = m.get("type","")
+            s2_sel = st.selectbox("Meeting type (required)", s2_type_opts,
+                index=s2_type_opts.index(s2_cur) if s2_cur in MEETING_TYPES else 0, key="s2_type")
+            m["type"] = "" if s2_sel == "— Select meeting type —" else s2_sel
             m["date"]      = st.text_input("Date", value=m.get("date",""), key="s2_date", placeholder="e.g. Monday 23 March 2026")
             m["start_time"]= st.text_input("Start time", value=m.get("start_time",""), key="s2_st", placeholder="e.g. 3:30 PM")
             m["end_time"]  = st.text_input("End time", value=m.get("end_time",""), key="s2_et", placeholder="e.g. 4:45 PM")
@@ -558,6 +636,8 @@ If a field is not mentioned, return an empty string or empty array."""
         if st.button("Continue →", type="primary", use_container_width=True):
             if not st.session_state.mp_raw_text.strip():
                 st.error("Please paste or upload some content to polish.")
+            elif not m.get("type","").strip():
+                st.error("Please select the meeting type above (or use auto-detect) — it appears on the minutes and is not assumed.")
             else:
                 st.session_state.mp_step = 3; st.rerun()
 
@@ -589,6 +669,16 @@ THOROUGHNESS — within the bounds of fidelity:
 - Record specific figures, dates, names, and details exactly as stated in the transcript
 - Capture concerns raised, questions asked, and responses given
 - Note where there was agreement, disagreement, or uncertainty — as the transcript shows it
+
+PRIVACY & RELEVANCE — minutes record meeting BUSINESS, not everything said:
+- Omit small talk, greetings, personal anecdotes, and informal chat unrelated to meeting business
+- NEVER record private personal details about anyone — especially health, medical appointments or procedures, family matters, or personal circumstances
+- If a personal matter has an operational impact (e.g. a staff member will be absent or late), record ONLY the operational fact, neutrally — e.g. "Candice advised she will be unavailable until approximately 10:00 AM on the first Friday of next term." — never the medical or personal reason
+- Do not create a section for a topic that was purely personal conversation
+
+NO META-COMMENTARY:
+- Never write notes about the transcript itself in the minutes (e.g. "No chair was identified in the transcript", "The speaker could not be determined"). Simply leave out what is not known
+- Never use raw transcript labels like "Speaker 1" in the minutes — if a speaker is unnamed, use neutral wording ("It was noted that…") instead
 
 STRUCTURE:
 - One section per distinct topic — never merge two topics
@@ -632,10 +722,11 @@ MEETING DETAILS:
 OUTPUT STYLE: {style_instruction}
 
 TRANSCRIPT:
-{st.session_state.mp_raw_text[:14000]}
+{apply_speaker_map(st.session_state.mp_raw_text)[:TRANSCRIPT_LIMIT]}
 
 Return as JSON only (no markdown fences):
 {{
+  "meeting_type": "type of meeting if identifiable from the transcript (e.g. TAC Meeting, Staff Meeting, PAC Meeting) — empty string if unclear",
   "date": "full meeting date extracted from transcript if not already provided",
   "start_time": "meeting start time",
   "end_time": "meeting end time if mentioned",
@@ -649,7 +740,7 @@ Return as JSON only (no markdown fences):
   "apologies": [
     {{"name": "full name", "role": "role if mentioned"}}
   ],
-  "opening": "Formal opening: name of chair, date, time, location, who was present. 2-3 sentences.",
+  "opening": "Formal opening: 1-2 sentences only — who opened/chaired the meeting, the time, and the location. Do NOT list who was present or who sent apologies — attendees are recorded separately in the minutes header and must not be repeated here.",
   "sections": [
     {{
       "heading": "Specific topic heading — be descriptive e.g. 'Safety & Risk Plan Review' not just 'Safety'",
@@ -664,7 +755,7 @@ Return as JSON only (no markdown fences):
       "due": "Due date as stated in the transcript, or 'Not specified'"
     }}
   ],
-  "closing": "Formal closing: time meeting closed, who closed it, thanks if given, next meeting date/time — only details actually in the transcript.",
+  "closing": "Formal closing: time meeting closed, who closed it, thanks if given, next meeting date/time — only details actually in the transcript. Do NOT re-list attendees.",
   "next_meeting": "Full next meeting details if mentioned"
 }}
 
@@ -678,7 +769,10 @@ MANDATORY RULES — failure to follow these is not acceptable:
 7. "Resolution:" appears ONLY where the transcript shows a decision was actually made
 8. Actions: every action mentioned in the transcript must appear in the actions array — with "Not specified" for any missing person or due date, never a guess
 9. Do NOT omit content because it seems minor — if it was discussed, it belongs in the minutes
-10. Write for an external reader (e.g. a DCP worker reading these 6 months later) — which is exactly why nothing can be invented"""
+10. Write for an external reader (e.g. a DCP worker reading these 6 months later) — which is exactly why nothing can be invented
+11. Do NOT list attendees or apologies inside the opening, closing, or any section — they are recorded once in the document header. Individuals may of course be named where they contributed to discussion
+12. Omit small talk and personal/private matters (health, medical appointments, family). Where a personal matter affects operations (absence, lateness, coverage), record only the operational fact — never the reason
+13. Never write "Speaker 1/2/3" or meta-notes about the transcript (e.g. "no chair was identified") in the minutes"""
 
     st.markdown("""
     <div class="hero" style="text-align:center;padding:2rem;">
@@ -708,14 +802,21 @@ MANDATORY RULES — failure to follow these is not acceptable:
     with p2:
         if st.button("✨ Polish Minutes Now", type="primary", use_container_width=True):
             with st.spinner("Reading transcript and writing detailed minutes — this may take 30–60 seconds…"):
-                raw = groq_call(build_prompt(), 4000, SYSTEM_PROMPT)
+                raw = groq_call(build_prompt(), 8000, SYSTEM_PROMPT)
                 try:
                     parsed = parse_ai_json(raw)
+                    if parsed.pop("_truncated", False) or st.session_state.get("mp_last_finish") == "length":
+                        st.session_state["mp_trunc_warn"] = True
+                    else:
+                        st.session_state["mp_trunc_warn"] = False
                     st.session_state.mp_sections  = parsed.get("sections", [])
                     st.session_state.mp_actions    = parsed.get("actions", [])
                     st.session_state["mp_opening"] = parsed.get("opening", "")
                     st.session_state["mp_closing"] = parsed.get("closing", "")
                     # Auto-fill meeting details from AI extraction if not already set
+                    detected_type = match_meeting_type(parsed.get("meeting_type",""))
+                    if detected_type and not m.get("type","").strip():
+                        m["type"] = detected_type
                     if parsed.get("date","").strip() and not m.get("date","").strip():
                         m["date"] = parsed["date"]
                     if parsed.get("start_time","").strip() and not m.get("start_time","").strip():
@@ -755,6 +856,12 @@ MANDATORY RULES — failure to follow these is not acceptable:
 # STEP 4 — REVIEW & EDIT
 # ══════════════════════════════════════════════════════════════
 elif st.session_state.mp_step == 4:
+
+    if st.session_state.get("mp_trunc_warn"):
+        st.warning(
+            "⚠️ The AI's response was cut off before it finished, so the final section(s), actions or closing "
+            "may be incomplete. Check the end of the minutes against the transcript — or go back and polish again."
+        )
 
     st.markdown("""
     <div class="info-box">
@@ -1110,7 +1217,8 @@ elif st.session_state.mp_step == 5:
             add_run(p_subj, subject, bold=True, size=10.5, color=CREAM)
         p_org = hc.add_paragraph()
         p_org.paragraph_format.space_before = Pt(0); p_org.paragraph_format.space_after = Pt(0)
-        add_run(p_org, f"{m.get('organisation','')}  ·  {m.get('type','')}  ·  {m.get('date','')}", size=9, color=CREAM)
+        header_parts = [x for x in [m.get("organisation","").strip(), m.get("type","").strip(), m.get("date","").strip()] if x]
+        add_run(p_org, "  ·  ".join(header_parts), size=9, color=CREAM)
 
         doc.add_paragraph().paragraph_format.space_after = Pt(4)
 
@@ -1265,9 +1373,10 @@ elif st.session_state.mp_step == 5:
         doc.add_paragraph().paragraph_format.space_after = Pt(10)
         p_foot = doc.add_paragraph()
         p_foot.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        add_run(p_foot,
-            f"{m.get('organisation','')}  ·  {m.get('type','')}  ·  {m.get('date','')}  ·  Minutes prepared by {m.get('minutes_by','')}",
-            size=7.5, color=GREY, italic=True)
+        foot_parts = [x for x in [m.get("organisation","").strip(), m.get("type","").strip(), m.get("date","").strip()] if x]
+        if m.get("minutes_by","").strip():
+            foot_parts.append(f"Minutes prepared by {m.get('minutes_by','').strip()}")
+        add_run(p_foot, "  ·  ".join(foot_parts), size=7.5, color=GREY, italic=True)
 
         buf = BytesIO(); doc.save(buf); buf.seek(0)
         return buf
