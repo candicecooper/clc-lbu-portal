@@ -679,39 +679,57 @@ def build_active_students(op_client, reg_client=None):
     comm_archived = set(get_archived_codes(op_client))          # archived in this tool
     reg_client = reg_client or op_client
     reg_archived = register_archived_initials(reg_client)       # archived in the register
-    archived = comm_archived | reg_archived
     comm_codes = set(get_codes(op_client))
 
     reg_students, err = fetch_register_students(reg_client)
     status = {"connected": err is None, "count": len(reg_students), "error": err,
               "with_program": sum(1 for _, _, p in reg_students if p),
               "no_program": sum(1 for _, _, p in reg_students if not p),
-              "source": "register", "hidden": 0, "new": 0, "unregistered": 0}
+              "source": "register", "hidden": 0, "new": 0, "unregistered": 0,
+              "reactivated": 0}
 
-    options, seen_codes, hidden = [], set(), 0
+    # The REGISTER is the source of truth for who is active. A student who is
+    # active in the register is shown here even if an old Comm Log archive flag
+    # still lingers from before — that stale flag must not override the register.
+    reg_active_bases = {base_of(ini) for _rid, ini, prog in reg_students}
+    reg_active_codes = set()
+    for _rid, ini, prog in reg_students:
+        reg_active_codes.add(ini)
+        if prog:
+            reg_active_codes.add(f"{ini}-{prog}")
+
+    options, seen_codes, hidden, reactivated = [], set(), 0, 0
     reg_codes = set()
     for _rid, ini, prog in reg_students:
         code = f"{ini}-{prog}" if prog else ini
         reg_codes.add(code)
         reg_codes.add(ini)                     # tolerate older logs stored under bare initials
-        if code in archived or ini in archived:
+        # only hide if the REGISTER archived them; ignore a stale comm-log flag
+        if code in reg_archived or ini in reg_archived:
             hidden += 1
             continue
+        if code in comm_archived or ini in comm_archived:
+            reactivated += 1                    # register says active -> show anyway
         tag = "" if prog else "  ⚠️ no program set"
         options.append((f"{code}{tag}", code))
         seen_codes.add(code)
 
-    # logs saved under a code the register doesn't (yet) have -> flag for merging,
-    # never silently create a student
+    # logs saved under a code the register doesn't have -> flag for merging,
+    # never silently create a student. Still respect archive for these orphans.
+    _orphan_archived = comm_archived | reg_archived
     unreg = 0
     for c in sorted(comm_codes):
-        if c in archived or c in seen_codes:
+        if c in seen_codes:
             continue
-        if base_of(c) in {base_of(x) for x in reg_codes}:
+        if base_of(c) in reg_active_bases:
             continue                            # same student under a slightly different code
+        if c in _orphan_archived:
+            continue
         options.append((f"{c}  (not on register)", c))
         seen_codes.add(c)
         unreg += 1
+
+    status["reactivated"] = reactivated
 
     status["hidden"] = hidden
     status["unregistered"] = unreg
@@ -1181,8 +1199,31 @@ with tab_log:
                          "then use **Merge** on the Students tab to fold the logs across.")
             _hid = reg_status.get("hidden", 0)
             if _hid:
-                st.write(f"🗄️ **{_hid}** student(s) hidden (archived in the register "
-                         "or here).")
+                st.write(f"🗄️ **{_hid}** student(s) hidden (archived in the register).")
+            _react = reg_status.get("reactivated", 0)
+            if _react:
+                st.write(f"♻️ **{_react}** student(s) are active in the register but still "
+                         "carry an old *archived/removed* flag here — they're shown anyway "
+                         "(the register wins). You can clear those stale flags below.")
+                if st.button("Clear stale Comm Log archive flags for active students",
+                             key="clear_stale_flags"):
+                    try:
+                        _reg_now, _ = fetch_register_students(reg_client)
+                        _active = {i for _r, i, _p in _reg_now}
+                        _active |= {f"{i}-{p}" for _r, i, p in _reg_now if p}
+                        _cleared = 0
+                        for _code in get_archived_codes(client):
+                            if _code in _active or base_of(_code) in {base_of(a) for a in _active}:
+                                try:
+                                    client.table(ARCHIVE_TABLE).delete().eq(
+                                        "student_initials", _code).execute()
+                                    _cleared += 1
+                                except Exception:
+                                    pass
+                        st.success(f"Cleared {_cleared} stale flag(s).")
+                        st.rerun()
+                    except Exception as _ce:
+                        st.error(f"Could not clear: {_ce}")
         with st.expander("🔍 See exactly what the register returns", expanded=True):
             _rc = reg_client or client
             try:
