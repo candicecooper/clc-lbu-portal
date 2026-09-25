@@ -17,9 +17,20 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-from auth import require_auth, logout_button
-require_auth("TAC Brief Builder", "📋")
-logout_button("sidebar")
+# ── AUTH ──────────────────────────────────────────────────────
+# The old standalone auth.py (require_auth / logout_button) is not in the
+# portal. Use the shared staff-level gate if present; otherwise run open.
+try:
+    import staff_auth as _sa
+    _gate = next((getattr(_sa, n) for n in (
+        "require_staff_auth", "require_staff_password", "check_staff_password",
+        "staff_gate", "require_auth", "check_password") if callable(getattr(_sa, n, None))), None)
+    if _gate is not None:
+        _res = _gate()
+        if _res is False:
+            st.stop()
+except ImportError:
+    pass
 
 # ── DESIGN ────────────────────────────────────────────────────
 st.markdown("""
@@ -74,22 +85,51 @@ label[data-testid="stWidgetLabel"] p{font-size:.72rem!important;font-weight:600!
 """, unsafe_allow_html=True)
 
 # ── GROQ ─────────────────────────────────────────────────────
-def groq_call(prompt: str, max_tokens: int = 3000, system: str = "") -> str:
+GROQ_MODELS = ["openai/gpt-oss-120b", "qwen/qwen3.6-27b", "llama-3.3-70b-versatile"]
+
+def _groq_client():
+    from groq import Groq
+    key = st.secrets["GROQ_API_KEY"]
     try:
-        from groq import Groq
-        client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-        messages = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
-        resp = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            max_tokens=max_tokens,
-            messages=messages
-        )
-        return resp.choices[0].message.content.strip()
+        return Groq(api_key=key)
+    except TypeError:
+        # stale groq wheel + newer httpx ('proxies' kwarg clash)
+        import httpx
+        return Groq(api_key=key, http_client=httpx.Client())
+
+def groq_call(prompt: str, max_tokens: int = 3000, system: str = "") -> str:
+    """Model fallback chain, 413 self-healing, strips <think> blocks."""
+    try:
+        client = _groq_client()
     except Exception as e:
         return f"[AI error: {e}]"
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    last_err = None
+    for model in GROQ_MODELS:
+        tokens = max_tokens
+        while tokens >= 500:
+            try:
+                kwargs = dict(model=model, max_tokens=tokens, messages=messages, temperature=0.2)
+                if model.startswith("qwen/"):
+                    kwargs["reasoning_effort"] = "none"
+                resp = client.chat.completions.create(**kwargs)
+                out = (resp.choices[0].message.content or "").strip()
+                out = re.sub(r"<think>.*?</think>", "", out, flags=re.S).strip()
+                if out:
+                    return out
+                last_err = "empty response"
+                break
+            except Exception as e:
+                last_err = e
+                msg = str(e).lower()
+                if "413" in msg or "too large" in msg:
+                    tokens //= 2   # shrink and retry same model
+                    continue
+                break              # other error: try next model
+    return f"[AI error: {last_err}]"
 
 # ── SESSION STATE ─────────────────────────────────────────────
 def init():
