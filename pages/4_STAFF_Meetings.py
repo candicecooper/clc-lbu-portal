@@ -1802,7 +1802,7 @@ TRANSCRIPT:
                             client = Groq(api_key=GROQ_KEY)
 
                             synthesis_for_ai, was_truncated = _fit_to_groq_budget(
-                                synthesis_for_minutes.strip(), max_tokens=2000, prompt_overhead_tokens=400
+                                synthesis_for_minutes.strip(), max_tokens=2600, prompt_overhead_tokens=400
                             )
                             if was_truncated:
                                 st.warning(
@@ -1812,28 +1812,25 @@ TRANSCRIPT:
                                 )
 
                             section_list = "\n".join(f"- {label}" for _, label in MEETING_SECTIONS)
+                            heading_list = "\n".join(f"## {label}" for _, label in MEETING_SECTIONS)
 
                             prompt = f"""Read the synthesis of a school staff meeting below and sort what
 was discussed into EXACTLY these six standing sections, in this order:
 {section_list}
 
-For each section, summarise what was discussed, any decisions made, and any
-action items (what needs to be done, who's responsible, and the due date if
-mentioned). If a section was not discussed at all, use exactly this text for
-it: "{_NIL_TEXT}"
+For each section, write a CONCISE summary (a few sentences at most) of what
+was discussed, any decisions made, and any action items (what needs to be
+done, who's responsible, and the due date if mentioned). If a section was
+not discussed at all, write exactly: "{_NIL_TEXT}"
 
 Do not invent information that isn't in the synthesis. If something doesn't
 clearly belong to one of the six sections, put it under "Other Business".
 
-Return ONLY a JSON object with exactly these keys, no preamble or commentary:
-{{
-  "manager_business": "...",
-  "transition_coordinator": "...",
-  "finance": "...",
-  "whs": "...",
-  "pac": "...",
-  "other_business": "..."
-}}
+Reply in PLAIN TEXT using EXACTLY this structure — each section starts on
+its own line with "## " followed by the exact section name shown above, in
+this exact order, with nothing else before, between, or after (no JSON, no
+extra commentary, no numbering):
+{heading_list}
 
 MEETING SYNTHESIS:
 {synthesis_for_ai}"""
@@ -1842,17 +1839,29 @@ MEETING SYNTHESIS:
                                 model="openai/gpt-oss-120b",
                                 messages=[{"role": "user", "content": prompt}],
                                 temperature=0.2,
-                                max_tokens=2000
+                                max_tokens=2600
                             )
                             raw = response.choices[0].message.content.strip()
-                            json_match = re.search(r'\{.*\}', raw, re.DOTALL)
-                            if not json_match:
-                                raise ValueError("AI did not return the expected structured format — try again.")
-                            new_sections = json.loads(json_match.group())
-                            new_sections = {
-                                key: str(new_sections.get(key, "")).strip()
-                                for key, _ in MEETING_SECTIONS
-                            }
+
+                            # Parsed with the SAME "## Section Name" parser used everywhere
+                            # else in this file (Manual Entry, saved-minutes display), rather
+                            # than asking the AI for JSON — a JSON response that gets cut off
+                            # (long synthesis, verbose section) fails to parse AT ALL and loses
+                            # every section; this plain-text format degrades gracefully instead,
+                            # since each section is captured independently up to the next "## "
+                            # heading — a cut-off reply only loses whichever section(s) never
+                            # arrived, not everything already generated.
+                            parsed = _parse_minutes_sections(raw)
+                            new_sections = {key: (parsed.get(key) or "").strip() for key, _ in MEETING_SECTIONS}
+
+                            if not any(new_sections.values()):
+                                with st.expander("Show raw AI response"):
+                                    st.code(raw or "(empty response)")
+                                raise ValueError(
+                                    "The AI's reply didn't match the expected section format — see "
+                                    "the raw response above. Try trimming the synthesis and generating "
+                                    "again."
+                                )
 
                             # The synthesis already merges any multi-part transcript (Step 1
                             # appends rather than overwrites), so a single classification pass
