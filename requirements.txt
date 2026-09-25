@@ -1,5 +1,5 @@
 # CLC-LBU Portal Requirements - Combined & Deduplicated
-# Updated 2026-03-14
+# Updated 2026-09-25
 
 # Core Streamlit & UI
 streamlit>=1.35.0
@@ -36,5 +36,11 @@ bcrypt>=4.0.1
 
 # Utilities
 python-dateutil>=2.9.0
+requests
+
+# Mapping / School Zone Finder
+pyshp
+shapely
+pyproj
 
 starlette<1.0
