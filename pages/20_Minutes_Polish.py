@@ -67,30 +67,52 @@ label[data-testid="stWidgetLabel"] p{font-size:.72rem!important;font-weight:600!
 """, unsafe_allow_html=True)
 
 # ── GROQ ──────────────────────────────────────────────────────
-def groq_call(prompt: str, max_tokens: int = 3000, system: str = "") -> str:
+# Groq retired llama-3.3-70b-versatile on 16 Aug 2026. Model can be overridden with
+# GROQ_MODEL in Streamlit secrets; fallbacks are tried automatically if a model is retired.
+GROQ_MODELS = ["openai/gpt-oss-120b", "qwen/qwen3.6-27b"]
+
+def _model_list():
+    try:
+        override = st.secrets.get("GROQ_MODEL", "")
+    except Exception:
+        override = ""
+    return ([override] if override else []) + [x for x in GROQ_MODELS if x != override]
+
+def groq_call(prompt: str, max_tokens: int = 3000, system: str = "", json_mode: bool = True) -> str:
     try:
         from groq import Groq
-        client = Groq(api_key=st.secrets["GROQ_API_KEY"], timeout=120.0)
-        messages = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
-        last_err = None
-        for attempt in range(2):  # one automatic retry on transient failure
-            try:
-                resp = client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
-                    max_tokens=max_tokens,
-                    temperature=0.1,  # low temperature — factual fidelity over creativity
-                    messages=messages
-                )
-                st.session_state["mp_last_finish"] = getattr(resp.choices[0], "finish_reason", "")
-                return resp.choices[0].message.content.strip()
-            except Exception as e:
-                last_err = e
-        return f"[AI error: {last_err}]"
+        client = Groq(api_key=st.secrets["GROQ_API_KEY"], timeout=180.0)
     except Exception as e:
         return f"[AI error: {e}]"
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    last_err = None
+    for model in _model_list():
+        base = dict(model=model, messages=messages, temperature=0.1,
+                    max_completion_tokens=max_tokens + 4000)  # headroom for reasoning tokens
+        extras = {}
+        if json_mode:
+            extras["response_format"] = {"type": "json_object"}  # forces valid JSON
+        if "gpt-oss" in model:
+            extras["reasoning_effort"] = "low"
+        attempts = [dict(base, **extras), dict(base, **extras), base]  # retry once, then without extras
+        model_gone = False
+        for kwargs in attempts:
+            try:
+                resp = client.chat.completions.create(**kwargs)
+                st.session_state["mp_last_finish"] = getattr(resp.choices[0], "finish_reason", "")
+                return (resp.choices[0].message.content or "").strip()
+            except Exception as e:
+                last_err = e
+                msg = str(e).lower()
+                if any(k in msg for k in ("model_not_found", "does not exist", "decommissioned")):
+                    model_gone = True
+                    break
+        if not model_gone:
+            break  # model exists but failed repeatedly — don't mask the real error
+    return f"[AI error: {last_err}]"
 
 # ── ROBUST JSON PARSING ───────────────────────────────────────
 def parse_ai_json(raw: str) -> dict:
@@ -101,6 +123,8 @@ def parse_ai_json(raw: str) -> dict:
     - trailing commas
     """
     import re
+    if raw.strip().startswith("[AI error"):
+        raise ValueError("The AI service returned an error — " + raw.strip()[10:-1][:300])
     raw = raw.replace("```json", "").replace("```", "").strip()
     # Trim to outermost { ... }
     start = raw.find("{")
