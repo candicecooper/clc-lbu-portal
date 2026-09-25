@@ -174,7 +174,7 @@ def available_datasets():
         if p.name.lower() == "readme.md" or p.is_dir():
             continue
         kind, year = classify_zip(p.name)
-        if p.suffix.lower() == ".zip" and kind and year:
+        if p.suffix.lower().rstrip("_") == ".zip" and kind and year:
             out[kind][year] = p
         else:
             out["unrecognised"].append(p.name)
