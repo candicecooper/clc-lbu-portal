@@ -1343,6 +1343,19 @@ with tab_students:
     st.caption("Pick a program, click a student, then read or add their entries.")
 
     _archived = set(get_archived_codes(client))
+
+    # map each register student's code/initials -> their program, so we can group
+    # correctly even when the code itself has no -JP/-PY/-SY suffix
+    _reg_prog_map = {}
+    try:
+        _rs, _ = fetch_register_students(reg_client or client)
+    except Exception:
+        _rs = []
+    for _rid, _ini, _prog in _rs:
+        if _prog in PROGRAMS:
+            _reg_prog_map[_ini] = _prog
+            _reg_prog_map[f"{_ini}-{_prog}"] = _prog
+
     _groups = {p: [] for p in PROGRAMS}
     _groups["Unassigned"] = []
     _groups["Not on register"] = []
@@ -1352,7 +1365,9 @@ with tab_students:
         if "(not on register)" in lbl:
             _groups["Not on register"].append((lbl, code))
             continue
-        p = program_of(code) or "Unassigned"
+        # program from the code suffix, else from the register, else Unassigned
+        p = program_of(code) or _reg_prog_map.get(code) \
+            or _reg_prog_map.get(base_of(code)) or "Unassigned"
         _groups.setdefault(p, []).append((lbl, code))
 
     _counts_by_code = {}
