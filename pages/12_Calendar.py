@@ -309,6 +309,7 @@ with ph_col1:
         st.session_state.cal_month = new_mo
         st.session_state.cal_year  = new_yr
         st.session_state.selected_date = date(new_yr, new_mo, 1)
+        st.session_state.m_jump_last = date(new_yr, new_mo, 1)
         st.rerun()
 with ph_col2:
     import calendar as _cal
@@ -320,6 +321,7 @@ with ph_col3:
         st.session_state.cal_month = new_mo
         st.session_state.cal_year  = new_yr
         st.session_state.selected_date = date(new_yr, new_mo, 1)
+        st.session_state.m_jump_last = date(new_yr, new_mo, 1)
         st.rerun()
 with ph_col4:
     if st.button("Today", use_container_width=True, key="m_today"):
@@ -395,9 +397,12 @@ with tab_month:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Jump to date
+    # Jump to date — use a separate tracking key so the widget doesn't fight with Prev/Next nav
+    if "m_jump_last" not in st.session_state:
+        st.session_state.m_jump_last = st.session_state.selected_date
     jumped = st.date_input("Jump to date:", value=st.session_state.selected_date, key="m_jump", label_visibility="collapsed")
-    if jumped != st.session_state.selected_date:
+    if jumped != st.session_state.m_jump_last:
+        st.session_state.m_jump_last = jumped
         select_day(jumped); st.session_state.cal_year=jumped.year; st.session_state.cal_month=jumped.month; st.rerun()
 
     st.markdown("---")
