@@ -8,9 +8,9 @@ import calendar
 st.set_page_config(page_title="CLC Calendar", page_icon="📅", layout="wide", initial_sidebar_state="collapsed")
 apply_clc_theme()
 
-from auth import require_auth, logout_button, get_staff_name
-require_auth("CLC Calendar", "📅")
-logout_button("sidebar")
+from staff_auth import require_staff_auth, staff_logout_button
+require_staff_auth("CLC Calendar", "📅")
+staff_logout_button("sidebar")
 
 # ── Back to Portal ─────────────────────────────────────────────────────────────
 st.sidebar.markdown(
@@ -225,7 +225,7 @@ def event_form(key, default_date=None, existing=None, label="📅 Save Event"):
             etype = st.selectbox("Type", list(EVENT_TYPES.keys()),
                                  index=list(EVENT_TYPES.keys()).index(ev.get("event_type","Other"))
                                  if ev.get("event_type") in EVENT_TYPES else len(EVENT_TYPES)-1)
-            _staff_default = ev.get("added_by","") or get_staff_name()
+            _staff_default = ev.get("added_by","") or ""
             who = st.text_input("Added by *", value=_staff_default, placeholder="Your name")
         with c2:
             ev_date  = st.date_input("Date *",
