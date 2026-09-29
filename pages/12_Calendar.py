@@ -306,10 +306,12 @@ with ph_col1:
     if st.button("◀ Prev", use_container_width=True, key="m_prev"):
         new_mo = mo - 1 if mo > 1 else 12
         new_yr = yr - 1 if mo == 1 else yr
+        new_d = date(new_yr, new_mo, 1)
         st.session_state.cal_month = new_mo
         st.session_state.cal_year  = new_yr
-        st.session_state.selected_date = date(new_yr, new_mo, 1)
-        st.session_state.m_jump_last = date(new_yr, new_mo, 1)
+        st.session_state.selected_date = new_d
+        st.session_state.m_jump_last = new_d
+        st.session_state["m_jump"] = new_d
         st.rerun()
 with ph_col2:
     import calendar as _cal
@@ -318,10 +320,12 @@ with ph_col3:
     if st.button("▶ Next", use_container_width=True, key="m_next"):
         new_mo = mo + 1 if mo < 12 else 1
         new_yr = yr + 1 if mo == 12 else yr
+        new_d = date(new_yr, new_mo, 1)
         st.session_state.cal_month = new_mo
         st.session_state.cal_year  = new_yr
-        st.session_state.selected_date = date(new_yr, new_mo, 1)
-        st.session_state.m_jump_last = date(new_yr, new_mo, 1)
+        st.session_state.selected_date = new_d
+        st.session_state.m_jump_last = new_d
+        st.session_state["m_jump"] = new_d
         st.rerun()
 with ph_col4:
     if st.button("Today", use_container_width=True, key="m_today"):
@@ -397,12 +401,11 @@ with tab_month:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Jump to date — use a separate tracking key so the widget doesn't fight with Prev/Next nav
-    if "m_jump_last" not in st.session_state:
-        st.session_state.m_jump_last = st.session_state.selected_date
-    jumped = st.date_input("Jump to date:", value=st.session_state.selected_date, key="m_jump", label_visibility="collapsed")
-    if jumped != st.session_state.m_jump_last:
-        st.session_state.m_jump_last = jumped
+    # Jump to date
+    if "m_jump" not in st.session_state:
+        st.session_state["m_jump"] = st.session_state.selected_date
+    jumped = st.date_input("Jump to date:", key="m_jump", label_visibility="collapsed")
+    if jumped != st.session_state.selected_date:
         select_day(jumped); st.session_state.cal_year=jumped.year; st.session_state.cal_month=jumped.month; st.rerun()
 
     st.markdown("---")
