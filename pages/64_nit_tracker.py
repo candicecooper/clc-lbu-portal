@@ -87,7 +87,52 @@ def _secret(*names, section=None, section_keys=()):
     return None
 
 
+STAY_SIGNED_IN_HOURS = 12      # how long one unlock lasts on this device (covers a full school day)
+
+
+def _token_secret():
+    parts = [_secret("CONFIDENTIAL_PASSWORD", "ADMIN_PASSWORD") or "",
+             _secret("SUPABASE_SERVICE_KEY", "SUPABASE_KEY", "SUPABASE_ANON_KEY",
+                     section="supabase", section_keys=("key", "service_key", "SUPABASE_KEY")) or ""]
+    return ("|".join(parts) + "|nit-tracker").encode()
+
+
+def _make_token():
+    import hmac
+    exp = int(time.time()) + STAY_SIGNED_IN_HOURS * 3600
+    sig = hmac.new(_token_secret(), str(exp).encode(), hashlib.sha256).hexdigest()[:32]
+    return f"{exp}.{sig}"
+
+
+def _token_ok(tok):
+    import hmac
+    try:
+        exp, sig = str(tok).split(".", 1)
+        good = hmac.new(_token_secret(), exp.encode(), hashlib.sha256).hexdigest()[:32]
+        return int(exp) > time.time() and hmac.compare_digest(sig, good)
+    except Exception:
+        return False
+
+
+def _remember_unlock():
+    """Keep a signed, expiring pass in the page address so a refresh, a dropped
+    connection or a timeout doesn't ask for the password again (same device/tab)."""
+    try:
+        if not _token_ok(st.query_params.get("pass", "")):
+            st.query_params["pass"] = _make_token()
+    except Exception:
+        pass
+
+
 def _gate():
+    # 1) Still inside the stay-signed-in window → no password prompt
+    try:
+        if _token_ok(st.query_params.get("pass", "")):
+            st.session_state["clc_confidential_ok"] = True
+            return
+    except Exception:
+        pass
+    # 2) Shared portal login
     try:
         import confidential_auth as ca
     except Exception:
@@ -99,8 +144,11 @@ def _gate():
             if callable(f):
                 if f() is False:
                     st.stop()
+                _remember_unlock()
                 return
+    # 3) Fallback local login
     if st.session_state.get("clc_confidential_ok"):
+        _remember_unlock()
         return
     pw_expected = _secret("CONFIDENTIAL_PASSWORD", "ADMIN_PASSWORD")
     st.markdown("### 🔒 NIT & Absence Tracker")
@@ -109,6 +157,7 @@ def _gate():
     if st.button("Unlock"):
         if pw_expected and pw == pw_expected:
             st.session_state["clc_confidential_ok"] = True
+            _remember_unlock()
             st.rerun()
         else:
             st.error("Incorrect password.")
@@ -1215,6 +1264,15 @@ st.markdown("""
 
 with st.sidebar:
     st.text_input("Your initials (recorded on entries)", key="nit_entered_by", max_chars=10)
+    st.caption(f"🔓 Stays unlocked on this device for {STAY_SIGNED_IN_HOURS} hours.")
+    if st.button("🔒 Lock now"):
+        try:
+            del st.query_params["pass"]
+        except Exception:
+            pass
+        for k in ("clc_confidential_ok",):
+            st.session_state.pop(k, None)
+        st.rerun()
 
 if not TERMS:
     st.error("No term dates configured — add them in Setup.")
