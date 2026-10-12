@@ -207,8 +207,8 @@ DEFAULT_CONFIG = {
         "program_changes_col": "program_changes",
     },
     "timetable_source": {
-        "mode": "url",                       # url | storage | off
-        "url": "https://clc-portal.pages.dev/timetable.pdf",
+        "mode": "portal",                    # portal | url | off
+        "url": "",
         "bucket": "",
         "prefix": "",
         "auto_apply": True,
@@ -320,11 +320,23 @@ def _hhmm(m):
     return f"{(h - 1) % 12 + 1}:{mm:02d}"
 
 
+_ROLE_RX = re.compile(r"\b(teacher|years|primary|junior|senior|specialist|sso|support|leadership|timetable|"
+                      r"staff|admin|meetings?|jp|py|sy|weekly)\b", re.I)
+
+
+def name_from_header(line):
+    """'JP - Ben Sutton — Junior Primary Teacher (JP)', 'Junior Primary Teacher- Ben Sutton',
+    'Senior Years Teacher-Brenton', 'Roisin — Specialist Teacher' → the person's name."""
+    segs = re.split(r"\s*(?:—|–|\s-\s|-(?=\s*[A-Z][a-z])|(?<=[a-z])-)\s*", str(line or ""))
+    segs = [re.sub(r"\(.*?\)", "", x).strip() for x in segs]
+    cands = [x for x in segs if x and not _ROLE_RX.search(x)]
+    return cands[0] if cands else ""
+
+
 def parse_timetable_pdf(data, dpi=110):
     """One person per page, Mon–Fri columns, time rows on the left. Renders the
-    page and reads the drawn cells (fill shade + grid lines) so merged sessions
-    are measured by their real length. Only blocks whose label starts with NIT
-    are returned."""
+    page and reads the drawn grid (cell lines + fill shade) so merged sessions are
+    measured by their real length. Only blocks whose label starts with NIT count."""
     import pdfplumber
     out = {"term_label": "", "people": [], "warnings": []}
     with pdfplumber.open(io.BytesIO(data)) as pdf:
@@ -334,23 +346,19 @@ def parse_timetable_pdf(data, dpi=110):
                 tm = re.search(r"Term\s*_?\s*(\d)\s*,\s*(\d{4})", text)
                 if tm:
                     out["term_label"] = f"{tm.group(2)} Term {tm.group(1)}"
-            name, program = "", ""
-            for line in text.splitlines():
-                nm = re.match(r"\s*([A-Za-z]{2,12})\s*[-–]\s*(.+?)\s+—", line)
-                if nm and "timetable" not in line.lower():
-                    program, name = nm.group(1).strip(), nm.group(2).strip()
-                    break
+            lines = [l.strip() for l in text.splitlines() if l.strip()]
+            hi = next((i for i, l in enumerate(lines) if "staff timetable" in l.lower()), None)
+            name = name_from_header(lines[hi + 1]) if hi is not None and hi + 1 < len(lines) else ""
             if not name:
                 continue
-            words = page.extract_words()
+            words = page.extract_words(keep_blank_chars=False, use_text_flow=False)
             days = {}
             for w in words:
                 lw = w["text"].strip().lower()
                 if lw in DAY_NAMES and lw not in days:
                     days[lw] = w
             if len(days) < 5:
-                out["warnings"].append(f"Page {pno} ({name}): day headings not found — skipped.")
-                continue
+                continue                      # not a Mon–Fri staff grid (e.g. meetings page)
             hdr_bottom = max(w["bottom"] for w in days.values())
             times = []
             for w in words:
@@ -362,42 +370,71 @@ def parse_timetable_pdf(data, dpi=110):
             if len(times) < 3:
                 out["warnings"].append(f"Page {pno} ({name}): time rows not found — skipped.")
                 continue
-            vlines = sorted({round(r["x0"] + (r["x1"] - r["x0"]) / 2, 1) for r in page.rects
-                             if r["x1"] - r["x0"] < 3 and r["bottom"] - r["top"] > 100})
-            cols = []
-            for d in DAY_NAMES:
-                xc = (days[d]["x0"] + days[d]["x1"]) / 2
-                left = max([v for v in vlines if v < xc] or [xc - 45])
-                right = min([v for v in vlines if v > xc] or [xc + 45])
-                cols.append((left, right))
 
             img = page.to_image(resolution=dpi).original.convert("L")
             sc = dpi / 72.0
             W, H = img.size
+            pix = img.load()
+
+            ox, oy = float(page.bbox[0]), float(page.bbox[1])   # some PDFs have an offset page box
 
             def px(x, y):
-                xi, yi = int(round(x * sc)), int(round(y * sc))
-                return img.getpixel((min(max(xi, 0), W - 1), min(max(yi, 0), H - 1)))
+                xi = min(max(int(round((x - ox) * sc)), 0), W - 1)
+                yi = min(max(int(round((y - oy) * sc)), 0), H - 1)
+                return pix[xi, yi]
 
-            tx = (min(t["x0"] for t in times) + max(t["x1"] for t in times)) / 2
+            def is_v(x, y):
+                return px(x, y) < min(px(x - 2.5, y), px(x + 2.5, y)) - 25
+
+            def is_h(x, y):
+                yy = y - 1.5
+                while yy <= y + 1.5:
+                    if px(x, yy) < min(px(x, yy - 2.5), px(x, yy + 2.5)) - 25:
+                        return True
+                    yy += 0.25
+                return False
+
+            ys = [times[0]["c"] + k * (times[-1]["c"] - times[0]["c"]) / 23 for k in range(24)]
+
+            def vline(x):
+                return sum(1 for y in ys if is_v(x, y)) >= len(ys) * 0.6
+
+            cols = []
+            for d in DAY_NAMES:
+                xc = (days[d]["x0"] + days[d]["x1"]) / 2
+                l, r = xc, xc
+                while l > ox and not vline(l):
+                    l -= 0.25
+                while r < float(page.bbox[2]) and not vline(r):
+                    r += 0.25
+                cols.append((l + 1.2, r - 1.2))
+            tl = cols[0][0] - 1.2
+            tleft = tl - 3
+            while tleft > ox and not vline(tleft):
+                tleft -= 0.25
+            tx = tleft + 2.5
+
             bounds = []
             for a, b in zip(times, times[1:]):
-                ys = [a["c"] + k * (b["c"] - a["c"]) / 40 for k in range(4, 37)]
-                bounds.append(min(ys, key=lambda y: min(px(tx - 30, y), px(cols[0][0] - 3, y))))
+                cand = [a["c"] + k * (b["c"] - a["c"]) / 40 for k in range(4, 37)]
+                bounds.append(min(cand, key=lambda y: px(tx, y) + px(tl - 2.5, y)))
             row_top = [times[0]["c"] - (bounds[0] - times[0]["c"])] + bounds
             row_bot = bounds + [times[-1]["c"] + (times[-1]["c"] - bounds[-1])]
+
+            def separated(cl, cr, y):
+                """A real cell border runs the full column width (text never reaches the edges)."""
+                if not all(is_h(cl + f * (cr - cl), y) for f in (0.02, 0.04, 0.96, 0.98)):
+                    return False
+                fs = [0.05 + k * 0.0643 for k in range(15)]
+                return sum(1 for f in fs if is_h(cl + f * (cr - cl), y)) >= 12
 
             sessions = []
             for wd, (cl, cr) in enumerate(cols):
                 blocks, cur = [], None
                 for i, t in enumerate(times):
-                    shade = px(cl + 2.5, t["c"])
-                    if cur is not None:
-                        yb = row_top[i]
-                        line = sum(1 for f in (0.2, 0.35, 0.5, 0.65, 0.8)
-                                   if min(px(cl + f * (cr - cl), yb + dy / 4) for dy in range(-4, 5)) < 140)
-                        if line >= 3 or abs(shade - cur["shade"]) > 6:
-                            cur = None
+                    shade = px(cl + 2, t["c"])
+                    if cur is not None and (separated(cl, cr, row_top[i]) or abs(shade - cur["shade"]) > 6):
+                        cur = None
                     if cur is None:
                         cur = {"i0": i, "i1": i, "shade": shade}
                         blocks.append(cur)
@@ -413,7 +450,7 @@ def parse_timetable_pdf(data, dpi=110):
                     s, e = times[b["i0"]]["s"], times[b["i1"]]["e"]
                     sessions.append({"weekday": wd, "start": _hhmm(s), "end": _hhmm(e),
                                      "minutes": e - s, "label": label})
-            out["people"].append({"name": name, "program": program,
+            out["people"].append({"name": name, "program": "",
                                   "sessions": sorted(sessions, key=lambda x: (x["weekday"], _tmins(x["start"])))})
     return out
 
@@ -522,7 +559,12 @@ def save_setting(key, value):
 
 
 def load_config():
-    return _merge_cfg(DEFAULT_CONFIG, load_setting("config") or {})
+    c = _merge_cfg(DEFAULT_CONFIG, load_setting("config") or {})
+    ts = c.get("timetable_source", {})
+    if ts.get("mode") in ("storage",) or (ts.get("mode") == "url" and
+                                          str(ts.get("url", "")).endswith("clc-portal.pages.dev/timetable.pdf")):
+        ts["mode"] = "portal"           # v2 default pointed at the old Cloudflare copy
+    return c
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -709,8 +751,54 @@ def create_version(parsed, source, source_name, source_hash, staff_rows, status=
     return vid
 
 
+def _bucket_names():
+    out = []
+    for bk in sb().storage.list_buckets() or []:
+        n = bk.get("name") if isinstance(bk, dict) else getattr(bk, "name", None) or getattr(bk, "id", None)
+        if n:
+            out.append(n)
+    return out
+
+
+def _list_pdfs(bucket, prefix="", depth=2):
+    """PDFs in a bucket folder (and up to `depth` levels of sub-folders)."""
+    found = []
+    try:
+        items = sb().storage.from_(bucket).list(prefix, {"limit": 1000}) or []
+    except TypeError:
+        items = sb().storage.from_(bucket).list(prefix) or []
+    for it in items:
+        name = str(it.get("name") or "")
+        path = f"{prefix}/{name}" if prefix else name
+        if it.get("id") is None and "." not in name and depth > 0:      # folder
+            found += _list_pdfs(bucket, path, depth - 1)
+        elif name.lower().endswith(".pdf"):
+            found.append({"bucket": bucket, "path": path, "name": name,
+                          "when": str(it.get("updated_at") or it.get("created_at") or "")})
+    return found
+
+
+def discover_portal_timetables(src):
+    """Newest PDF of each timetable in the portal's Supabase Storage
+    (files the Timetable page saves, e.g. timetable_specialist_1f4ad4.pdf)."""
+    buckets = [src["bucket"]] if (src.get("bucket") or "").strip() else _bucket_names()
+    prefix = (src.get("prefix") or "").strip().strip("/")
+    files = []
+    for bk in buckets:
+        try:
+            files += [f for f in _list_pdfs(bk, prefix) if "timetable" in (f["path"]).lower()]
+        except Exception:
+            continue
+    latest = {}
+    for f in files:
+        key = (f["bucket"], re.sub(r"[_\-][0-9a-f]{4,}(?=\.pdf$)", "", f["path"].lower()))
+        if key not in latest or f["when"] > latest[key]["when"]:
+            latest[key] = f
+    return sorted(latest.values(), key=lambda f: f["path"])
+
+
 def fetch_timetable_source(src):
-    """Returns (bytes, display_name) or raises."""
+    """Returns [(bytes, display_name), ...] or raises."""
     mode = src.get("mode", "off")
     if mode == "url":
         url = (src.get("url") or "").strip()
@@ -720,19 +808,40 @@ def fetch_timetable_source(src):
         req = urllib.request.Request(f"{url}{sep}nocache={int(time.time())}",
                                      headers={"User-Agent": "CLC-LBU-portal"})
         with urllib.request.urlopen(req, timeout=20) as r:
-            return r.read(), url
-    if mode == "storage":
-        bucket, prefix = (src.get("bucket") or "").strip(), (src.get("prefix") or "").strip().strip("/")
-        if not bucket:
-            raise RuntimeError("No storage bucket set.")
-        files = sb().storage.from_(bucket).list(prefix) or []
-        pdfs = [f for f in files if str(f.get("name", "")).lower().endswith(".pdf")]
-        if not pdfs:
-            raise RuntimeError(f"No PDF found in {bucket}/{prefix}.")
-        newest = max(pdfs, key=lambda f: str(f.get("updated_at") or f.get("created_at") or ""))
-        path = f"{prefix}/{newest['name']}" if prefix else newest["name"]
-        return sb().storage.from_(bucket).download(path), f"{bucket}/{path}"
+            return [(r.read(), url)]
+    if mode in ("portal", "storage"):
+        files = discover_portal_timetables(src)
+        if not files:
+            raise RuntimeError("No timetable PDFs found in the portal's file storage"
+                               + (f" (bucket '{src.get('bucket')}')" if src.get("bucket") else "")
+                               + ". Set the bucket in Setup → Timetable source, or upload the PDFs on "
+                                 "the NIT Timetable tab.")
+        return [(sb().storage.from_(f["bucket"]).download(f["path"]), f"{f['bucket']}/{f['path']}")
+                for f in files]
     raise RuntimeError("Timetable source is off.")
+
+
+def parse_many(files):
+    """Parse several timetable PDFs into one combined timetable."""
+    merged = {"term_label": "", "people": [], "warnings": []}
+    labels, seen = {}, {}
+    for data, name in files:
+        r = parse_timetable_pdf(data)
+        merged["warnings"] += [f"{name}: {w}" for w in r.get("warnings", [])]
+        if r.get("term_label"):
+            labels[r["term_label"]] = labels.get(r["term_label"], 0) + 1
+        for p in r["people"]:
+            k = _norm(p["name"])
+            if k in seen and not p["sessions"]:
+                continue
+            seen[k] = p
+    merged["people"] = list(seen.values())
+    merged["term_label"] = max(labels, key=labels.get) if labels else ""
+    return merged
+
+
+def files_hash(files):
+    return hashlib.sha256("|".join(sorted(hashlib.sha256(d).hexdigest() for d, _ in files)).encode()).hexdigest()
 
 
 def check_timetable_source(staff_rows, force=False):
@@ -746,18 +855,19 @@ def check_timetable_source(staff_rows, force=False):
         return None
     st.session_state["nit_tt_checked"] = time.time()
     try:
-        data, name = fetch_timetable_source(src)
+        files = fetch_timetable_source(src)
     except Exception as e:
         msg = f"Couldn't read the timetable source: {e}"
         save_setting("timetable_check", {"at": datetime.now().isoformat(), "ok": False, "msg": msg})
         return msg
-    h = hashlib.sha256(data).hexdigest()
+    h = files_hash(files)
+    name = ", ".join(n.split("/")[-1] for _, n in files)[:300]
     if any(v.get("source_hash") == h for v in load_versions()):
         save_setting("timetable_check", {"at": datetime.now().isoformat(), "ok": True,
                                          "msg": "No change since last check."})
         return None
     try:
-        parsed = parse_timetable_pdf(data)
+        parsed = parse_many(files)
     except Exception as e:
         msg = f"New timetable found but couldn't be read: {e}"
         save_setting("timetable_check", {"at": datetime.now().isoformat(), "ok": False, "msg": msg})
@@ -771,7 +881,12 @@ def check_timetable_source(staff_rows, force=False):
     match = build_matcher(staff_rows)
     matched = sum(1 for p in parsed["people"] if p["sessions"] and match(p["name"])[0])
     auto = bool(src.get("auto_apply", True)) and target is not None and matched > 0
-    eff = (TODAY if target and target["start"] <= TODAY else (target["start"] if target else None))
+    eff = None
+    if target:
+        earlier_this_term = [v for v in active_versions()
+                             if target["start"] <= to_date(v["effective_from"]) <= TODAY]
+        # first timetable for this term → applies from the first day of term; a mid-term change → from today
+        eff = TODAY if (target["start"] <= TODAY and earlier_this_term) else target["start"]
     create_version(parsed, src.get("mode"), name, h, staff_rows,
                    status="active" if auto else "pending", effective_from=eff if auto else None,
                    notes="Auto-applied" if auto else "Waiting for review")
@@ -1387,9 +1502,9 @@ with tabs[3]:
         tc = load_setting("timetable_check") or {}
         src = cfg.get("timetable_source", {})
         c1, c2 = st.columns([3, 1])
-        c1.caption(f"Source: **{src.get('mode')}** "
-                   + (f"— {src.get('url')}" if src.get("mode") == "url" else
-                      (f"— {src.get('bucket')}/{src.get('prefix')}" if src.get("mode") == "storage" else ""))
+        c1.caption("Source: **" + {"portal": "Portal Timetable page", "url": "PDF web address",
+                                    "off": "off"}.get(src.get("mode"), str(src.get("mode"))) + "** "
+                   + (f"— {src.get('url')}" if src.get("mode") == "url" else "")
                    + (f" · last checked {tc['at'][:10]} {tc['at'][11:16]} — {tc.get('msg', '')}" if tc.get("at") else ""))
         if c2.button("🔄 Check for a new timetable"):
             msg = check_timetable_source(all_staff, force=True)
@@ -1490,20 +1605,18 @@ with tabs[3]:
         cU, cM = st.columns(2)
         with cU:
             st.markdown("#### Upload a timetable PDF")
-            up = st.file_uploader("Staff timetable PDF", type=["pdf"], key="tt_up")
-            if up is not None and st.button("Read this PDF"):
-                data = up.getvalue()
-                h = hashlib.sha256(data).hexdigest()
+            up = st.file_uploader("Staff timetable PDF(s) — select all program files at once", type=["pdf"],
+                                  key="tt_up", accept_multiple_files=True)
+            if up and st.button("Read these PDFs"):
+                files = [(f.getvalue(), f.name) for f in up]
                 try:
-                    parsed = parse_timetable_pdf(data)
-                    create_version(parsed, "upload", up.name, h, all_staff, status="pending",
-                                   notes=f"Uploaded by {who() or 'admin'}")
-                    st.success(f"Read {len(parsed['people'])} page(s) — review it at the top of this tab.")
-                    for w in parsed.get("warnings", []):
-                        st.caption(w)
+                    parsed = parse_many(files)
+                    create_version(parsed, "upload", ", ".join(n for _, n in files)[:300], files_hash(files),
+                                   all_staff, status="pending", notes=f"Uploaded by {who() or 'admin'}")
+                    st.success(f"Read {len(parsed['people'])} timetable page(s) — review it at the top of this tab.")
                     rerun()
                 except Exception as e:
-                    st.error(f"Couldn't read that PDF: {e}")
+                    st.error(f"Couldn't read those PDFs: {e}")
         with cM:
             st.markdown("#### Edit minutes by hand")
             st.caption("Creates a new version from the one in force (or blank).")
@@ -1754,15 +1867,26 @@ with tabs[5]:
 
     with st.expander("🗓️ Timetable source"):
         s0 = cfg.get("timetable_source", {})
-        modes = ["url", "storage", "off"]
-        t_mode = st.radio("Where is the portal timetable PDF?", modes, index=modes.index(s0.get("mode", "url")),
-                          format_func=lambda m: {"url": "Web address (e.g. Cloudflare portal)",
-                                                 "storage": "Supabase Storage folder (newest PDF)",
+        modes = ["portal", "url", "off"]
+        cur_mode = s0.get("mode", "portal") if s0.get("mode") in modes else "portal"
+        t_mode = st.radio("Where does the NIT timetable come from?", modes, index=modes.index(cur_mode),
+                          format_func=lambda m: {"portal": "Portal Timetable page (latest uploads)",
+                                                 "url": "A PDF web address",
                                                  "off": "Off — upload / edit by hand only"}[m], horizontal=True)
-        t_url = st.text_input("PDF web address", s0.get("url", ""))
+        t_url = st.text_input("PDF web address (only for 'A PDF web address')", s0.get("url", ""))
         sc1, sc2 = st.columns(2)
-        t_bucket = sc1.text_input("Storage bucket", s0.get("bucket", ""))
-        t_prefix = sc2.text_input("Folder in bucket", s0.get("prefix", ""))
+        t_bucket = sc1.text_input("Storage bucket (blank = find automatically)", s0.get("bucket", ""))
+        t_prefix = sc2.text_input("Folder in bucket (optional)", s0.get("prefix", ""))
+        if st.button("Show the timetable files the tracker can see"):
+            try:
+                fl = discover_portal_timetables({"bucket": t_bucket, "prefix": t_prefix})
+                if fl:
+                    st.dataframe(pd.DataFrame([{"File": f"{f['bucket']}/{f['path']}", "Uploaded": f["when"][:16]}
+                                               for f in fl]), hide_index=True, **WIDE)
+                else:
+                    st.warning("No timetable PDFs found. Enter the bucket the Timetable page uses.")
+            except Exception as e:
+                st.error(f"Couldn't list storage: {e}")
         t_auto = st.checkbox("Apply automatically when the PDF's term matches the current or next term",
                              value=bool(s0.get("auto_apply", True)))
 
