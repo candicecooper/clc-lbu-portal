@@ -578,7 +578,7 @@ def plotly_chart_with_selection(fig, key: str, **kwargs):
         return []
 
 
-def render_bsem_recommendations(items: list[dict], key_prefix: str):
+def _render_bsem_recommendations_ui(items: list[dict], key_prefix: str):
     """Render structured BSEM recommendations as clickable, colour-coded
     cards — click a strategy to reveal why it fits and how to trial it.
     Uses only button + session_state toggling (not st.expander's `key=`
@@ -843,7 +843,7 @@ def build_window_of_tolerance_table(full_df, student_id=None) -> dict:
     return result
 
 
-def render_window_of_tolerance_table(full_df, student_id=None):
+def _render_window_of_tolerance_table_ui(full_df, student_id=None):
     """Streamlit UI for build_window_of_tolerance_table — one block per
     zone, each field in its own st.code() box so staff can use
     Streamlit's built-in copy-icon to paste straight into the Creator."""
@@ -884,6 +884,32 @@ def render_window_of_tolerance_table(full_df, student_id=None):
         with _wcol3:
             st.caption("Interventions")
             st.code(_safe_join(zd["interventions"]) or "— none logged for this zone —", language=None)
+
+
+
+def render_bsem_recommendations(items: list[dict], key_prefix: str):
+    """Draws the clickable cards; the print capture records every strategy
+    with its why/how in full (not just the cards that happen to be open)."""
+    if items:
+        _scr_add("bsem", items)
+    _prev = _SCREEN["paused"]; _SCREEN["paused"] = True
+    try:
+        _render_bsem_recommendations_ui(items, key_prefix)
+    finally:
+        _SCREEN["paused"] = _prev
+
+
+def render_window_of_tolerance_table(full_df, student_id=None):
+    _wd = build_window_of_tolerance_table(full_df, student_id=student_id)
+    if _wd:
+        _scr_add("caption", "Draft only, built from this student's logged behaviour types and severity. Context is de-identified; "
+                            "Behaviour and Interventions stay specific to this student. Review before use.")
+        _scr_add("wot", _wd)
+    _prev = _SCREEN["paused"]; _SCREEN["paused"] = True
+    try:
+        _render_window_of_tolerance_table_ui(full_df, student_id=student_id)
+    finally:
+        _SCREEN["paused"] = _prev
 
 
 def build_considerations(full_df, top_ant, top_loc, top_session) -> list[str]:
@@ -3157,11 +3183,19 @@ def render_strategy_trials(student, full_df):
     trials = load_trials(student_id)
     running_titles = {t.get("title") for t in trials if t.get("status") == "Running"}
 
-    sugg = build_trial_suggestions(full_df)
+    _data_sugg = build_trial_suggestions(full_df, max_n=8)
+    _profile = load_starting_profile(student_id)
+    _psugg = build_profile_trial_suggestions(_profile, _data_sugg)
+    _covered = {STARTING_PROFILE_TAGS[t["tag"]].get("equiv") for t in (_profile or {}).get("tags", []) if t.get("include", True) and t.get("tag") in STARTING_PROFILE_TAGS}
+    sugg = _psugg + [d for d in _data_sugg if d["key"] not in _covered][:3]
+    if not sugg:
+        st.info("Add a Starting Profile above, or log some incidents, to get trial suggestions.")
     for i, sg in enumerate(sugg):
         with st.container(border=True):
-            st.markdown(f"**💡 {sg['title']}**")
-            st.markdown(f"*What the data shows:* {sg['evidence']}")
+            st.markdown(f"**💡 {sg['title']}**" + ("  \n*📄 From the starting profile*" if sg.get("source") == "profile" else "  \n*📊 From incident data*"))
+            st.markdown(f"*{'Where this comes from' if sg.get('source') == 'profile' else 'What the data shows'}:* {sg['evidence']}")
+            if sg.get('data_note'):
+                st.markdown(f"*{sg['data_note']}*")
             st.markdown(f"*Hypothesis to test:* {sg['hypothesis']}")
             st.markdown(f"*Strategy to trial:* {sg['strategy']}")
             st.markdown(f"*What to track:* {sg['measure']}")
@@ -3260,6 +3294,306 @@ def render_strategy_trials(student, full_df):
                 st.markdown(f"**What we learned:** {_tr_text(t.get('conclusion'), '—')}")
                 if st.button("↩️ Reopen", key=f"reopen_{tid}"):
                     upd = dict(t); upd.update({"status": "Running", "end_date": None}); save_trial(student_id, upd); st.rerun()
+
+
+# ============================================
+# STARTING PROFILE — suggestions from day one
+# ============================================
+# By the time incident data reveals a pattern, much of a placement may be gone.
+# Staff can upload (or paste) the referral, transition report or earlier school
+# information; themes are extracted and matched to trial-ready strategies so
+# something useful can be tried in the first weeks. Only the extracted themes
+# are kept, never the document itself, and the student's name is removed from
+# the text before it goes to the AI. Staff confirm each theme before it is used.
+#
+# Table (create once in Supabase):
+#   create table starting_profiles (
+#     student_id text primary key, profile jsonb, updated_by text,
+#     updated_at timestamptz default now());
+
+STARTING_PROFILE_TAGS = {
+    "difficult_start": {
+        "label": "Finds the start of the day hard",
+        "title": "Soft landing at the start of the day",
+        "hypothesis": "Arriving and joining the group may feel unpredictable or exposing, and a calm, low-demand start may settle the student before anything is expected.",
+        "strategy": "Greet calmly and offer a choice of how to begin. Both options are fine: settle in a quieter space and join the group at an agreed later time, or take a short moment outside first. Keep demands low and skip questions about the morning for the first few minutes. Follow with a predictable first task the student can succeed at.",
+        "measure": "Daily: how the first 30 minutes went (settled, needed support, incident), which option was chosen, and time to join the group.",
+        "focus_session": "Morning", "equiv": "arrival_entry"},
+    "demand_avoidance": {
+        "label": "Strong need for control, resists direct demands",
+        "title": "Low-demand, perceived-choice approach",
+        "hypothesis": "Direct demands may feel like a loss of control, prompting refusal or escalation to regain it. This fits a demand-avoidant presentation, whether or not it is diagnosed.",
+        "strategy": "Swap commands for invitations and declarative language ('I wonder if...'). Offer two acceptable options about what, where, with whom or in what order, never whether. Keep a few non-negotiables (safety) and drop the rest. Avoid ultimatums and public correction, and hand control back in small safe ways (setting the timer, choosing the start point).",
+        "measure": "Tally per day: first instructions followed within 2 minutes, refusals or escalations, and how often a choice was offered.",
+        "focus_session": "", "equiv": "instruction_choice"},
+    "subject_difficulty": {
+        "label": "Finds a particular subject very hard",
+        "title": "{subject}: prepare, support closely, lower the demand",
+        "hypothesis": "{subject} may feel overwhelming or exposing, and leaving the room or escalating may be a way to escape that feeling.",
+        "strategy": "Before {subject}, prepare the student: preview what is coming, agree the first step and when the lesson will finish, and offer a choice of how to start. During the lesson, stay close, lower the demand (shorter chunked tasks, fewer items, a familiar entry point) and set up early chances to succeed. Notice and name effort, not only correct answers. Agree a way to pause (break card) before the student reaches the point of leaving.",
+        "measure": "Per {subject} lesson: stayed in the room, needed a break, or left; time to first task; success moments noted.",
+        "focus_session": "", "equiv": None},
+    "transitions": {
+        "label": "Finds changes and transitions hard",
+        "title": "Transitions: shared control of the routine",
+        "hypothesis": "Sudden change may feel unpredictable, and sharing control of how the change happens may reduce the threat.",
+        "strategy": "Give a 5-then-2-minute warning with a visual, then offer a choice within the transition (which route, which job, who walks with them, what they carry). Both options reach the same goal.",
+        "measure": "Per transition: smooth, needed support, or incident. Note which choice was picked.",
+        "focus_session": "", "equiv": "transition_choice"},
+    "peer_difficulty": {
+        "label": "Finds peer relationships hard",
+        "title": "Peers: choice of when and with whom",
+        "hypothesis": "Unstructured peer proximity may be the pressure point, and having a say in the social load may help.",
+        "strategy": "Offer a structured choice at higher-risk times: join a supported small group, or work on a parallel activity near a trusted adult with a planned time to rejoin. Both are positive options, not a consequence.",
+        "measure": "Peer-related incidents per week, which option was chosen, and whether the student rejoined.",
+        "focus_session": "", "equiv": "peer_choice"},
+    "sensory": {
+        "label": "Sensory sensitivities or needs",
+        "title": "Sensory: prepare the body before the busy moment",
+        "hypothesis": "Noise, light or crowding may overload the nervous system before any demand is placed.",
+        "strategy": "Before the known busy session, offer a choice of sensory preparation: a quiet 5 minutes in a low-stimulation space, or a movement or heavy-work task, then join. Offer it discreetly.",
+        "measure": "Incidents in the following session on days with and without the prep; which option was chosen.",
+        "focus_session": "", "equiv": "sensory_choice"},
+    "emotional_regulation": {
+        "label": "Escalates quickly, big emotional responses",
+        "title": "Regulate first: early signs and a choice of reset",
+        "hypothesis": "Big reactions may come when the student's stress response takes over before they have a way to settle.",
+        "strategy": "Identify the early warning signs with the student, and agree a short menu of two reset options (movement, quiet space, trusted adult). Offer the menu at the first signs, using few words and a calm tone, and keep any talking about it until the student is regulated.",
+        "measure": "Per day: early signs noticed, reset option used, and whether escalation was avoided.",
+        "focus_session": "", "equiv": None},
+    "low_confidence": {
+        "label": "Fear of failure, low confidence or perfectionism",
+        "title": "Success first: a guaranteed early win",
+        "hypothesis": "Starting a task may feel risky, and a guaranteed early success may lower the threshold for trying.",
+        "strategy": "Offer a choice of two starting tasks, one always at mastery level or linked to an interest. Model that mistakes are normal, praise effort and strategy rather than the answer, and keep a visible record of successes.",
+        "measure": "Time to begin the task; tasks attempted; incidents during independent work.",
+        "focus_session": "", "equiv": None},
+    "attention_executive": {
+        "label": "Difficulty starting, focusing or organising work",
+        "title": "Chunk it, show it, check in",
+        "hypothesis": "Large or vague tasks may be hard to start and sustain, and visible structure may help.",
+        "strategy": "Break work into short, visible chunks with a checklist and a clear endpoint. Check in at the start of each chunk, build in movement before fatigue, and let the student choose the order of chunks.",
+        "measure": "Chunks completed per session; time to start; prompts needed.",
+        "focus_session": "", "equiv": None},
+    "communication": {
+        "label": "Difficulty expressing needs or understanding language",
+        "title": "Make asking for help easy",
+        "hypothesis": "Behaviour may be communicating a need the student cannot yet put into words.",
+        "strategy": "Pre-teach key routines with visuals, allow extra processing time and use fewer words. Give the student an easy way to ask for a break or help without speaking (card, gesture, symbol) and respond to it every time.",
+        "measure": "Times the student used the break or help signal, and what happened after.",
+        "focus_session": "", "equiv": None},
+    "unstructured_time": {
+        "label": "Finds unstructured time hard (breaks, yard)",
+        "title": "Break times: a choice of structured options",
+        "hypothesis": "Unstructured time may be the pressure point, and a ready choice of activity may reduce it.",
+        "strategy": "Before break, offer two ready options: a supported game or activity, or a quiet space with a trusted adult. Both are valued choices, with a check-in at the end.",
+        "measure": "Incidents at break per week; option chosen; ease of returning to class.",
+        "focus_session": "", "equiv": "yard_choice"},
+    "adult_trust": {
+        "label": "Finds it hard to trust or connect with adults",
+        "title": "Connection before correction",
+        "hypothesis": "Trust in adults may be fragile, so relationship safety needs to come before expectations.",
+        "strategy": "Give the student a consistent key adult and a predictable greeting. Spend a few minutes of low-demand connection daily, repair quickly after any rupture, and keep correction private and brief.",
+        "measure": "Weekly: quality of greetings and connection (1 to 5), and how quickly the student recovered after difficult moments.",
+        "focus_session": "", "equiv": None},
+    "anxiety": {
+        "label": "Anxious presentation",
+        "title": "Predictability and a named safe adult",
+        "hypothesis": "Uncertainty may be driving some behaviour, and more predictability and a trusted person may settle it.",
+        "strategy": "Preview the day and any changes on a visual schedule, name a safe adult the student can go to, and offer a choice of calming option at the first signs of worry.",
+        "measure": "Daily: worry signs noticed, safe adult or calming option used, how the student settled.",
+        "focus_session": "", "equiv": None},
+}
+
+
+def _extract_upload_text(f) -> str:
+    """Plain text from an uploaded .docx / .pdf / .odt / .txt file."""
+    name = f.name.lower()
+    raw = f.read()
+    try:
+        if name.endswith(".pdf"):
+            try:
+                import fitz
+                d = fitz.open(stream=raw, filetype="pdf")
+                txt = " ".join(pg.get_text() for pg in d); d.close()
+                return txt
+            except Exception:
+                from pypdf import PdfReader
+                return " ".join((pg.extract_text() or "") for pg in PdfReader(BytesIO(raw)).pages)
+        if name.endswith(".odt"):
+            import zipfile, xml.etree.ElementTree as _ET
+            return " ".join(_ET.fromstring(zipfile.ZipFile(BytesIO(raw)).read("content.xml")).itertext())
+        if name.endswith(".txt"):
+            return raw.decode("utf-8", errors="ignore")
+        from docx import Document as _D
+        d = _D(BytesIO(raw))
+        return " ".join([p.text for p in d.paragraphs if p.text.strip()] +
+                        [c.text for t in d.tables for r in t.rows for c in r.cells if c.text.strip()])
+    except Exception as e:
+        return f"[Could not read {f.name}: {e}]"
+
+
+def _strip_student_name(text: str, name: str) -> str:
+    for tok in {t for t in re.split(r"\W+", name or "") if len(t) >= 3}:
+        text = re.sub(rf"\b{re.escape(tok)}(?:'s)?\b", "the student", text, flags=re.I)
+    return text
+
+
+def extract_starting_profile(text: str, student_name: str) -> dict:
+    """AI reads referral / transition information and returns confirmed-able themes
+    tagged against the fixed STARTING_PROFILE_TAGS list."""
+    tag_lines = "; ".join(f'"{k}" = {v["label"]}' for k, v in STARTING_PROFILE_TAGS.items())
+    prompt = (
+        "You support teachers at an alternative education setting. Read this information about a new student and "
+        "identify which themes it describes. Use ONLY the tags provided, only where the document gives clear evidence, "
+        "and do not diagnose. Return ONLY valid JSON, no markdown. Structure: "
+        '{"summary":"2 sentence plain summary","strengths":["..."],"interests":["..."],'
+        '"what_helps":["..."],"what_doesnt_help":["..."],'
+        '"tags":[{"tag":"one of the tags","evidence":"short paraphrase from the document","detail":"for subject_difficulty give the subject name, else empty"}]}. '
+        f"Allowed tags: {tag_lines}. "
+        "Document: " + _strip_student_name(text, student_name)[:7000]
+    )
+    raw = groq_ai_call(prompt, max_tokens=2000, temperature=0.1)
+    raw = raw.replace("```json", "").replace("```", "").strip()
+    a, b = raw.find("{"), raw.rfind("}")
+    data = json.loads(raw[a:b + 1])
+    tags, seen = [], set()
+    for t in data.get("tags", []):
+        k = str(t.get("tag", "")).strip()
+        if k in STARTING_PROFILE_TAGS and (k, str(t.get("detail", ""))) not in seen:
+            seen.add((k, str(t.get("detail", ""))))
+            tags.append({"tag": k, "evidence": str(t.get("evidence", ""))[:300],
+                         "detail": str(t.get("detail", ""))[:60], "include": True})
+    return {"summary": str(data.get("summary", "")), "strengths": [str(x) for x in data.get("strengths", [])][:8],
+            "interests": [str(x) for x in data.get("interests", [])][:8],
+            "what_helps": [str(x) for x in data.get("what_helps", [])][:8],
+            "what_doesnt_help": [str(x) for x in data.get("what_doesnt_help", [])][:8], "tags": tags}
+
+
+def load_starting_profile(student_id) -> dict:
+    if supabase and student_id:
+        try:
+            res = supabase.table("starting_profiles").select("*").eq("student_id", student_id).limit(1).execute()
+            if res.data and res.data[0].get("profile"):
+                st.session_state["_profile_db_ok"] = True
+                return res.data[0]["profile"]
+            st.session_state["_profile_db_ok"] = True
+        except Exception:
+            st.session_state["_profile_db_ok"] = False
+    return st.session_state.get(f"starting_profile_{student_id}", {})
+
+
+def save_starting_profile(student_id, profile: dict, by: str = "") -> bool:
+    st.session_state[f"starting_profile_{student_id}"] = profile
+    if supabase:
+        try:
+            payload = {"student_id": student_id, "profile": profile, "updated_by": by,
+                       "updated_at": datetime.utcnow().isoformat()}
+            ex = supabase.table("starting_profiles").select("student_id").eq("student_id", student_id).limit(1).execute()
+            if ex.data:
+                supabase.table("starting_profiles").update(payload).eq("student_id", student_id).execute()
+            else:
+                supabase.table("starting_profiles").insert(payload).execute()
+            return True
+        except Exception:
+            return False
+    return False
+
+
+def build_profile_trial_suggestions(profile: dict, data_suggestions: list | None = None) -> list[dict]:
+    """Trial suggestions for every confirmed theme in the starting profile, each
+    noting what the incident data says so far (once there is any)."""
+    out = []
+    data_by_key = {d["key"]: d for d in (data_suggestions or [])}
+    for t in (profile or {}).get("tags", []):
+        if not t.get("include", True):
+            continue
+        meta = STARTING_PROFILE_TAGS.get(t.get("tag"))
+        if not meta:
+            continue
+        subj = (t.get("detail") or "").strip() or "this subject"
+        fmt = lambda x: x.replace("{subject}", subj)
+        eq = data_by_key.get(meta.get("equiv"))
+        out.append({
+            "key": f"profile_{t['tag']}_{re.sub(r'[^a-z0-9]', '', subj.lower())}",
+            "score": 1.0, "source": "profile",
+            "title": fmt(meta["title"]),
+            "evidence": "From the starting information: " + (t.get("evidence") or meta["label"]),
+            "data_note": ("Incident data so far supports this: " + eq["evidence"]) if eq else "",
+            "hypothesis": fmt(meta["hypothesis"]) + " (Provisional: the trial will help test this.)",
+            "strategy": fmt(meta["strategy"]), "measure": fmt(meta["measure"]),
+            "focus_session": meta["focus_session"]})
+    return out
+
+
+def render_starting_profile(student):
+    """Upload / paste referral information, confirm the themes found, and save them."""
+    sid = student["id"]
+    me = (st.session_state.get("current_user") or {}).get("name", "") or ""
+    profile = load_starting_profile(sid)
+    n_tags = len([t for t in profile.get("tags", []) if t.get("include", True)]) if profile else 0
+    label = "🌱 Starting Profile — get suggestions from day one" + (f" ({n_tags} themes saved)" if n_tags else "")
+    with st.expander(label, expanded=not profile):
+        st.caption("Upload or paste the referral, transition report or earlier school information. Themes (for example finding the "
+                   "start of the day hard, resisting direct demands, or struggling with a subject) are matched to strategies you "
+                   "can trial in the first weeks. The student's name is removed before the AI reads it, only the themes you "
+                   "confirm are kept, and the document itself is not stored.")
+        if st.session_state.get("_profile_db_ok") is False:
+            st.warning("The starting_profiles table doesn't exist yet, so this only lasts for the current session.")
+        files = st.file_uploader("Upload one or more documents", type=["docx", "pdf", "odt", "txt"],
+                                 accept_multiple_files=True, key=f"sp_files_{sid}")
+        pasted = st.text_area("…or paste text here", height=120, key=f"sp_paste_{sid}",
+                              placeholder="Paste referral notes, a transition summary or previous school report…")
+        if st.button("🤖 Find themes and suggestions", type="primary", key=f"sp_run_{sid}", use_container_width=True):
+            text = "\n\n".join([_extract_upload_text(f) for f in (files or [])] + ([pasted] if pasted.strip() else [])).strip()
+            if not text:
+                st.warning("Upload a document or paste some text first.")
+            elif not st.secrets.get("GROQ_API_KEY", ""):
+                st.error("AI key not configured, so extraction isn't available.")
+            else:
+                with st.spinner("Reading and matching to strategies..."):
+                    try:
+                        prof = extract_starting_profile(text, student["name"])
+                        save_starting_profile(sid, prof, me)
+                        for k in [k for k in st.session_state if str(k).startswith(f"sp_inc_") and str(k).endswith(sid)]:
+                            del st.session_state[k]
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Could not extract themes: {e}")
+        if not profile:
+            return
+        st.markdown("---")
+        if profile.get("summary"):
+            st.info(profile["summary"])
+        cs, ci = st.columns(2)
+        with cs:
+            if profile.get("strengths"):
+                st.markdown("**Strengths**")
+                for x in profile["strengths"]: st.markdown(f"- {x}")
+            if profile.get("what_helps"):
+                st.markdown("**What helps**")
+                for x in profile["what_helps"]: st.markdown(f"- {x}")
+        with ci:
+            if profile.get("interests"):
+                st.markdown("**Interests**")
+                for x in profile["interests"]: st.markdown(f"- {x}")
+            if profile.get("what_doesnt_help"):
+                st.markdown("**What doesn't help**")
+                for x in profile["what_doesnt_help"]: st.markdown(f"- {x}")
+        st.markdown("**Confirm the themes to use.** Untick anything that doesn't fit, and edit the wording if needed.")
+        tags = profile.get("tags", [])
+        edited = []
+        for i, t in enumerate(tags):
+            meta = STARTING_PROFILE_TAGS.get(t["tag"], {})
+            c1, c2 = st.columns([1, 4])
+            inc = c1.checkbox(meta.get("label", t["tag"]), value=t.get("include", True), key=f"sp_inc_{i}_{sid}")
+            ev = c2.text_input("Evidence" if not t.get("detail") else f"Evidence (subject: {t['detail']})", value=t.get("evidence", ""),
+                               key=f"sp_ev_{i}_{sid}", label_visibility="collapsed")
+            edited.append({**t, "include": inc, "evidence": ev})
+        if st.button("💾 Save confirmed themes", key=f"sp_save_{sid}"):
+            save_starting_profile(sid, {**profile, "tags": edited}, me)
+            st.success("Saved. See the suggested trials under 🧪 Strategies to Trial.")
+            st.rerun()
 
 
 def load_students_from_db():
@@ -4717,7 +5051,293 @@ def render_demand_avoidance_section(full_df):
             st.markdown(f"- Instead of *\"{_instead}\"* try *\"{_try}\"*")
 
 
+
+# ============================================
+# SCREEN CAPTURE -> PRINTABLE HTML
+# ============================================
+# The Analysis page is built from Streamlit calls (markdown, charts, metrics,
+# info boxes...). While it renders, these thin wrappers record each call, in
+# order, in addition to drawing it. The recording is then turned into a single
+# print-ready page (A4, charts included, "Understanding this chart" notes and
+# all) so the printed version is literally what is on screen. Interactive
+# controls (buttons, forms, inputs) are not recorded.
+import html as _html_mod
+
+_SCREEN = {"on": False, "paused": False, "rec": []}
+
+
+def _scr_add(kind, *payload):
+    if _SCREEN["on"] and not _SCREEN["paused"]:
+        _SCREEN["rec"].append((kind, *payload))
+
+
+def screen_capture_start():
+    _SCREEN.update(on=True, paused=False, rec=[])
+    _orig = {n: getattr(st, n) for n in ("markdown", "caption", "write", "info", "warning", "success", "error",
+                                         "metric", "plotly_chart", "dataframe", "table", "code", "subheader",
+                                         "header", "divider", "expander")}
+    _SCREEN["orig"] = _orig
+
+    def _mk(name, fn):
+        def wrapper(*a, **k):
+            try:
+                fn(*a, **k)
+            except Exception:
+                pass
+            return _orig[name](*a, **k)
+        return wrapper
+
+    def _markdown(body="", *a, **k):
+        t = str(body)
+        if "<style" in t or "<script" in t:
+            return
+        if t.lstrip().startswith("### 👁️ View, Edit"):
+            _SCREEN["paused"] = True
+        _scr_add("md", t, bool(k.get("unsafe_allow_html", False)))
+
+    st.markdown = _mk("markdown", _markdown)
+    st.caption = _mk("caption", lambda body="", *a, **k: _scr_add("caption", str(body)))
+    st.write = _mk("write", lambda *a, **k: [_scr_add("md", x, False) for x in a if isinstance(x, str)])
+    for _n in ("info", "warning", "success", "error"):
+        st.__dict__[_n] = _mk(_n, (lambda nn: (lambda body="", *a, **k: _scr_add("alert", nn, str(body))))(_n))
+    st.metric = _mk("metric", lambda label="", value="", delta=None, *a, **k: _scr_add("metric", str(label), str(value), None if delta is None else str(delta)))
+    st.plotly_chart = _mk("plotly_chart", lambda fig=None, *a, **k: _scr_add("fig", fig))
+    st.dataframe = _mk("dataframe", lambda data=None, *a, **k: _scr_add("df", data))
+    st.table = _mk("table", lambda data=None, *a, **k: _scr_add("df", data))
+    st.code = _mk("code", lambda body="", *a, **k: _scr_add("code", str(body)))
+    st.subheader = _mk("subheader", lambda body="", *a, **k: _scr_add("md", f"### {body}", False))
+    st.header = _mk("header", lambda body="", *a, **k: _scr_add("md", f"## {body}", False))
+    st.divider = _mk("divider", lambda *a, **k: _scr_add("md", "---", False))
+    st.expander = _mk("expander", lambda label="", *a, **k: _scr_add("md", f"#### {label}", False))
+
+
+def screen_capture_stop():
+    _orig = _SCREEN.get("orig") or {}
+    for n, f in _orig.items():
+        try:
+            if n in st.__dict__:
+                del st.__dict__[n]
+            setattr(st, n, f)
+        except Exception:
+            pass
+    _SCREEN["on"] = False
+
+
+def _inline_md(t: str) -> str:
+    t = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", t)
+    t = re.sub(r"(?<![\*\w])\*(?!\s)(.+?)(?<!\s)\*(?![\*\w])", r"<i>\1</i>", t)
+    t = re.sub(r"`([^`]+)`", r"<code>\1</code>", t)
+    t = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r'<a href="\2">\1</a>', t)
+    return t
+
+
+def _md_to_html(text: str, allow_html: bool) -> str:
+    """Small markdown subset: headings, bullets, numbered lists, tables, rules, bold/italic/code."""
+    if not allow_html:
+        text = _html_mod.escape(text, quote=False)
+    out, para, in_ul, in_ol, tbl = [], [], False, False, []
+
+    def flush_para():
+        nonlocal para
+        if para:
+            out.append("<p>" + "<br>".join(_inline_md(x) for x in para) + "</p>")
+            para = []
+
+    def close_lists():
+        nonlocal in_ul, in_ol
+        if in_ul: out.append("</ul>"); in_ul = False
+        if in_ol: out.append("</ol>"); in_ol = False
+
+    def flush_tbl():
+        nonlocal tbl
+        if tbl:
+            rows = [r for r in tbl if not re.match(r"^\s*\|?\s*:?-{2,}", r)]
+            html_rows = []
+            for i, r in enumerate(rows):
+                cells = [c.strip() for c in r.strip().strip("|").split("|")]
+                tag = "th" if i == 0 else "td"
+                html_rows.append("<tr>" + "".join(f"<{tag}>{_inline_md(c)}</{tag}>" for c in cells) + "</tr>")
+            out.append("<table class='md'>" + "".join(html_rows) + "</table>")
+            tbl = []
+
+    for line in text.split("\n"):
+        st_ = line.strip()
+        if st_.startswith("|") and st_.endswith("|"):
+            flush_para(); close_lists(); tbl.append(st_); continue
+        flush_tbl()
+        if not st_:
+            flush_para(); close_lists(); continue
+        m = re.match(r"^(#{1,6})\s+(.*)$", st_)
+        if m:
+            flush_para(); close_lists()
+            lvl = max(len(m.group(1)), 2)
+            out.append(f"<h{lvl}>{_inline_md(m.group(2))}</h{lvl}>"); continue
+        if re.match(r"^-{3,}$|^\*{3,}$", st_):
+            flush_para(); close_lists(); out.append("<hr>"); continue
+        m = re.match(r"^[-*•]\s+(.*)$", st_)
+        if m:
+            flush_para()
+            if in_ol: out.append("</ol>"); in_ol = False
+            if not in_ul: out.append("<ul>"); in_ul = True
+            out.append(f"<li>{_inline_md(m.group(1))}</li>"); continue
+        m = re.match(r"^\d+[.)]\s+(.*)$", st_)
+        if m:
+            flush_para()
+            if in_ul: out.append("</ul>"); in_ul = False
+            if not in_ol: out.append("<ol>"); in_ol = True
+            out.append(f"<li>{_inline_md(m.group(1))}</li>"); continue
+        if st_.startswith("<") and allow_html:
+            flush_para(); close_lists(); out.append(line); continue
+        close_lists(); para.append(st_)
+    flush_para(); close_lists(); flush_tbl()
+    return "\n".join(out)
+
+
+def build_print_html(student, full_df, records, supports_trialled="", supports_success="",
+                     before_after=None, trials=None, bsem_items=None) -> bytes:
+    """Assemble the recorded screen into one printable HTML document."""
+    import plotly.graph_objects as _go
+    from plotly.offline import get_plotlyjs
+    esc = lambda v: _html_mod.escape(_tr_text(v, "—"))
+    body, metrics = [], []
+
+    def flush_metrics():
+        if metrics:
+            body.append("<div class='metrics'>" + "".join(
+                f"<div class='metric'><div class='ml'>{_html_mod.escape(l)}</div><div class='mv'>{_html_mod.escape(v)}</div>"
+                + (f"<div class='md_'>{_html_mod.escape(d)}</div>" if d else "") + "</div>" for l, v, d in metrics) + "</div>")
+            metrics.clear()
+
+    fig_n = 0
+    for rec in records:
+        kind = rec[0]
+        if kind == "metric":
+            metrics.append((rec[1], rec[2], rec[3])); continue
+        flush_metrics()
+        if kind == "md":
+            body.append(f"<div class='blk'>{_md_to_html(rec[1], rec[2])}</div>")
+        elif kind == "caption":
+            body.append(f"<p class='cap'>{_inline_md(_html_mod.escape(rec[1], quote=False))}</p>")
+        elif kind == "alert":
+            body.append(f"<div class='alert {rec[1]}'>{_md_to_html(rec[2], False)}</div>")
+        elif kind == "code":
+            body.append(f"<pre>{_html_mod.escape(rec[1])}</pre>")
+        elif kind == "df":
+            try:
+                d = rec[1]
+                d = d.data if hasattr(d, "data") and hasattr(d, "to_html") else d
+                body.append("<div class='tbl'>" + pd.DataFrame(d).to_html(index=False, border=0, classes="data", na_rep="—") + "</div>")
+            except Exception:
+                pass
+        elif kind == "fig":
+            try:
+                f = _go.Figure(rec[1])
+                f.update_layout(template="plotly_white", paper_bgcolor="white", width=None, autosize=True)
+                fig_n += 1
+                body.append("<div class='fig'>" + f.to_html(full_html=False, include_plotlyjs=False,
+                            config={"displayModeBar": False, "responsive": True}, div_id=f"fig{fig_n}") + "</div>")
+            except Exception:
+                pass
+        elif kind == "bsem":
+            for it in rec[1]:
+                why = _tr_text(it.get("why")); how = _tr_text(it.get("how"))
+                body.append(f"<div class='card'><b>{esc(it.get('domain'))}</b> — {esc(it.get('strategy'))}"
+                            + (f"<p><b>Why it fits:</b> {esc(why)}</p>" if why and not why.startswith("[DEBUG]") else "")
+                            + (f"<p><b>How to put it in place:</b> {esc(how)}</p>" if how and not how.startswith("[DEBUG]") else "")
+                            + "</div>")
+        elif kind == "wot":
+            for z in WOT_ZONES:
+                zd = rec[1].get(z["id"])
+                if not zd:
+                    continue
+                cols = "".join(f"<td><b>{h}</b><ul>" + "".join(f"<li>{esc(x)}</li>" for x in (items or ["— none logged —"])) + "</ul></td>"
+                               for h, items in (("Context", zd["context"]), ("Behaviour", zd["behaviour"]), ("Interventions", zd["interventions"])))
+                body.append(f"<table class='wot' style='border-color:{z['color']}'><tr><th colspan='3' style='background:{z['color']}'>"
+                            f"{esc(z['label'])} — {zd['n']} incident(s)</th></tr><tr>{cols}</tr></table>")
+    flush_metrics()
+
+    # ── appended: supports trialled, register, meeting notes ──
+    if (supports_trialled or "").strip() or (supports_success or "").strip():
+        body.append("<h3 class='pb'>Supports Trialled</h3><table class='md'><tr><th>Supports / strategies trialled</th><th>How successful?</th></tr>"
+                    f"<tr><td>{esc(supports_trialled)}</td><td>{esc(supports_success)}</td></tr></table>")
+        if before_after and not before_after.get("insufficient"):
+            b = before_after
+            chg = "" if b.get("pct_rate_change") is None else (
+                f" ({abs(b['pct_rate_change']):.0f}% {'fewer' if b['pct_rate_change'] < 0 else 'more'} incidents per week since the trial date)")
+            body.append(f"<p>Before ({b['weeks_before']:.1f} wks): {b['rate_before']:.1f}/week. After ({b['weeks_after']:.1f} wks): "
+                        f"{b['rate_after']:.1f}/week{chg}. Preliminary read.</p>")
+    rows = []
+    for _, r in full_df.sort_values("date_parsed").iterrows():
+        desc = _tr_text(r.get("description"))
+        if not desc and isinstance(r.get("ABCH_primary"), dict):
+            desc = _tr_text(r["ABCH_primary"].get("behaviour"))
+        sev = pd.to_numeric(r.get("severity"), errors="coerce")
+        iv = r.get("intervention")
+        iv = ", ".join(str(x) for x in iv if x) if isinstance(iv, (list, tuple)) else _tr_text(iv)
+        rows.append("<tr>" + "".join(f"<td>{esc(c)}</td>" for c in [
+            r["date_parsed"].strftime("%d/%m/%y"), _tr_text(r.get("time"))[:5], "C" if r.get("incident_type") == "Critical" else "Q",
+            _tr_text(r.get("location")), _tr_text(r.get("behaviour_type")), _tr_text(r.get("antecedent")),
+            "—" if pd.isna(sev) else int(sev), iv or "—", desc or "—"]) + "</tr>")
+    body.append(f"<h3 class='pb'>Incident Register — all {len(full_df)} dated incidents</h3><p class='cap'>Oldest first. Q = Quick log, C = Critical (ABCH).</p>"
+                "<table class='data reg'><tr><th>Date</th><th>Time</th><th>Type</th><th>Location</th><th>Behaviour</th><th>Antecedent</th><th>Sev</th>"
+                "<th>Interventions</th><th>Notes</th></tr>" + "".join(rows) + "</table>")
+    body.append("<h3 class='pb'>Meeting Notes & Agreed Actions</h3><div class='lines'>Date of meeting: ____________   Present: ______________________________</div>"
+                "<div class='notes'>Notes</div><table class='data act'><tr><th>Agreed action</th><th>Who</th><th>By when</th></tr>"
+                + "<tr><td></td><td></td><td></td></tr>" * 6 + "</table>")
+
+    dp = full_df["date_parsed"]
+    cover = (f"<div class='cover'><h1>Full Analysis — {_html_mod.escape(student['name'])}</h1>"
+             f"<p>Cowandilla Learning Centre · LBU {_html_mod.escape(str(student.get('program','')))} Program · printed {datetime.now().strftime('%d %B %Y')}<br>"
+             f"Data period {dp.min().strftime('%d/%m/%Y')} – {dp.max().strftime('%d/%m/%Y')} · {len(full_df)} dated incidents</p></div>")
+    css = """
+    @page { size: A4; margin: 14mm 13mm 16mm; @bottom-center { content: "CONFIDENTIAL — Page " counter(page); font: 8pt Arial; color:#666 } }
+    * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    body { font: 10.5pt/1.45 Arial, Helvetica, sans-serif; color:#1f2937; margin:0 auto; max-width:190mm; padding:10px; }
+    .bar { position: sticky; top:0; background:#134e4a; color:#fff; padding:8px 12px; margin-bottom:12px; border-radius:6px; display:flex; justify-content:space-between; align-items:center; }
+    .bar button { background:#fff; color:#134e4a; border:0; padding:6px 14px; border-radius:6px; font-weight:700; cursor:pointer; }
+    .cover { background:#1A7A6E; color:#fff; padding:14px 18px; border-radius:8px; margin-bottom:10px; } .cover h1 { margin:0 0 4px; font-size:20pt; } .cover p { margin:0; color:#fef3c7; }
+    h2 { font-size:15pt; color:#134e4a; margin:14px 0 4px; break-after: avoid; } h3 { background:#2E4057; color:#fff; padding:5px 9px; border-radius:4px; font-size:12pt; margin:16px 0 6px; break-after: avoid; }
+    h4 { font-size:11pt; color:#2E4057; margin:10px 0 3px; break-after: avoid; border-bottom:1px solid #cbd5e1; } h5,h6 { margin:8px 0 2px; break-after: avoid; }
+    p { margin:4px 0; orphans:3; widows:3; } .cap { color:#475569; font-style:italic; font-size:9.5pt; }
+    .blk, .fig, .card, .alert, table, pre, .metrics, .lines, .notes { break-inside: avoid; } .pb { break-before: page; }
+    .blk > div { break-inside: avoid; }
+    .fig { margin:6px 0; border:1px solid #e2e8f0; border-radius:6px; padding:4px; overflow:hidden; } .fig .plotly-graph-div { width:100% !important; }
+    .alert { border-left:4px solid #3b82f6; background:#eff6ff; padding:6px 10px; margin:6px 0; border-radius:4px; } .alert.warning { border-color:#f59e0b; background:#fffbeb; }
+    .alert.success { border-color:#10b981; background:#ecfdf5; } .alert.error { border-color:#ef4444; background:#fef2f2; }
+    .metrics { display:flex; flex-wrap:wrap; gap:8px; margin:6px 0; } .metric { flex:1 1 90px; border:1px solid #cbd5e1; border-radius:6px; padding:6px 8px; background:#f8fafc; }
+    .ml { font-size:8.5pt; color:#64748b; } .mv { font-size:15pt; font-weight:700; } .md_ { font-size:8.5pt; color:#047857; }
+    .card { border:1px solid #cbd5e1; border-left:4px solid #1A7A6E; padding:6px 10px; margin:6px 0; border-radius:4px; background:#fafafa; }
+    pre { background:#f1f5f9; padding:6px 8px; border-radius:4px; white-space:pre-wrap; font-size:9.5pt; }
+    table { width:100%; border-collapse:collapse; margin:6px 0; font-size:9.5pt; } th, td { border:1px solid #cbd5e1; padding:4px 6px; vertical-align:top; text-align:left; }
+    th { background:#2E4057; color:#fff; } tr:nth-child(even) td { background:#f8fafc; } table.wot { border:2px solid; margin:8px 0; } table.wot td { background:#fff !important; } table.wot ul { margin:2px 0; padding-left:16px; }
+    table.reg { font-size:8pt; } table.reg th, table.reg td { padding:3px 4px; } thead { display: table-header-group; } tr { break-inside: avoid; }
+    .lines { margin:10px 0; } .notes { border:1px solid #94a3b8; min-height:90mm; padding:6px; margin:8px 0; font-weight:700; } .act td { height:14mm; } ul { margin:3px 0; padding-left:20px; }
+    @media print { .bar { display:none; } body { padding:0; max-width:none; } }
+    """
+    js = ("""<script>
+    function _rs(w){document.querySelectorAll('.js-plotly-plot').forEach(function(d){try{Plotly.relayout(d,{width:w})}catch(e){}})}
+    window.addEventListener('beforeprint',function(){_rs(690)});
+    window.addEventListener('afterprint',function(){document.querySelectorAll('.js-plotly-plot').forEach(function(d){try{Plotly.relayout(d,{autosize:true,width:null});Plotly.Plots.resize(d)}catch(e){}})});
+    </script>""")
+    doc = ("<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+           f"<title>Full Analysis — {_html_mod.escape(student['name'])}</title><style>{css}</style>"
+           f"<script>{get_plotlyjs()}</script></head><body>"
+           "<div class='bar'><span>Print-ready analysis. Press Print, then choose your printer or Save as PDF.</span>"
+           "<button onclick='window.print()'>🖨️ Print</button></div>"
+           + cover + "\n".join(body) + js + "</body></html>")
+    return doc.encode("utf-8")
+
+
 def render_student_analysis_page():
+    """Draws the Analysis page, recording what is shown so a printable copy can be built."""
+    screen_capture_start()
+    try:
+        _render_student_analysis_page_inner()
+    finally:
+        screen_capture_stop()
+
+
+def _render_student_analysis_page_inner():
     student_id = st.session_state.get("selected_student_id")
     student = get_student(student_id)
     if not student:
@@ -4894,6 +5514,8 @@ def render_student_analysis_page():
         st.session_state[f"pl_start_an_{student_id}"] = _pl_start_raw
         st.session_state[f"pl_end_an_{student_id}"]   = _pl_end_raw
 
+
+    render_starting_profile(student)
 
     # ══ Sensory Overview Upload ════════════════════════════════════════════════
     with st.expander("🧠 Sensory Overview — upload to enrich analysis (optional)", expanded=False):
@@ -5178,7 +5800,8 @@ def render_student_analysis_page():
     crit = [c for c in st.session_state.critical_incidents if c["student_id"] == student_id]
 
     if not quick and not crit:
-        st.info("No incident data available yet.")
+        st.info("No incident data available yet. Suggestions from the Starting Profile can still be trialled from day one.")
+        render_strategy_trials(student, pd.DataFrame())
         if st.button("↩️ Back", key="back_no_data"):
             go_to("program_students", selected_program=student["program"])
         return
@@ -8044,7 +8667,21 @@ def render_student_analysis_page():
                 use_container_width=True,
                 **_dl_kwargs)
 
-    st.markdown("#### 🖨️ Full Analysis — Print Pack")
+    st.markdown("#### 🖨️ Print the Whole Screen")
+    st.caption("Prints everything on this page exactly as shown: every chart with its 'Understanding this chart' note, "
+               "tables, recommendations and trials, plus the incident register and a notes page. Open the file, press Print, "
+               "then pick your printer or Save as PDF.")
+    try:
+        _screen_html = build_print_html(
+            student, full_df, list(_SCREEN["rec"]), supports_trialled=_supports_trialled,
+            supports_success=_supports_success, before_after=_before_after, trials=None)
+        st.download_button(
+            "🖨️ Print-ready Full Screen (HTML)", _screen_html,
+            file_name=f"FullScreen_{student['name'].replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.html",
+            mime="text/html", use_container_width=True, key=f"dl_fullscreen_{student_id}")
+    except Exception as _e:
+        st.warning(f"Could not prepare the print-ready version: {_e}")
+    st.markdown("#### 📄 Full Analysis — Word version")
     st.caption("Everything on this page in one printable Word document for meetings: all charts and tables, "
                "Window of Tolerance, patterns, considerations, Berry Street strategies, a full incident "
                "register, and a blank page for notes and agreed actions.")
