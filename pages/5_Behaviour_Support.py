@@ -3423,7 +3423,9 @@ STARTING_PROFILE_TAGS = {
 def _extract_upload_text(f) -> str:
     """Plain text from an uploaded .docx / .pdf / .odt / .txt file."""
     name = f.name.lower()
-    raw = f.read()
+    # getvalue() not read(): read() continues from where the last read stopped, so a second
+    # click (or any rerun) returned empty bytes and the file looked blank.
+    raw = f.getvalue()
     try:
         if name.endswith(".pdf"):
             try:
@@ -3599,9 +3601,15 @@ def render_starting_profile(student):
         pasted = st.text_area("…or paste text here", height=120, key=f"sp_paste_{sid}",
                               placeholder="Paste referral notes, a transition summary or previous school report…")
         if st.button("🤖 Find themes and suggestions", type="primary", key=f"sp_run_{sid}", use_container_width=True):
-            text = "\n\n".join([_extract_upload_text(f) for f in (files or [])] + ([pasted] if pasted.strip() else [])).strip()
+            _parts = [(f.name, _extract_upload_text(f).strip()) for f in (files or [])]
+            text = "\n\n".join([t for _, t in _parts if t] + ([pasted] if pasted.strip() else [])).strip()
             if not text:
-                st.warning("Upload a document or paste some text first.")
+                if files:
+                    st.warning("The file uploaded, but no readable text was found in it ("
+                               + ", ".join(f"{n}: {len(t)} characters" for n, t in _parts)
+                               + "). This usually means a scanned or image-only PDF. Try a Word version, or copy the text and paste it into the box below.")
+                else:
+                    st.warning("Upload a document or paste some text first.")
             elif not st.secrets.get("GROQ_API_KEY", ""):
                 st.error("AI key not configured, so extraction isn't available.")
             else:
