@@ -4578,8 +4578,10 @@ def render_student_analysis_page():
             f"have no valid date recorded**, so they're excluded from every chart and metric below "
             f"(all of it is organised by date). That's why this page may show a lower number than "
             f"other screens — it's not a missing/deleted record, it's a missing date. "
-            f"Check the Document Archive or incident log for those {_dropped_nat} entries and add a date "
-            f"to bring them into this analysis."
+            f"To fix: scroll down to **👁️ View, Edit & Print an Incident** on this page. Undated "
+            f"records are flagged **⚠️ NO DATE**. Pick one, set the correct date, and press "
+            f"**Save Changes** to bring it into this analysis (or use **🗑️ Delete an Incident** "
+            f"if it's a duplicate)."
         )
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
