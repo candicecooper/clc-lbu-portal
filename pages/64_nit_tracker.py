@@ -1401,6 +1401,75 @@ with tabs[0]:
         m2.metric("NIT not received (absent)", fmt(wdf["lost_absence"].sum()))
         m3.metric("Net for the site", fmt(wdf["balance"].sum(), signed=True))
 
+        # ── Edit NIT minutes for the week ─────────────────────────────────────
+        st.markdown("#### ✏️ Edit NIT minutes for this week")
+        st.caption("Change any number to the NIT the teacher actually received that day (minutes). "
+                   "Edited days show ✏️ in the grid and override the timetable, absences, missed and "
+                   "additional for that day. Set a cell back to the timetable figure to undo, or use "
+                   "**Reset** below.")
+        school = [d for d in wdates if t["start"] <= d <= t["end"] and d not in CLOSURES]
+        auto_daily = build_daily(staff, [e for e in ents if e["entry_type"] != "override"], t)
+        auto_val = {(r.staff_id, r.date): int(round(r.received)) for r in auto_daily.itertuples()}
+        cur_val = {(r.staff_id, r.date): int(round(r.received)) for r in daily.itertuples()}
+        overrides = {}
+        for e in ents:
+            if e["entry_type"] == "override" and not e.get("dismissed"):
+                overrides.setdefault((e["staff_id"], to_date(e["entry_date"])), []).append(e)
+        dcols = {d: f"{lab} {d:%d/%m}" for d, lab in zip(wdates, DAY_LABELS) if d in school}
+        grid_rows = []
+        for s in staff:
+            row = {"staff_id": s["id"], "Staff": s["name"]}
+            for d, col in dcols.items():
+                row[col] = cur_val.get((s["id"], d), 0)
+            grid_rows.append(row)
+        if not dcols:
+            st.info("No school days in this week.")
+        else:
+            gdf = pd.DataFrame(grid_rows)
+            ed_grid = st.data_editor(
+                gdf, hide_index=True, **WIDE, key=f"wk_edit_{t['year']}_{t['term']}_{wk}",
+                disabled=["Staff"],
+                column_config={"staff_id": None,
+                               **{c: st.column_config.NumberColumn(c + " (min)", min_value=0, max_value=600, step=5)
+                                  for c in dcols.values()}})
+            changes = []
+            for _, r in ed_grid.iterrows():
+                sid = int(r["staff_id"])
+                for d, col in dcols.items():
+                    nv = r[col]
+                    nv = 0 if pd.isna(nv) else int(nv)
+                    if nv != cur_val.get((sid, d), 0):
+                        changes.append((sid, d, nv))
+            if changes:
+                st.warning(f"{len(changes)} day(s) changed — " + "; ".join(
+                    f"{staff_by_id[sid]['name']} {d:%a}: {fmt(cur_val.get((sid, d), 0))} → {fmt(nv)}"
+                    for sid, d, nv in changes[:6]) + ("…" if len(changes) > 6 else ""))
+                note = st.text_input("Reason for the change (optional)", key=f"wk_edit_note_{wk}")
+                if st.button("💾 Save NIT changes", type="primary"):
+                    for sid, d, nv in changes:
+                        for e in overrides.get((sid, d), []):
+                            sb().table(T_ENTRIES).delete().eq("id", e["id"]).execute()
+                        if nv != auto_val.get((sid, d), 0):
+                            sb().table(T_ENTRIES).insert({
+                                "entry_date": d.isoformat(), "staff_id": sid, "entry_type": "override",
+                                "minutes": nv, "category": "Edited in week grid", "notes": note,
+                                "entered_by": who(), "source": "manual"}).execute()
+                    refresh()
+                    st.success("Saved.")
+                    rerun()
+            wk_over = [e for v in overrides.values() for e in v]
+            if wk_over:
+                with st.expander(f"↩️ Reset edited days ({len(wk_over)}) back to the timetable"):
+                    pick = st.multiselect("Days to reset", [
+                        f"{staff_by_id.get(e['staff_id'], {}).get('name', '?')} — "
+                        f"{to_date(e['entry_date']):%a %d/%m} ({fmt(e['minutes'])})|{e['id']}" for e in wk_over],
+                        format_func=lambda x: x.split("|")[0], key=f"wk_reset_{wk}")
+                    if pick and st.button("Reset selected"):
+                        for x in pick:
+                            sb().table(T_ENTRIES).delete().eq("id", int(x.split("|")[1])).execute()
+                        refresh()
+                        rerun()
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB — LOG
