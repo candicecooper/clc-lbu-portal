@@ -385,6 +385,58 @@ CPI_STAGES = {
 }
 
 
+# ── Demand-avoidant presentations (ODD / PDA-type profiles, diagnosed or not) ──
+# Framed around the presentation, never a label: the strategies are the same
+# whether or not a diagnosis exists. Core idea: the *perceived* loss of control
+# is what triggers the threat response, so demands are lowered, shared and
+# reframed (declarative language, perceived choice) rather than pushed harder.
+DEMAND_AVOIDANCE_STRATEGIES = [
+    {"domain": "Relationship", "strategy": "Lead with connection and a calm, low-arousal tone. Treat refusal as anxiety-driven avoidance of a perceived loss of control, not defiance — so avoid power struggles, ultimatums and public correction."},
+    {"domain": "Body", "strategy": "Lower the overall demand load, especially during dysregulation or the known peak session. Drop non-essential demands, prioritise 2–3 'must-do' expectations, and let everything else flow from choice."},
+    {"domain": "Engagement", "strategy": "Use declarative, indirect language ('I wonder if...', 'I notice the pencils are out') and invitations rather than direct commands. Present tasks as problems to solve together or as roles ('Can you be the timekeeper?')."},
+    {"domain": "Engagement", "strategy": "Build in perceived choice: offer two acceptable options where both meet your goal, with the student choosing 'what', 'where', 'with whom' or 'in what order' — never whether."},
+    {"domain": "Stamina", "strategy": "Hand control back in small, safe ways: let the student set the timer, pick the starting point, or negotiate a 'my turn / your turn' split of the task, and acknowledge the effort made rather than the compliance."},
+    {"domain": "Character", "strategy": "Use shared-expert and interest-led framing (a favourite topic, a role of responsibility) so the student can say yes on their own terms. Build their own language for 'I'm feeling pressured' with a pre-agreed, no-questions-asked pause signal."},
+    {"domain": "Relationship", "strategy": "Keep adults consistent and predictable about what stays non-negotiable (safety) while staying flexible about everything else. Plan the repair conversation for when the student is regulated and keep it brief, non-blaming and forward-looking."},
+]
+
+PERCEIVED_CHOICE_PHRASES = [
+    ("Get your book out now.",
+     "Would you like to start with the reading or the writing? / Do you want your book on the desk or the floor?"),
+    ("It's time to line up.",
+     "I wonder who is going to lead us to the door today — you or your buddy?"),
+    ("You need to finish this before break.",
+     "We have 10 minutes before break. Do you want to do the first half now, or the part you like best first?"),
+    ("Stop doing that.",
+     "I'm noticing it's getting loud in here. Would a walk to the water bottle or a quiet corner help?"),
+    ("Sit down and start.",
+     "Where would be the best spot for you to work today — the beanbag or the back table?"),
+    ("You must say sorry.",
+     "When you're ready, how would you like to fix it — a note, a chat, or help tidy up?"),
+    ("Do the worksheet.",
+     "I've got a worksheet and a hands-on version of the same task. Which would you like to take on?"),
+]
+
+
+def demand_avoidance_signal(full_df) -> dict:
+    """How strongly does this student's data point to a demand-avoidant
+    presentation? Looks at the share of incidents triggered by instructions,
+    engagement/task demands or transitions, or presenting as refusal. A
+    prompt for staff judgement only, never a label or diagnosis."""
+    if full_df is None or full_df.empty:
+        return {"n": 0, "total": 0, "pct": 0.0, "flag": False}
+    total = len(full_df)
+    _cats = full_df["antecedent"].apply(categorize_antecedent) if "antecedent" in full_df.columns else pd.Series([None] * total, index=full_df.index)
+    _demand_cat = _cats.isin(["Instructions", "Engagement", "Transition"])
+    _refusal = pd.Series(False, index=full_df.index)
+    if "behaviour_type" in full_df.columns:
+        _refusal = full_df["behaviour_type"].astype(str).str.contains("refus|non-compl|noncompl|elope|depart|abscond|shutdown|withdraw", case=False, regex=True)
+    _flagged = _demand_cat | _refusal
+    n = int(_flagged.sum())
+    pct = n / total if total else 0.0
+    return {"n": n, "total": total, "pct": pct, "flag": (n >= 3 and pct >= 0.4)}
+
+
 def _top_categories(full_df, n: int = 2) -> list[str]:
     """Return the n most frequent antecedent categories present in
     full_df, computing the category column if it isn't already there."""
@@ -1470,8 +1522,14 @@ Critical Incident Form completed and saved.
 
 
 def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, top_loc, top_session, risk_score, risk_level,
-                                           supports_trialled: str = "", supports_success: str = "", before_after: dict = None):
-    """Generate professional BAP — fixed chart sizing and page layout."""
+                                           supports_trialled: str = "", supports_success: str = "", before_after: dict = None,
+                                           full_pack: bool = False, bsem_items: list = None, trials: list = None):
+    """Generate professional BAP — fixed chart sizing and page layout.
+
+    full_pack=True produces the printable "Full Analysis" version: everything in the
+    standard summary PLUS the on-screen-only sections (Window of Tolerance table,
+    combined patterns, considerations, BSEM recommendations, antecedent categories),
+    a complete incident register and a blank meetings-notes/actions page."""
     try:
         from docx import Document
         from docx.shared import Pt, RGBColor, Cm
@@ -1600,7 +1658,7 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         tc = t.rows[0].cells[0]
         set_bg(tc, TEAL_HEX); set_borders(tc, TEAL_HEX)
         p1 = tc.paragraphs[0]; p1.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        arun(p1, "BEHAVIOUR SUMMARY", bold=True, size=28, color=WHITE)
+        arun(p1, "FULL ANALYSIS — PRINT PACK" if full_pack else "BEHAVIOUR SUMMARY", bold=True, size=28 if not full_pack else 24, color=WHITE)
         cpara(tc, f"{student['name']}  |  Cowandilla Learning Centre  |  LBU {student.get('program','')} Program",
               size=17, color="FEF3C7", align=WD_ALIGN_PARAGRAPH.CENTER, sb=10, sa=30)
         doc.add_paragraph().paragraph_format.space_after = Pt(4)
@@ -2370,6 +2428,272 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
 
         doc.add_paragraph().paragraph_format.space_after = Pt(5)
 
+        if full_pack:
+            from docx.enum.section import WD_SECTION, WD_ORIENT
+
+            def _clean(v, default="—"):
+                if isinstance(v, (list, tuple)):
+                    v = ", ".join(str(x) for x in v if x)
+                if v is None:
+                    return default
+                try:
+                    if pd.isna(v):
+                        return default
+                except (TypeError, ValueError):
+                    pass
+                v = str(v).strip()
+                return v if v and v.lower() not in ("nan", "none", "nat") else default
+
+            def _set_col_widths(tbl, widths_cm):
+                tbl.autofit = False
+                for idx, w in enumerate(widths_cm):
+                    if idx < len(tbl.columns):
+                        tbl.columns[idx].width = Cm(w)
+                for row in tbl.rows:
+                    for idx, w in enumerate(widths_cm):
+                        if idx < len(row.cells):
+                            row.cells[idx].width = Cm(w)
+
+            def _repeat_header(row):
+                trPr = row._tr.get_or_add_trPr()
+                el = OxmlElement('w:tblHeader'); el.set(qn('w:val'), 'true'); trPr.append(el)
+
+            def grid_table(headers, rows, widths_cm, font=17):
+                tbl = doc.add_table(rows=1, cols=len(headers)); tbl.style = 'Table Grid'
+                for i, h in enumerate(headers):
+                    c = tbl.rows[0].cells[i]
+                    set_bg(c, GREY_DARK); set_borders(c, TEAL_HEX)
+                    c.paragraphs[0].clear()
+                    arun(c.paragraphs[0], h, bold=True, size=font, color=WHITE)
+                _repeat_header(tbl.rows[0])
+                for r_i, r in enumerate(rows):
+                    cells = tbl.add_row().cells
+                    for i, val in enumerate(r):
+                        set_bg(cells[i], LIGHT_GREY if r_i % 2 == 0 else WHITE)
+                        set_borders(cells[i], "CBD5E1")
+                        cells[i].paragraphs[0].clear()
+                        arun(cells[i].paragraphs[0], str(val), size=font)
+                _set_col_widths(tbl, widths_cm)
+                return tbl
+
+            def note(text, size=17):
+                pn = doc.add_paragraph(); pn.paragraph_format.space_after = Pt(4)
+                arun(pn, text, italic=True, size=size, color=GREY_DARK)
+
+            # ── page numbers + confidentiality footer ──
+            _fp = doc.sections[0].footer.paragraphs[0]
+            _fp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            arun(_fp, f"CONFIDENTIAL — {student['name']} — Full Analysis, printed "
+                      f"{datetime.now().strftime('%d/%m/%Y')} — Page ", size=18, color="666666")
+            _r = _fp.add_run(); _r.font.size = Pt(7); _r.font.name = "Arial"
+            for _t, _txt in (("begin", None), (None, "PAGE"), ("end", None)):
+                if _t:
+                    _e = OxmlElement('w:fldChar'); _e.set(qn('w:fldCharType'), _t)
+                else:
+                    _e = OxmlElement('w:instrText'); _e.set(qn('xml:space'), 'preserve'); _e.text = _txt
+                _r._r.append(_e)
+
+            # ── Strategy trials ──
+            if trials:
+                doc.add_page_break()
+                section_header(doc, "STRATEGY TRIALS — WHAT WE HAVE TRIED AND LEARNED")
+                note("Each trial tests a hypothesis about this student. Effects are a preliminary read from logged incidents.")
+                for _t in trials:
+                    _st_, _en_ = _trial_date(_t.get("start_date")), _trial_date(_t.get("end_date"))
+                    _eff = compute_trial_effect(full_df, _st_, _en_ if _t.get("status") != "Running" else None, _t.get("focus_session") or "")
+                    _tt = doc.add_table(rows=1, cols=1); _tt.style = 'Table Grid'
+                    _tc = _tt.rows[0].cells[0]; set_borders(_tc, TEAL_HEX, size="10"); _tc.paragraphs[0].clear()
+                    arun(_tc.paragraphs[0], _tr_text(_t.get("title")), bold=True, size=19, color=GREY_DARK)
+                    _status = "Running" if _t.get("status") == "Running" else f"Concluded: {_t.get('outcome') or ''}"
+                    arun(_tc.paragraphs[0], f"   [{_status}]  from {_st_.strftime('%d/%m/%Y') if _st_ else '—'}", size=15, color=TEAL_HEX)
+                    for _lab, _val in (("Hypothesis: ", _t.get("hypothesis")), ("Strategy: ", _t.get("strategy")), ("Tracking: ", _t.get("measure"))):
+                        _pp = _tc.add_paragraph(); _pp.paragraph_format.space_before = Pt(2)
+                        arun(_pp, _lab, bold=True, size=16, color=GREY_DARK); arun(_pp, _tr_text(_val, "—"), size=16)
+                    if _eff and not _eff.get("insufficient"):
+                        for _ln in (_fmt_effect(_eff.get("focus"), f"{_t.get('focus_session')} session"), _fmt_effect(_eff.get("all"), "Whole day")):
+                            if _ln:
+                                _pp = _tc.add_paragraph(); arun(_pp, _ln, size=16, color="1A7A6E")
+                    for _o in (_t.get("observations") or []):
+                        _pp = _tc.add_paragraph(); arun(_pp, f"• {_o.get('date','')} — {_o.get('text','')}", size=15)
+                    if _t.get("conclusion"):
+                        _pp = _tc.add_paragraph(); _pp.paragraph_format.space_before = Pt(2)
+                        arun(_pp, "What we learned: ", bold=True, size=16, color=GREY_DARK); arun(_pp, _tr_text(_t.get("conclusion")), size=16)
+                    doc.add_paragraph().paragraph_format.space_after = Pt(4)
+
+            # ── Antecedent categories ──
+            doc.add_page_break()
+            section_header(doc, "WHAT TENDS TO COME BEFORE THE BEHAVIOUR — BY CATEGORY")
+            note("Each incident's trigger grouped into a category. Count, share of all incidents, and average severity.")
+            _cdf = full_df.copy()
+            if "antecedent" in _cdf.columns:
+                _cdf["_cat"] = _cdf["antecedent"].apply(categorize_antecedent)
+                _cdf["_sev"] = pd.to_numeric(_cdf.get("severity"), errors="coerce")
+                _rows = []
+                for cat, g in _cdf.groupby("_cat"):
+                    _sv = g["_sev"].mean()
+                    _rows.append([cat, len(g), f"{len(g)/len(_cdf)*100:.0f}%",
+                                  f"{_sv:.1f}" if pd.notna(_sv) else "—"])
+                _rows.sort(key=lambda r: -r[1])
+                if _rows:
+                    grid_table(["Category", "Incidents", "Share", "Avg severity"], _rows, [7.4, 3.2, 3.2, 3.6], font=18)
+            doc.add_paragraph().paragraph_format.space_after = Pt(6)
+
+            # ── Where / when crosstab ──
+            if {"location", "session"}.issubset(full_df.columns):
+                section_header(doc, "WHERE AND WHEN — LOCATION × SESSION")
+                note("Number of incidents in each location, by session (Morning before 11:00; Middle 11:00–13:30; Afternoon after 13:30).")
+                _ct = pd.crosstab(full_df["location"].fillna("Unknown"), full_df["session"])
+                for _s in ("Morning", "Middle", "Afternoon"):
+                    if _s not in _ct.columns:
+                        _ct[_s] = 0
+                _ct = _ct[["Morning", "Middle", "Afternoon"]]
+                _ct["Total"] = _ct.sum(axis=1)
+                _ct = _ct.sort_values("Total", ascending=False)
+                grid_table(["Location", "Morning", "Middle", "Afternoon", "Total"],
+                           [[idx, *[int(v) for v in row]] for idx, row in _ct.iterrows()],
+                           [6.0, 2.8, 2.8, 2.9, 2.9], font=18)
+            doc.add_paragraph().paragraph_format.space_after = Pt(6)
+
+            # ── Combined patterns ──
+            _combos = find_combined_patterns(full_df)
+            if _combos:
+                section_header(doc, "COMBINED PATTERNS")
+                note("Where trigger, place and time of day overlap — a stronger signal than any one on its own.")
+                grid_table(["Trigger category", "Location", "Session", "Incidents", "Share"],
+                           [[c["category"], c["location"], c["session"], c["count"], f"{c['pct']*100:.0f}%"] for c in _combos],
+                           [4.4, 4.4, 3.2, 2.7, 2.7], font=18)
+                doc.add_paragraph().paragraph_format.space_after = Pt(6)
+
+            # ── Considerations ──
+            _cons = build_considerations(full_df, top_ant, top_loc, top_session)
+            if _cons:
+                section_header(doc, "THINGS TO CONSIDER BEFORE ACTING ON THIS DATA")
+                note("Other explanations worth ruling out before treating a pattern as purely behavioural.")
+                for _c in _cons:
+                    _pc = doc.add_paragraph(); _pc.paragraph_format.space_after = Pt(3)
+                    _pc.paragraph_format.left_indent = Cm(0.4)
+                    arun(_pc, "☐  ", size=20, color=TEAL_HEX); arun(_pc, _c, size=18)
+                doc.add_paragraph().paragraph_format.space_after = Pt(6)
+
+            # ── Demand-avoidant presentations ──
+            doc.add_page_break()
+            section_header(doc, "DEMAND-AVOIDANT PRESENTATIONS — PERCEIVED CHOICE APPROACH")
+            _sig = demand_avoidance_signal(full_df)
+            note((f"{_sig['n']} of {_sig['total']} incidents ({_sig['pct']*100:.0f}%) were linked to demands, instructions, "
+                  "transitions or refusal/avoidance. " if _sig["flag"] else "")
+                 + "Useful whether or not a diagnosis (e.g. ODD or PDA profile) exists. This is a prompt for team discussion, not a label.")
+            for _d in DEMAND_AVOIDANCE_STRATEGIES:
+                _pd = doc.add_paragraph(); _pd.paragraph_format.space_after = Pt(3)
+                _pd.paragraph_format.left_indent = Cm(0.4)
+                arun(_pd, f"[{_d['domain']}]  ", bold=True, size=17, color=TEAL_HEX); arun(_pd, _d["strategy"], size=17)
+            doc.add_paragraph().paragraph_format.space_after = Pt(3)
+            note("Perceived choice: reframing the language. Both options must be acceptable; the choice is in how, when, where or with whom, not whether.")
+            grid_table(["Instead of...", "Try..."], [[a, b] for a, b in PERCEIVED_CHOICE_PHRASES], [6.0, 11.4], font=17)
+
+            # ── Window of Tolerance ──
+            doc.add_page_break()
+            section_header(doc, "WINDOW OF TOLERANCE — DRAFT FROM THIS STUDENT'S DATA")
+            note("Draft only, built from logged behaviour types and severity. Context is de-identified (people shown by role). "
+                 "Review with the team and complete the regulated 'Window of Tolerance' zone directly in the Creator.")
+            _wot = build_window_of_tolerance_table(full_df, student_id=student.get("id"))
+            if not _wot:
+                note("Not enough classifiable incidents yet to draft this table.")
+            for _z in WOT_ZONES:
+                if _z["id"] not in _wot:
+                    continue
+                _zd = _wot[_z["id"]]
+                _zt = doc.add_table(rows=2, cols=3); _zt.style = 'Table Grid'
+                _hc = _zt.rows[0].cells[0].merge(_zt.rows[0].cells[2])
+                set_bg(_hc, _z["color"].lstrip("#")); set_borders(_hc, _z["color"].lstrip("#"))
+                _hc.paragraphs[0].clear()
+                arun(_hc.paragraphs[0], f"{_z['label']}  —  {_zd['n']} incident(s)", bold=True, size=20, color=WHITE)
+                for _ci, (_h, _items) in enumerate((("Context", _zd["context"]), ("Behaviour", _zd["behaviour"]),
+                                                    ("Interventions", _zd["interventions"] or ["— none logged for this zone —"]))):
+                    _cell = _zt.rows[1].cells[_ci]
+                    set_borders(_cell, _z["color"].lstrip("#"))
+                    _cell.paragraphs[0].clear()
+                    arun(_cell.paragraphs[0], _h, bold=True, size=17, color=GREY_DARK)
+                    for _it in _items:
+                        _pi = _cell.add_paragraph(); _pi.paragraph_format.space_after = Pt(1)
+                        arun(_pi, f"• {_clean(_it)}", size=17)
+                _set_col_widths(_zt, [5.8, 5.8, 5.8])
+                doc.add_paragraph().paragraph_format.space_after = Pt(4)
+
+            # ── BSEM recommendations (fully expanded for print) ──
+            if bsem_items:
+                doc.add_page_break()
+                section_header(doc, "BERRY STREET EDUCATION MODEL — RECOMMENDED STRATEGIES")
+                note("Strategies matched to this student's pattern, framed for handover to a receiving school. "
+                     "SMART reminder: regulate before you reason.")
+                _dom_col = {"Body": "10B981", "Relationship": "3B82F6", "Stamina": "F97316",
+                            "Engagement": "8B5CF6", "Character": "EAB308"}
+                for _it in bsem_items:
+                    _bt = doc.add_table(rows=1, cols=1); _bt.style = 'Table Grid'
+                    _bc = _bt.rows[0].cells[0]
+                    _col = _dom_col.get(_it.get("domain"), "64748B")
+                    set_borders(_bc, _col, size="12"); _bc.paragraphs[0].clear()
+                    arun(_bc.paragraphs[0], f"{str(_it.get('domain','')).upper()}   ", bold=True, size=17, color=_col)
+                    arun(_bc.paragraphs[0], _clean(_it.get("strategy")), bold=True, size=20, color=GREY_DARK)
+                    for _lab, _key in (("Why it fits: ", "why"), ("How to put it in place: ", "how")):
+                        _txt = _clean(_it.get(_key), default="")
+                        if _txt and not _txt.startswith("[DEBUG]"):
+                            _pw = _bc.add_paragraph(); _pw.paragraph_format.space_before = Pt(2)
+                            arun(_pw, _lab, bold=True, size=17, color=GREY_DARK); arun(_pw, _txt, size=17)
+                    doc.add_paragraph().paragraph_format.space_after = Pt(3)
+
+            # ── Incident register (landscape) ──
+            _land = doc.add_section(WD_SECTION.NEW_PAGE)
+            _land.orientation = WD_ORIENT.LANDSCAPE
+            _land.page_width, _land.page_height = Cm(29.7), Cm(21)
+            for _a in ('left_margin', 'right_margin', 'top_margin', 'bottom_margin'):
+                setattr(_land, _a, Cm(1.5))
+            section_header(doc, f"INCIDENT REGISTER — ALL {len(full_df)} DATED INCIDENTS")
+            note("Every incident on file, oldest first. Q = Quick log, C = Critical (ABCH).")
+            _reg_rows = []
+            for _, r in full_df.sort_values("date_parsed").iterrows():
+                _desc = _clean(r.get("description"), default="")
+                if not _desc and isinstance(r.get("ABCH_primary"), dict):
+                    _desc = _clean(r["ABCH_primary"].get("behaviour"), default="")
+                if len(_desc) > 150:
+                    _desc = _desc[:147].rstrip() + "…"
+                _sev = pd.to_numeric(r.get("severity"), errors="coerce")
+                _reg_rows.append([
+                    r["date_parsed"].strftime("%d/%m/%y"),
+                    _clean(r.get("time"), default="")[:5],
+                    "C" if r.get("incident_type") == "Critical" else "Q",
+                    _clean(r.get("location")),
+                    _clean(r.get("behaviour_type")),
+                    _clean(r.get("antecedent")),
+                    "—" if pd.isna(_sev) else int(_sev),
+                    _clean(r.get("intervention")),
+                    _desc or "—",
+                ])
+            grid_table(["Date", "Time", "Type", "Location", "Behaviour", "Antecedent (trigger)", "Sev", "Interventions", "Notes"],
+                       _reg_rows, [1.8, 1.3, 1.4, 2.6, 4.1, 4.1, 1.1, 4.2, 6.0], font=16)
+
+            # ── Meeting notes & actions (portrait, blank for handwriting) ──
+            _port = doc.add_section(WD_SECTION.NEW_PAGE)
+            _port.orientation = WD_ORIENT.PORTRAIT
+            _port.page_width, _port.page_height = Cm(21), Cm(29.7)
+            for _a in ('left_margin', 'right_margin', 'top_margin', 'bottom_margin'):
+                setattr(_port, _a, Cm(1.8))
+            section_header(doc, "MEETING NOTES & AGREED ACTIONS")
+            doc.add_paragraph().paragraph_format.space_after = Pt(2)
+            _hdr = doc.add_table(rows=1, cols=2); _hdr.style = 'Table Grid'
+            for _i, _t in enumerate(("Date of meeting:", "Present:")):
+                set_borders(_hdr.rows[0].cells[_i], TEAL_HEX); _hdr.rows[0].cells[_i].paragraphs[0].clear()
+                arun(_hdr.rows[0].cells[_i].paragraphs[0], _t, bold=True, size=20, color=GREY_DARK)
+            doc.add_paragraph().paragraph_format.space_after = Pt(2)
+            _nt = doc.add_table(rows=2, cols=1); _nt.style = 'Table Grid'
+            set_borders(_nt.rows[0].cells[0], TEAL_HEX); _nt.rows[0].cells[0].paragraphs[0].clear()
+            arun(_nt.rows[0].cells[0].paragraphs[0], "Notes", bold=True, size=20, color=GREY_DARK)
+            set_borders(_nt.rows[1].cells[0], TEAL_HEX)
+            _nt.rows[1].height = Cm(9.5)
+            doc.add_paragraph().paragraph_format.space_after = Pt(2)
+            _act = grid_table(["Agreed action", "Who", "By when"], [["", "", ""] for _ in range(6)], [10.0, 3.8, 3.6], font=18)
+            for _row in _act.rows[1:]:
+                _row.height = Cm(1.5)
+
         # Sign-off section removed — BAP approved via portal workflow
 
         # Prevent any table row (Student Details, Key Findings, Risk banner,
@@ -2540,6 +2864,402 @@ def save_support_plan_to_db(student_id, data: dict, updated_by: str = ""):
     except Exception as e:
         st.error(f"Error saving support plan: {e}")
         return False
+
+
+# ============================================
+# STRATEGY TRIALS — suggest, run, measure, report back
+# ============================================
+# CLC-LBU's small, structured setting is where new strategies can actually be
+# trialled and compared (a mainstream class of 30+ rarely can). Each trial is a
+# hypothesis -> strategy -> measure -> outcome record per student, so what is
+# learned here can travel with the student and inform receiving schools.
+#
+# Table (create once in Supabase):
+#   create table strategy_trials (
+#     id uuid primary key default gen_random_uuid(),
+#     student_id text not null, title text, hypothesis text, strategy text,
+#     measure text, focus_session text, start_date date, review_date date,
+#     end_date date, status text default 'Running', outcome text, conclusion text,
+#     observations jsonb default '[]'::jsonb, created_by text,
+#     created_at timestamptz default now());
+# If the table doesn't exist the tool still works for the current session only.
+
+TRIAL_OUTCOMES = ["Worked well", "Partly helped", "No clear change", "Made things harder", "Adapted — new version to trial"]
+
+
+def _tr_text(v, default=""):
+    try:
+        if v is None or (not isinstance(v, (list, dict)) and pd.isna(v)):
+            return default
+    except (TypeError, ValueError):
+        pass
+    return str(v).strip() or default
+
+
+def build_trial_suggestions(full_df, max_n: int = 3) -> list[dict]:
+    """Turn this student's data pattern into specific, trialable strategies.
+    Each carries the evidence it is based on, a provisional hypothesis (never
+    a conclusion), a strategy offering genuinely acceptable choices, and what
+    to measure. Rule-based so it is predictable and always grounded in data."""
+    if full_df is None or full_df.empty:
+        return []
+    df = full_df.copy()
+    total = len(df)
+    sugg = []
+
+    def _pct(n): return f"{n} of {total} incidents ({n/total*100:.0f}%)"
+
+    # --- patterns ---
+    sess = df["session"].value_counts() if "session" in df.columns else pd.Series(dtype=int)
+    locs = df["location"].fillna("").astype(str).value_counts() if "location" in df.columns else pd.Series(dtype=int)
+    cats = (df["antecedent"].apply(categorize_antecedent) if "antecedent" in df.columns else pd.Series([None] * total)).value_counts()
+    beh = df["behaviour_type"].fillna("").astype(str) if "behaviour_type" in df.columns else pd.Series([""] * total, index=df.index)
+    verbal = int(beh.str.contains("verbal|swear|vocal|calling out|commentary|abuse", case=False, regex=True).sum())
+
+    def _mins(t):
+        try:
+            h, m = str(t).split(":")[:2]; return int(h) * 60 + int(m)
+        except Exception:
+            return None
+    arrival = 0
+    if "time" in df.columns:
+        _m = df["time"].apply(_mins)
+        arrival = int(((_m >= 8 * 60) & (_m <= 9 * 60 + 45)).sum())
+
+    # 1. Arrival / entry anxiety
+    morning = int(sess.get("Morning", 0))
+    if arrival >= 3 and arrival / total >= 0.3 or (morning / total >= 0.5 and verbal >= 2):
+        n_ev = arrival if arrival >= 3 else morning
+        sugg.append({
+            "key": "arrival_entry", "score": n_ev / total + 0.15,
+            "title": "Arrival: perceived-choice entry to the morning",
+            "evidence": f"{_pct(n_ev)} happen {'around arrival (8:00–9:45)' if arrival >= 3 else 'in the morning session'}"
+                        + (f", with {verbal} verbal outburst(s)." if verbal else "."),
+            "hypothesis": "Entering the room and being seen by peers may feel anxious or exposing, and the outburst may be masking that "
+                          "anxiety rather than being aimed at anyone. (Provisional: the trial will help test this.)",
+            "strategy": "At arrival, greet calmly and offer a perceived choice of how to start the morning. Both options are fine: "
+                        "(a) begin in the aligned room, away from other students, and join the group at an agreed later time; or "
+                        "(b) take a short moment outside the room first, then enter. Say nothing about earlier outbursts at the door and "
+                        "keep demands minimal for the first few minutes.",
+            "measure": "Daily: outbursts or incidents in the first 30 minutes, which option was chosen, and how long before joining the group.",
+            "focus_session": "Morning"})
+
+    # 2. Demand / instruction
+    sig = demand_avoidance_signal(df)
+    n_ins = int(cats.get("Instructions", 0))
+    if n_ins / total >= 0.3 or sig["flag"]:
+        n_ev = max(n_ins, sig["n"]) if sig["flag"] else n_ins
+        sugg.append({
+            "key": "instruction_choice", "score": n_ev / total,
+            "title": "Instructions: declarative language and perceived choice",
+            "evidence": f"{_pct(n_ev)} linked to instructions, demands or refusal/avoidance.",
+            "hypothesis": "Direct demands may be felt as a loss of control, prompting refusal as a way to regain it.",
+            "strategy": "Swap direct commands for invitations and two acceptable options (what, where, with whom or in what order, never whether). "
+                        "e.g. 'Do you want to start with the reading or the writing?' Drop non-essential demands during the peak session.",
+            "measure": "Tally per day: first instructions followed within 2 minutes, refusals, and how often a choice was offered.",
+            "focus_session": ""})
+
+    # 3. Transition
+    n_tr = int(cats.get("Transition", 0))
+    if n_tr / total >= 0.3:
+        sugg.append({
+            "key": "transition_choice", "score": n_tr / total,
+            "title": "Transitions: shared control of the routine",
+            "evidence": f"{_pct(n_tr)} follow a transition.",
+            "hypothesis": "Sudden change may feel unpredictable; sharing control of how the change happens may reduce threat.",
+            "strategy": "Give a 5-then-2-minute warning with a visual, then offer a choice within the transition (which route, which job, "
+                        "who walks with them, what they carry). Both options meet the same goal.",
+            "measure": "Per transition: smooth, needed support, or incident. Note which choice was picked.",
+            "focus_session": ""})
+
+    # 4. Peer
+    n_pe = int(cats.get("Peer", 0))
+    if n_pe / total >= 0.3:
+        sugg.append({
+            "key": "peer_choice", "score": n_pe / total,
+            "title": "Peers: choice of when and with whom",
+            "evidence": f"{_pct(n_pe)} are peer-related.",
+            "hypothesis": "Unstructured peer proximity may be the trigger, and having a say in the social load may help.",
+            "strategy": "Offer a structured choice for high-risk times: join a supported small group, or take a parallel activity near a "
+                        "trusted adult, with a planned time to rejoin. Both are positive options, not a consequence.",
+            "measure": "Peer-related incidents per week; which option chosen; whether the student rejoined.",
+            "focus_session": ""})
+
+    # 5. Sensory
+    n_se = int(cats.get("Sensory", 0))
+    if n_se / total >= 0.25:
+        sugg.append({
+            "key": "sensory_choice", "score": n_se / total,
+            "title": "Sensory: prepare the body before the busy moment",
+            "evidence": f"{_pct(n_se)} are sensory-linked.",
+            "hypothesis": "Noise, light or crowding may be overloading the nervous system before any demand is placed.",
+            "strategy": "Before the known busy session, offer a choice of sensory preparation: a quiet 5 minutes in a low-stimulation space, "
+                        "or a movement or heavy-work task, then join.",
+            "measure": "Incidents in the following session versus days without the prep; which option was chosen.",
+            "focus_session": ""})
+
+    # 6. Engagement
+    n_en = int(cats.get("Engagement", 0))
+    if n_en / total >= 0.3:
+        sugg.append({
+            "key": "engagement_start", "score": n_en / total,
+            "title": "Task start: a strength-first, chosen starting point",
+            "evidence": f"{_pct(n_en)} are linked to task engagement.",
+            "hypothesis": "The start of a task may feel risky; a guaranteed early success and some control may lower that threshold.",
+            "strategy": "Offer a choice of two starting tasks, one always at mastery level or linked to an interest. Chunk the task with a "
+                        "visible endpoint and a planned movement break before fatigue.",
+            "measure": "Time to begin the task; tasks completed; incidents during independent work.",
+            "focus_session": ""})
+
+    # 7. Afternoon
+    aft = int(sess.get("Afternoon", 0))
+    if aft / total >= 0.45:
+        sugg.append({
+            "key": "afternoon_reset", "score": aft / total,
+            "title": "Afternoon: a planned reset after lunch",
+            "evidence": f"{_pct(aft)} happen in the afternoon.",
+            "hypothesis": "Fatigue, hunger or the unstructured lunch break may be carrying over into the afternoon.",
+            "strategy": "Check food, water and tiredness, then offer a choice of reset: movement break or quiet time with a preferred activity, "
+                        "before the first afternoon demand.",
+            "measure": "Afternoon incidents per week; which reset was chosen.",
+            "focus_session": "Afternoon"})
+
+    # 8. Unstructured space
+    _yard = int(sum(c for l, c in locs.items() if re.search(r"yard|playground|oval|outside", l, re.I)))
+    if _yard / total >= 0.4:
+        sugg.append({
+            "key": "yard_choice", "score": _yard / total,
+            "title": "Break times: a choice of structured options",
+            "evidence": f"{_pct(_yard)} happen outside or in the yard.",
+            "hypothesis": "Unstructured time may be the pressure point, and a ready choice of activity may reduce it.",
+            "strategy": "Offer two ready options before break: a supported game or activity, or a quiet space with a trusted adult. "
+                        "Both are valued choices, with a check-in at the end.",
+            "measure": "Yard incidents per week; option chosen; ease of returning to class.",
+            "focus_session": ""})
+
+    sugg.sort(key=lambda d: -d["score"])
+    if not sugg:
+        sugg.append({
+            "key": "baseline_choice", "score": 0.1,
+            "title": "Start with choice at the start of the day",
+            "evidence": "No single pattern stands out yet.",
+            "hypothesis": "A small, predictable sense of control at the start of the day may help settle the student.",
+            "strategy": "Offer a choice of how to begin the day (two acceptable options) and keep demands low for the first few minutes.",
+            "measure": "Daily: how the first 30 minutes went (settled, needed support, incident).",
+            "focus_session": "Morning"})
+    return sugg[:max_n]
+
+
+def load_trials(student_id) -> list[dict]:
+    """Trials from Supabase when the table exists, merged with any held only
+    in this session (used if the table hasn't been created yet)."""
+    rows = []
+    if supabase and student_id:
+        try:
+            res = supabase.table("strategy_trials").select("*").eq("student_id", student_id).order("start_date", desc=True).execute()
+            rows = res.data or []
+            st.session_state["_trials_db_ok"] = True
+        except Exception:
+            st.session_state["_trials_db_ok"] = False
+    local = st.session_state.get(f"trials_local_{student_id}", [])
+    return rows + [t for t in local if t.get("id") not in {r.get("id") for r in rows}]
+
+
+def save_trial(student_id, trial: dict) -> bool:
+    """Insert or update a trial. Falls back to session storage if the table is missing."""
+    trial = dict(trial)
+    trial["student_id"] = student_id
+    if supabase:
+        try:
+            if trial.get("id") and not str(trial["id"]).startswith("local-"):
+                tid = trial.pop("id")
+                supabase.table("strategy_trials").update(trial).eq("id", tid).execute()
+            else:
+                trial.pop("id", None)
+                supabase.table("strategy_trials").insert(trial).execute()
+            return True
+        except Exception:
+            pass
+    loc_key = f"trials_local_{student_id}"
+    lst = st.session_state.get(loc_key, [])
+    if trial.get("id"):
+        lst = [trial if t.get("id") == trial["id"] else t for t in lst]
+    else:
+        trial["id"] = f"local-{uuid.uuid4()}"
+        lst.append(trial)
+    st.session_state[loc_key] = lst
+    return False
+
+
+def compute_trial_effect(full_df, start, end=None, focus_session: str = "") -> dict | None:
+    """Compare incidents per school week in the (up to) 4 weeks before the
+    trial with the trial period itself, overall and in the targeted session.
+    Preliminary by design: it does not account for absences."""
+    if full_df is None or full_df.empty or "date_parsed" not in full_df.columns or not start:
+        return None
+    try:
+        s_ts = pd.Timestamp(start).normalize()
+        e_ts = pd.Timestamp(end).normalize() if end else pd.Timestamp(date.today())
+    except Exception:
+        return None
+    df = full_df.dropna(subset=["date_parsed"])
+    if df.empty or e_ts < s_ts:
+        return None
+    b_start = max(df["date_parsed"].min().normalize(), s_ts - pd.Timedelta(days=28))
+    if b_start >= s_ts:
+        return {"insufficient": True}
+    def _wk(a, b): return max(int(np.busday_count(a.date(), b.date())), 1) / 5.0
+    wk_b, wk_d = _wk(b_start, s_ts), _wk(s_ts, e_ts + pd.Timedelta(days=1))
+    out = {"insufficient": False, "weeks_before": wk_b, "weeks_during": wk_d}
+    def _slice(d):
+        before = d[(d["date_parsed"] >= b_start) & (d["date_parsed"] < s_ts)]
+        during = d[(d["date_parsed"] >= s_ts) & (d["date_parsed"] <= e_ts + pd.Timedelta(days=1))]
+        return before, during
+    for tag, d in (("all", df), ("focus", df[df["session"] == focus_session] if focus_session and "session" in df.columns else None)):
+        if d is None:
+            out[tag] = None; continue
+        b, du = _slice(d)
+        rb, rd = len(b) / wk_b, len(du) / wk_d
+        sb = pd.to_numeric(b.get("severity"), errors="coerce").mean() if "severity" in b.columns else np.nan
+        sd = pd.to_numeric(du.get("severity"), errors="coerce").mean() if "severity" in du.columns else np.nan
+        out[tag] = {"n_before": len(b), "n_during": len(du), "rate_before": rb, "rate_during": rd,
+                    "sev_before": None if pd.isna(sb) else float(sb), "sev_during": None if pd.isna(sd) else float(sd),
+                    "pct": ((rd - rb) / rb * 100) if rb > 0 else None}
+    return out
+
+
+def _fmt_effect(block: dict | None, label: str) -> str:
+    if not block:
+        return ""
+    pct = block["pct"]
+    arrow = "no baseline to compare" if pct is None else f"{abs(pct):.0f}% {'fewer' if pct < 0 else 'more'} per week"
+    return (f"{label}: {block['rate_before']:.1f}/wk before ({block['n_before']}) → {block['rate_during']:.1f}/wk during "
+            f"({block['n_during']}), {arrow}.")
+
+
+def _trial_date(v):
+    try:
+        return pd.Timestamp(v).date() if v else None
+    except Exception:
+        return None
+
+
+def render_strategy_trials(student, full_df):
+    student_id = student["id"]
+    st.markdown("### 🧪 Strategies to Trial")
+    st.caption("Suggestions are drawn from this student's own pattern. Each is a hypothesis to test, not a conclusion. "
+               "Run it for a few weeks, note what you see, then record what you learned. That evidence can travel "
+               "with the student to a receiving school.")
+    if st.session_state.get("_trials_db_ok") is False:
+        st.warning("Trials are not being saved permanently yet. Ask your admin to create the strategy_trials table; "
+                   "until then they only last for this session.")
+    me = (st.session_state.get("current_user") or {}).get("name", "") or ""
+    trials = load_trials(student_id)
+    running_titles = {t.get("title") for t in trials if t.get("status") == "Running"}
+
+    sugg = build_trial_suggestions(full_df)
+    for i, sg in enumerate(sugg):
+        with st.container(border=True):
+            st.markdown(f"**💡 {sg['title']}**")
+            st.markdown(f"*What the data shows:* {sg['evidence']}")
+            st.markdown(f"*Hypothesis to test:* {sg['hypothesis']}")
+            st.markdown(f"*Strategy to trial:* {sg['strategy']}")
+            st.markdown(f"*What to track:* {sg['measure']}")
+            if sg["title"] in running_titles:
+                st.success("This trial is already running (see below).")
+                continue
+            if st.button("▶️ Start this trial", key=f"trial_start_{student_id}_{sg['key']}"):
+                st.session_state[f"trial_form_{student_id}"] = i
+    open_i = st.session_state.get(f"trial_form_{student_id}")
+    if open_i is not None and 0 <= open_i < len(sugg):
+        sg = sugg[open_i]
+        with st.form(f"trial_new_{student_id}"):
+            st.markdown(f"**Start trial: {sg['title']}**")
+            c1, c2 = st.columns(2)
+            _start = c1.date_input("Start date", value=date.today())
+            _review = c2.date_input("Review date", value=date.today() + timedelta(days=21))
+            _strat = st.text_area("Strategy (edit to fit this student)", value=sg["strategy"], height=130)
+            _meas = st.text_area("What staff will track", value=sg["measure"], height=70)
+            _sess = st.selectbox("Session this should affect most", ["", "Morning", "Middle", "Afternoon"],
+                                 index=["", "Morning", "Middle", "Afternoon"].index(sg["focus_session"]),
+                                 format_func=lambda x: x or "Whole day")
+            ok = st.form_submit_button("✅ Start trial", type="primary")
+        if ok:
+            saved = save_trial(student_id, {
+                "title": sg["title"], "hypothesis": sg["hypothesis"], "strategy": _strat, "measure": _meas,
+                "focus_session": _sess, "start_date": _start.isoformat(), "review_date": _review.isoformat(),
+                "status": "Running", "observations": [], "created_by": me})
+            st.session_state.pop(f"trial_form_{student_id}", None)
+            st.rerun()
+
+    with st.expander("➕ Plan your own trial"):
+        with st.form(f"trial_custom_{student_id}"):
+            _t = st.text_input("Title", placeholder="e.g. Choice of first activity after lunch")
+            _h = st.text_area("Hypothesis (what do you think is going on?)", height=70)
+            _s = st.text_area("Strategy to trial", height=90)
+            _m = st.text_area("What will staff track?", height=60)
+            c1, c2, c3 = st.columns(3)
+            _sd = c1.date_input("Start date", value=date.today(), key=f"cust_sd_{student_id}")
+            _rd = c2.date_input("Review date", value=date.today() + timedelta(days=21), key=f"cust_rd_{student_id}")
+            _fs = c3.selectbox("Session affected", ["", "Morning", "Middle", "Afternoon"], format_func=lambda x: x or "Whole day",
+                               key=f"cust_fs_{student_id}")
+            if st.form_submit_button("✅ Start trial", type="primary"):
+                if not _t.strip() or not _s.strip():
+                    st.error("Add at least a title and a strategy.")
+                else:
+                    save_trial(student_id, {"title": _t.strip(), "hypothesis": _h, "strategy": _s, "measure": _m,
+                                            "focus_session": _fs, "start_date": _sd.isoformat(),
+                                            "review_date": _rd.isoformat(), "status": "Running",
+                                            "observations": [], "created_by": me})
+                    st.rerun()
+
+    if not trials:
+        return
+    st.markdown("#### 📋 Trials for this student")
+    for t in trials:
+        tid = str(t.get("id"))
+        running = t.get("status") == "Running"
+        start, review, end = _trial_date(t.get("start_date")), _trial_date(t.get("review_date")), _trial_date(t.get("end_date"))
+        due = running and review and review <= date.today()
+        badge = "🟢 Running" if running else f"✅ {t.get('outcome') or 'Concluded'}"
+        with st.expander(f"{badge} — {t.get('title','')}" + (" — ⏰ review due" if due else ""), expanded=due):
+            st.markdown(f"**Hypothesis:** {_tr_text(t.get('hypothesis'), '—')}")
+            st.markdown(f"**Strategy:** {_tr_text(t.get('strategy'), '—')}")
+            st.markdown(f"**Tracking:** {_tr_text(t.get('measure'), '—')}")
+            st.caption(f"Started {start.strftime('%d/%m/%Y') if start else '—'} · review {review.strftime('%d/%m/%Y') if review else '—'}"
+                       + (f" · ended {end.strftime('%d/%m/%Y')}" if end else "") + (f" · by {t.get('created_by')}" if t.get("created_by") else ""))
+            eff = compute_trial_effect(full_df, start, end if not running else None, t.get("focus_session") or "")
+            if eff and eff.get("insufficient"):
+                st.info("Not enough earlier data to compare against yet.")
+            elif eff:
+                for line in (_fmt_effect(eff.get("focus"), f"{t.get('focus_session')} session"), _fmt_effect(eff.get("all"), "Whole day")):
+                    if line:
+                        st.markdown(f"📈 {line}")
+                st.caption("Preliminary read from logged incidents. It does not account for absences, and fewer logged incidents is only one "
+                           "measure, so weigh it with the staff observations below.")
+            obs = t.get("observations") or []
+            if obs:
+                st.markdown("**Staff observations**")
+                for o in obs:
+                    st.markdown(f"- {o.get('date','')} — {o.get('text','')}" + (f" *({o.get('by')})*" if o.get("by") else ""))
+            if running:
+                with st.form(f"trial_obs_{tid}"):
+                    _o = st.text_input("Add an observation", placeholder="e.g. Chose to start in the quiet room 4/5 days; joined group by 9:20")
+                    if st.form_submit_button("➕ Add"):
+                        if _o.strip():
+                            upd = dict(t); upd["observations"] = obs + [{"date": date.today().strftime("%d/%m"), "text": _o.strip(), "by": me}]
+                            save_trial(student_id, upd); st.rerun()
+                with st.form(f"trial_end_{tid}"):
+                    st.markdown("**Conclude this trial**")
+                    _out = st.selectbox("How did it go?", TRIAL_OUTCOMES, key=f"out_{tid}")
+                    _con = st.text_area("What did you learn? What would you keep, change or pass on to a receiving school?", height=90, key=f"con_{tid}")
+                    if st.form_submit_button("✅ Conclude trial"):
+                        upd = dict(t); upd.update({"status": "Concluded", "outcome": _out, "conclusion": _con, "end_date": date.today().isoformat()})
+                        save_trial(student_id, upd); st.rerun()
+            else:
+                st.markdown(f"**What we learned:** {_tr_text(t.get('conclusion'), '—')}")
+                if st.button("↩️ Reopen", key=f"reopen_{tid}"):
+                    upd = dict(t); upd.update({"status": "Running", "end_date": None}); save_trial(student_id, upd); st.rerun()
 
 
 def load_students_from_db():
@@ -3973,6 +4693,28 @@ def _parse_dates(series):
     except (TypeError, ValueError):
         out = pd.to_datetime(series, utc=True, errors="coerce")
     return out.dt.tz_localize(None)
+
+
+def render_demand_avoidance_section(full_df):
+    sig = demand_avoidance_signal(full_df)
+    if sig["flag"]:
+        st.info(f"{sig['n']} of {sig['total']} incidents ({sig['pct']*100:.0f}%) were linked to demands, "
+                "instructions, transitions or refusal/avoidance. That pattern fits a demand-avoidant "
+                "presentation. This is a prompt for team discussion, not a diagnosis, and the approach "
+                "below helps whether or not a diagnosis (e.g. ODD or PDA profile) exists.")
+    else:
+        st.caption("Not strongly indicated by this student's data, but these approaches are useful for any "
+                   "student who reacts to being told what to do.")
+    with st.expander("Demand-avoidant presentations — low-demand, perceived-choice approach", expanded=sig["flag"]):
+        st.markdown("**Core idea:** for these students, direct demands can feel like a loss of control, which "
+                    "triggers the threat response. Lower the demand, share control, and let the student say yes "
+                    "on their own terms. This is Regulate-before-Reason in practice.")
+        for item in DEMAND_AVOIDANCE_STRATEGIES:
+            st.markdown(f"- **{item['domain']}:** {item['strategy']}")
+        st.markdown("**Perceived choice: reframing the language**")
+        st.caption("Both options must be acceptable to you. The choice is in the how, when, where or with whom, not whether.")
+        for _instead, _try in PERCEIVED_CHOICE_PHRASES:
+            st.markdown(f"- Instead of *\"{_instead}\"* try *\"{_try}\"*")
 
 
 def render_student_analysis_page():
@@ -6762,6 +7504,13 @@ def render_student_analysis_page():
         )
 
     st.markdown("---")
+    render_strategy_trials(student, full_df)
+    st.markdown("---")
+
+    st.markdown("### 🧭 Demand-Avoidant Presentations — Perceived Choice Approach")
+    render_demand_avoidance_section(full_df)
+    st.markdown("---")
+
     st.markdown("### 👁️ View, Edit & Print an Incident")
     st.caption("Look up any single incident for this student, correct details (e.g. a wrong date), and print or download a summary.")
 
@@ -7294,6 +8043,24 @@ def render_student_analysis_page():
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True,
                 **_dl_kwargs)
+
+    st.markdown("#### 🖨️ Full Analysis — Print Pack")
+    st.caption("Everything on this page in one printable Word document for meetings: all charts and tables, "
+               "Window of Tolerance, patterns, considerations, Berry Street strategies, a full incident "
+               "register, and a blank page for notes and agreed actions.")
+    with st.spinner("Preparing print pack..."):
+        _pack_file = generate_behaviour_analysis_plan_docx(
+            student, full_df, top_ant, top_beh, top_loc, top_session, risk_score, risk_level,
+            supports_trialled=_supports_trialled, supports_success=_supports_success,
+            before_after=_before_after, full_pack=True,
+            bsem_items=st.session_state.get(f"bsem_analysis_{student_id}", []),
+            trials=load_trials(student_id))
+    if _pack_file:
+        st.download_button(
+            "🖨️ Full Analysis for Printing (Word)", _pack_file,
+            file_name=f"FullAnalysis_{student['name'].replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True, key=f"dl_fullpack_{student_id}")
 
     st.markdown("---")
     col1, col2 = st.columns(2)
