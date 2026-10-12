@@ -225,21 +225,30 @@ def excel_to_html(xls_bytes: bytes) -> str | None:
         parts.append(f"{name_html}{table_html}")
 
     return "\n".join(parts) if parts else None
-# Section detection - looks for exact phrases in the header band area
-# These should match the exact wording in the colored header band of each timetable page
-# Note: All matching is case-insensitive
+# Section detection - looks for phrases in the header band area of each page.
+# Matching is case-insensitive and whole-word (so "sso" won't match inside another word).
+# Phrases that contain "timetable" are treated as page TITLES and always win over
+# passing mentions (e.g. an SSO page that says "supporting Junior Primary" stays SSO).
 SECTION_HEADERS = {
-    "Specialist": ["specialist teacher timetable", "specialist teacher", "roisin"],
-    "JP":         ["junior primary program timetable", "junior primary program", "junior primary", "jp program"],
-    "PY":         ["primary years program timetable", "primary years program", "primary years", "py program"],
-    "SY":         ["senior years program timetable", "senior years program", "senior years", "sy program"],
-    "SSO":        ["sso support timetable", "sso support", "sso program", "support staff"],
-    "Leadership": ["leadership timetable", "leadership team", "leadership", "manager", "candice", "annette"],
-    "Meetings":   ["scheduled meetings timetable", "scheduled meetings", "meetings timetable", "meeting schedule", "staff meetings"],
+    "Specialist": ["specialist teacher timetable", "specialist timetable", "specialist teacher", "roisin"],
+    "JP":         ["junior primary program timetable", "junior primary timetable", "jp timetable",
+                   "junior primary program", "junior primary", "jp program"],
+    "PY":         ["primary years program timetable", "primary years timetable", "py timetable",
+                   "primary years program", "primary years", "py program"],
+    "SY":         ["senior years program timetable", "senior years timetable", "sy timetable",
+                   "senior years program", "senior years", "sy program"],
+    "SSO":        ["sso support timetable", "sso timetables", "sso timetable", "sso staff timetable",
+                   "support staff timetable", "school services officer",
+                   "sso support", "sso program", "support staff", "sso staff", "ssos", "sso"],
+    "Leadership": ["leadership timetable", "leadership team", "leadership"],
+    "Meetings":   ["scheduled meetings timetable", "meetings timetable", "scheduled meetings",
+                   "meeting schedule", "staff meetings"],
 }
 
-# Staff names that indicate SSO section (case-insensitive)
-SSO_STAFF = ["naomi", "vinnie", "cheryl", "jacqui", "caitie"]
+# Staff names used as a BACKUP when no section phrase is found (case-insensitive).
+# Checked in this order, so SSO names win over leadership names.
+SSO_STAFF = ["naomi", "vinnie", "cheryl", "jacqui", "caitie", "bonnie"]
+LEADERSHIP_STAFF = ["candice", "annette", "manager"]
 
 # Header phrases used to auto-split a COMBINED bookings PDF into Yard vs Kitchen.
 # Most specific first; the bare word ("yard"/"kitchen") is the last-resort fallback.
@@ -249,6 +258,23 @@ BOOKING_SECTION_HEADERS = {
 }
 
 _STAFF_SENTINEL = object()
+
+def _find_best(text: str, mapping: dict, title_first: bool = True):
+    """Return (section, phrase) for the best match of any phrase in `text`, or (None, None).
+    Ranking: title phrases (containing 'timetable') first, then the match that appears
+    EARLIEST in the text (page titles sit at the top), then the longest phrase."""
+    import re
+    best = None
+    for section, phrases in mapping.items():
+        for phrase in phrases:
+            m = re.search(r"(?<![a-z0-9])" + re.escape(phrase) + r"(?![a-z0-9])", text)
+            if not m:
+                continue
+            tier = 0 if (title_first and "timetable" in phrase) else 1
+            key = (tier, m.start(), -len(phrase))
+            if best is None or key < best[0]:
+                best = (key, section, phrase)
+    return (best[1], best[2]) if best else (None, None)
 
 def detect_page_section(page, page_num: int, headers=None, staff_map=None) -> tuple[str | None, str]:
     """
@@ -267,38 +293,34 @@ def detect_page_section(page, page_num: int, headers=None, staff_map=None) -> tu
         page_rect = page.rect
         header_height = page_rect.height * 0.20  # Top 20% of page
         header_rect = fitz.Rect(0, 0, page_rect.width, header_height)
-        header_text = page.get_text(clip=header_rect).lower().strip()
+        header_text = " ".join(page.get_text(clip=header_rect).lower().split())
 
-        # Also get first 300 characters of full page for backup detection
-        preview = page.get_text().lower()[:300]
+        # Also get first 400 characters of full page for backup detection
+        preview = " ".join(page.get_text().lower().split())[:400]
 
-        # 1. Section header phrases in the header band (highest priority)
-        for section, phrases in headers.items():
-            for phrase in phrases:
-                if phrase in header_text:
-                    return section, f"Header: '{phrase}'"
+        # 1. Section phrases in the header band (titles beat passing mentions)
+        sec, phrase = _find_best(header_text, headers)
+        if sec:
+            return sec, f"Header: '{phrase}'"
 
         # 2. Staff names in the header band
         if staff_map:
-            for section, names in staff_map.items():
-                for nm in names:
-                    if nm in header_text:
-                        return section, f"Staff: '{nm}'"
+            sec, nm = _find_best(header_text, staff_map, title_first=False)
+            if sec:
+                return sec, f"Staff: '{nm}'"
 
-        # 3. Fallback: header phrases anywhere in the page preview
-        for section, phrases in headers.items():
-            for phrase in phrases:
-                if phrase in preview:
-                    return section, f"Preview: '{phrase}'"
+        # 3. Fallback: section phrases anywhere in the page preview
+        sec, phrase = _find_best(preview, headers)
+        if sec:
+            return sec, f"Preview: '{phrase}'"
 
         # 4. Fallback: staff names in the preview
         if staff_map:
-            for section, names in staff_map.items():
-                for nm in names:
-                    if nm in preview:
-                        return section, f"Staff: '{nm}' (preview)"
+            sec, nm = _find_best(preview, staff_map, title_first=False)
+            if sec:
+                return sec, f"Staff: '{nm}' (preview)"
 
-        return None, f"No match (header: '{header_text[:50]}...')"
+        return None, f"No match (header: '{header_text[:60]}...')"
 
     except Exception as e:
         return None, f"Error: {e}"
@@ -317,7 +339,7 @@ def split_and_save_full_pdf(pdf_bytes: bytes, label: str,
     if headers is None:
         headers = SECTION_HEADERS
     if staff_map is _STAFF_SENTINEL:
-        staff_map = {"SSO": SSO_STAFF}
+        staff_map = {"SSO": SSO_STAFF, "Leadership": LEADERSHIP_STAFF}
 
     try:
         import fitz  # PyMuPDF
@@ -613,6 +635,29 @@ if not st.session_state.admin_authed:
                 st.session_state.show_admin_login = False
                 st.rerun()
 
+def _show_split_report(state_key: str):
+    """Show the per-page detection report from the last split (survives st.rerun)."""
+    results = st.session_state.get(state_key)
+    if not results:
+        return
+    missing = [p for p, m in results.items() if p != "_debug" and m.startswith("⚠️")]
+    if missing:
+        st.warning("Some sections weren't found: "
+                   + ", ".join(PROGRAM_LABELS.get(p, p) for p in missing)
+                   + ". Check the page details below, or upload those pages with "
+                     "'Single section'.")
+    else:
+        st.success("✅ All sections uploaded!")
+    for prog, msg in results.items():
+        if prog != "_debug":
+            st.markdown(f"**{PROGRAM_LABELS.get(prog, prog)}:** {msg}")
+    if "_debug" in results:
+        with st.expander("🔍 Page Detection Details", expanded=bool(missing)):
+            st.text(results["_debug"])
+    if st.button("Dismiss report", key=f"dismiss_{state_key}"):
+        st.session_state.pop(state_key, None)
+        st.rerun()
+
 # ── Upload Panel (only shown when admin authenticated) ────────────────────────
 if st.session_state.admin_authed:
     st.markdown("""
@@ -632,7 +677,7 @@ if st.session_state.admin_authed:
             padding:0.75rem 1rem;font-size:0.85rem;color:#1a2e44;margin-bottom:0.75rem;">
             🧠 <strong>Smart detection:</strong> The tool reads the header band at the top of each page 
             to determine which section it belongs to. It looks for program names (Specialist Teacher, 
-            Junior Primary Program, etc.) and staff names (Naomi, Vinnie, Cheryl, etc.) to correctly 
+            Junior Primary Program, etc.) and staff names (Vinnie, Jacqui, Caitie, Bonnie, etc.) to correctly 
             group pages together. After uploading, you'll see exactly what was detected on each page.
         </div>""", unsafe_allow_html=True)
         
@@ -653,20 +698,10 @@ if st.session_state.admin_authed:
                     st.error(f"❌ Split failed: {results['error']}")
                 else:
                     st.cache_resource.clear()
-                    
-                    # Show debug info first
-                    if "_debug" in results:
-                        with st.expander("🔍 Page Detection Details", expanded=True):
-                            st.text(results["_debug"])
-                    
-                    # Show results for each program
-                    for prog, msg in results.items():
-                        if prog == "_debug":
-                            continue
-                        label = PROGRAM_LABELS.get(prog, prog)
-                        st.markdown(f"**{label}:** {msg}")
-                    st.success("✅ All sections uploaded!")
+                    st.session_state["last_split_results"] = results
                     st.rerun()
+
+        _show_split_report("last_split_results")
 
     else:
         st.markdown("""<div style="background:#eef6ff;border:1px solid #c5d3e0;border-radius:8px;
@@ -751,15 +786,10 @@ if st.session_state.admin_authed:
                     st.error(f"❌ Split failed: {results['error']}")
                 else:
                     st.cache_resource.clear()
-                    if "_debug" in results:
-                        with st.expander("🔍 Page Detection Details", expanded=True):
-                            st.text(results["_debug"])
-                    for prog, msg in results.items():
-                        if prog == "_debug":
-                            continue
-                        st.markdown(f"**{PROGRAM_LABELS.get(prog, prog)}:** {msg}")
-                    st.success("✅ Bookings uploaded!")
+                    st.session_state["last_booking_split_results"] = results
                     st.rerun()
+
+        _show_split_report("last_booking_split_results")
 
     else:
         st.markdown("""<div style="background:#e8f5e1;border:1px solid #6BBF4E;border-radius:8px;
