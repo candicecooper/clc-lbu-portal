@@ -199,11 +199,11 @@ DEFAULT_CONFIG = {
     ],
     "bulletin": {
         "enabled": True,
-        "table": "bulletins",
+        "table": "daily_bulletins",
         "date_col": "date",
         "absence_cols": ["staff_absent"],
-        "name_keys": ["Staff Absence", "Staff", "Name", "staff_absent"],
-        "reason_keys": ["Reason", "reason", "Leave Type"],
+        "name_keys": ["Staff Absence", "staff_absence", "Staff Absent", "Absent Staff"],
+        "reason_keys": ["Reason", "reason", "Leave Type", "leave_type"],
         "program_changes_col": "program_changes",
     },
     "timetable_source": {
@@ -969,43 +969,87 @@ def check_timetable_source(staff_rows, force=False):
 # ══════════════════════════════════════════════════════════════════════════════
 # DAILY BULLETIN → ABSENCE SYNC
 # ══════════════════════════════════════════════════════════════════════════════
+DATE_COL_CANDIDATES = ["date", "bulletin_date", "day", "edition_date", "for_date", "entry_date", "created_at"]
+_ISO_RX = re.compile(r"^\d{4}-\d{2}-\d{2}")
+
+
+def _bulletin_layout(client, table, want_date_col):
+    """Find the table (falling back to daily_bulletins / bulletins) and its date column."""
+    errors = []
+    for tb in [table] + [t for t in ("daily_bulletins", "bulletins") if t != table]:
+        try:
+            sample = client.table(tb).select("*").limit(1).execute().data or []
+        except Exception as e:
+            errors.append(f"{tb}: {e}")
+            continue
+        if not sample:
+            return tb, want_date_col, None
+        cols = sample[0].keys()
+        for c in [want_date_col] + DATE_COL_CANDIDATES:
+            if c in cols and _ISO_RX.match(str(sample[0].get(c) or "")):
+                return tb, c, None
+        return tb, None, (f"Found table '{tb}' but no date column (columns: {', '.join(cols)}). "
+                          "Set the date column in Setup → Daily Bulletin connection.")
+    return None, None, "Couldn't read the Daily Bulletin table — " + " | ".join(errors)[:400]
+
+
+def _walk_absences(v, name_keys, reason_keys, out, depth=0):
+    """Search any JSON shape for staff-absence rows ({'Staff Absence': name, ...}) and
+    program changes marked 'Staff Absence' ({'staff_absent': name})."""
+    if depth > 6 or v is None:
+        return
+    if isinstance(v, str):
+        t = v.strip()
+        if t[:1] in "[{":
+            try:
+                _walk_absences(json.loads(t), name_keys, reason_keys, out, depth + 1)
+            except Exception:
+                pass
+        return
+    if isinstance(v, list):
+        for x in v:
+            _walk_absences(x, name_keys, reason_keys, out, depth + 1)
+        return
+    if isinstance(v, dict):
+        nm = next((str(v[k]) for k in name_keys if isinstance(v.get(k), str) and v[k].strip()), "")
+        if nm:
+            rs = next((str(v[k]) for k in reason_keys if isinstance(v.get(k), str) and v[k].strip()), "")
+            out.append((nm, rs))
+        elif str(v.get("change_reason", "")).strip().lower() == "staff absence" and str(v.get("staff_absent") or "").strip():
+            out.append((str(v["staff_absent"]), "Program change — staff absence"))
+        for k, x in v.items():
+            if isinstance(x, (list, dict)) or (isinstance(x, str) and x.strip()[:1] in "[{"):
+                _walk_absences(x, name_keys, reason_keys, out, depth + 1)
+
+
 def read_bulletin_absences(start, end, staff_rows):
     """Returns (found {(staff_id, date): {...}}, unmatched [..], error or None)."""
     b = cfg.get("bulletin", {})
     match = build_matcher(staff_rows)
+    client = sb_bulletin()
+    table, dcol, err = _bulletin_layout(client, b.get("table") or "daily_bulletins", b.get("date_col") or "date")
+    if err:
+        return {}, [], err
+    if not dcol:
+        return {}, [], None          # table exists but is empty
     try:
-        rows = _fetch_all(lambda: sb_bulletin().table(b.get("table", "bulletins")).select("*")
-                          .gte(b.get("date_col", "date"), start.isoformat())
-                          .lte(b.get("date_col", "date"), end.isoformat()))
+        rows = _fetch_all(lambda: client.table(table).select("*")
+                          .gte(dcol, start.isoformat()).lte(dcol, end.isoformat() + "T23:59:59"))
     except Exception as e:
-        return {}, [], f"Couldn't read Daily Bulletin table '{b.get('table')}': {e}"
+        return {}, [], f"Couldn't read Daily Bulletin table '{table}': {e}"
     found, unmatched = {}, []
-    name_keys, reason_keys = b.get("name_keys", []), b.get("reason_keys", [])
+    name_keys = b.get("name_keys") or ["Staff Absence"]
+    reason_keys = b.get("reason_keys") or ["Reason"]
     for row in rows:
         try:
-            d = to_date(row.get(b.get("date_col", "date")))
+            d = to_date(row.get(dcol))
         except Exception:
             continue
         if not is_school_day(d) or d > TODAY:
             continue
         items = []
-        for col in b.get("absence_cols", []):
-            for it in as_list(row.get(col)):
-                if isinstance(it, dict):
-                    nm = next((str(it[k]) for k in name_keys if str(it.get(k) or "").strip()), "")
-                    rs = next((str(it[k]) for k in reason_keys if str(it.get(k) or "").strip()), "")
-                    if nm:
-                        items.append((nm, rs))
-                elif isinstance(it, str) and it.strip():
-                    items.append((it, ""))
-        pcol = b.get("program_changes_col")
-        if pcol:
-            for it in as_list(row.get(pcol)):
-                if isinstance(it, dict) and str(it.get("change_reason", "")).strip().lower() == "staff absence":
-                    nm = str(it.get("staff_absent") or "").strip()
-                    if nm:
-                        items.append((nm, "Program change — staff absence"))
-        for raw, reason in items:
+        _walk_absences({k: v for k, v in row.items() if k != dcol}, name_keys, reason_keys, items)
+        for raw, reason in dict.fromkeys(items):
             for one in split_names(raw):
                 portion, frac = parse_portion(one)
                 sid, why = match(one)
@@ -1915,7 +1959,7 @@ with tabs[5]:
         b = cfg.get("bulletin", {})
         b_en = st.toggle("Pull staff absences from the Daily Bulletin", value=bool(b.get("enabled", True)))
         bc1, bc2 = st.columns(2)
-        b_table = bc1.text_input("Table", b.get("table", "bulletins"))
+        b_table = bc1.text_input("Table", b.get("table", "daily_bulletins"))
         b_date = bc2.text_input("Date column", b.get("date_col", "date"))
         b_cols = bc1.text_input("Absence list column(s), comma separated", ", ".join(b.get("absence_cols", [])))
         b_names = bc2.text_input("Name field(s) inside each row", ", ".join(b.get("name_keys", [])))
