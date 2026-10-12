@@ -209,6 +209,7 @@ DEFAULT_CONFIG = {
     "timetable_source": {
         "mode": "portal",                    # portal | url | off
         "url": "",
+        "table": "timetable_store",
         "bucket": "",
         "prefix": "",
         "auto_apply": True,
@@ -797,6 +798,34 @@ def discover_portal_timetables(src):
     return sorted(latest.values(), key=lambda f: f["path"])
 
 
+def read_portal_timetable_table(src):
+    """The portal Timetable page stores each upload as a row in `timetable_store`
+    (program, filename, uploaded_at, file_data = base64 PDF). Returns the newest
+    upload for every program as [(bytes, name)], or [] if the table isn't there."""
+    import base64
+    table = (src.get("table") or "timetable_store").strip()
+    try:
+        meta = _fetch_all(lambda: sb().table(table).select("id, program, filename, uploaded_at")
+                          .order("uploaded_at", desc=True))
+    except Exception:
+        return []
+    newest = {}
+    for r in meta:
+        prog = str(r.get("program") or "")
+        if prog not in newest:                    # rows come newest first
+            newest[prog] = r
+    files = []
+    for prog, r in sorted(newest.items()):
+        try:
+            row = sb().table(table).select("file_data").eq("id", r["id"]).execute().data
+            raw = base64.b64decode(row[0]["file_data"]) if row and row[0].get("file_data") else b""
+        except Exception:
+            raw = b""
+        if raw[:4] == b"%PDF":
+            files.append((raw, f"{prog}: {r.get('filename') or 'timetable.pdf'}"))
+    return files
+
+
 def fetch_timetable_source(src):
     """Returns [(bytes, display_name), ...] or raises."""
     mode = src.get("mode", "off")
@@ -809,10 +838,15 @@ def fetch_timetable_source(src):
                                      headers={"User-Agent": "CLC-LBU-portal"})
         with urllib.request.urlopen(req, timeout=20) as r:
             return [(r.read(), url)]
+    if mode == "portal":
+        files = read_portal_timetable_table(src)
+        if files:
+            return files
     if mode in ("portal", "storage"):
         files = discover_portal_timetables(src)
         if not files:
-            raise RuntimeError("No timetable PDFs found in the portal's file storage"
+            raise RuntimeError("No timetable PDFs found in the Timetable page's table "
+                               f"('{src.get('table') or 'timetable_store'}') or in file storage"
                                + (f" (bucket '{src.get('bucket')}')" if src.get("bucket") else "")
                                + ". Set the bucket in Setup → Timetable source, or upload the PDFs on "
                                  "the NIT Timetable tab.")
@@ -851,7 +885,8 @@ def check_timetable_source(staff_rows, force=False):
     if src.get("mode", "off") == "off":
         return None
     last = st.session_state.get("nit_tt_checked", 0)
-    if not force and time.time() - last < 3600:
+    prev_ok = (load_setting("timetable_check") or {}).get("ok", True)
+    if not force and time.time() - last < (3600 if prev_ok else 120):
         return None
     st.session_state["nit_tt_checked"] = time.time()
     try:
@@ -1126,8 +1161,10 @@ if staff and TERMS:
             st.warning(f"Daily Bulletin sync failed: {e}")
 
 if TERMS and staff and not roster_table():
+    _tc = load_setting("timetable_check") or {}
     st.info("📋 No NIT timetable is in force yet, so rostered NIT shows as 0. "
-            "Go to **NIT Timetable** to review/apply one.")
+            "Go to **NIT Timetable** to review/apply one."
+            + (f"\n\n**Last timetable check:** {_tc.get('msg')}" if _tc.get("msg") else ""))
 pending_versions = [v for v in load_versions() if v.get("status") == "pending"]
 if pending_versions:
     st.warning(f"🗓️ {len(pending_versions)} new NIT timetable(s) waiting for review on the **NIT Timetable** tab.")
@@ -1877,14 +1914,19 @@ with tabs[5]:
         sc1, sc2 = st.columns(2)
         t_bucket = sc1.text_input("Storage bucket (blank = find automatically)", s0.get("bucket", ""))
         t_prefix = sc2.text_input("Folder in bucket (optional)", s0.get("prefix", ""))
+        t_table = st.text_input("Timetable page's database table", s0.get("table", "timetable_store"))
         if st.button("Show the timetable files the tracker can see"):
             try:
-                fl = discover_portal_timetables({"bucket": t_bucket, "prefix": t_prefix})
+                tf = read_portal_timetable_table({"table": t_table})
+                if tf:
+                    st.dataframe(pd.DataFrame([{"Current timetable": n, "Size": f"{len(d) // 1024} KB"}
+                                               for d, n in tf]), hide_index=True, **WIDE)
+                fl = [] if tf else discover_portal_timetables({"bucket": t_bucket, "prefix": t_prefix})
                 if fl:
                     st.dataframe(pd.DataFrame([{"File": f"{f['bucket']}/{f['path']}", "Uploaded": f["when"][:16]}
                                                for f in fl]), hide_index=True, **WIDE)
-                else:
-                    st.warning("No timetable PDFs found. Enter the bucket the Timetable page uses.")
+                elif not tf:
+                    st.warning("No timetable PDFs found in that table or in file storage.")
             except Exception as e:
                 st.error(f"Couldn't list storage: {e}")
         t_auto = st.checkbox("Apply automatically when the PDF's term matches the current or next term",
@@ -1909,7 +1951,8 @@ with tabs[5]:
         new["bulletin"] = {"enabled": bool(b_en), "table": b_table.strip(), "date_col": b_date.strip(),
                            "absence_cols": _csv(b_cols), "name_keys": _csv(b_names),
                            "reason_keys": _csv(b_reason), "program_changes_col": b_pc.strip()}
-        new["timetable_source"] = {"mode": t_mode, "url": t_url.strip(), "bucket": t_bucket.strip(),
+        new["timetable_source"] = {"mode": t_mode, "url": t_url.strip(), "table": t_table.strip() or "timetable_store",
+                                   "bucket": t_bucket.strip(),
                                    "prefix": t_prefix.strip(), "auto_apply": bool(t_auto)}
         save_setting("config", new)
         st.session_state["nit_tt_checked"] = 0
