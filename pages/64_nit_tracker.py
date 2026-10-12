@@ -334,25 +334,60 @@ def name_from_header(line):
     return cands[0] if cands else ""
 
 
+def _iter_pdf_pages(data, dpi):
+    """Yields (text, words, greyscale image, x_offset, y_offset, right_edge) per page.
+    Uses PyMuPDF (already installed for the Timetable page) or pdfplumber."""
+    try:
+        try:
+            import pymupdf as fitz
+        except ImportError:
+            import fitz
+        from PIL import Image
+        doc = fitz.open(stream=data, filetype="pdf")
+        for page in doc:
+            words = [{"x0": w[0], "top": w[1], "x1": w[2], "bottom": w[3], "text": w[4]}
+                     for w in page.get_text("words")]
+            pm = page.get_pixmap(dpi=dpi, colorspace=fitz.csGRAY, alpha=False)
+            img = Image.frombytes("L", (pm.width, pm.height), pm.samples)
+            yield page.get_text(), words, img, 0.0, 0.0, float(page.rect.width)
+        return
+    except ImportError:
+        pass
+    import pdfplumber
+    with pdfplumber.open(io.BytesIO(data)) as pdf:
+        for page in pdf.pages:
+            yield (page.extract_text() or "", page.extract_words(),
+                   page.to_image(resolution=dpi).original.convert("L"),
+                   float(page.bbox[0]), float(page.bbox[1]), float(page.bbox[2]))
+
+
 def parse_timetable_pdf(data, dpi=110):
     """One person per page, Mon–Fri columns, time rows on the left. Renders the
     page and reads the drawn grid (cell lines + fill shade) so merged sessions are
     measured by their real length. Only blocks whose label starts with NIT count."""
-    import pdfplumber
     out = {"term_label": "", "people": [], "warnings": []}
-    with pdfplumber.open(io.BytesIO(data)) as pdf:
-        for pno, page in enumerate(pdf.pages, start=1):
-            text = page.extract_text() or ""
+    if True:
+        for pno, (text, words, img, ox, oy, xmax) in enumerate(_iter_pdf_pages(data, dpi), start=1):
             if not out["term_label"]:
                 tm = re.search(r"Term\s*_?\s*(\d)\s*,\s*(\d{4})", text)
                 if tm:
                     out["term_label"] = f"{tm.group(2)} Term {tm.group(1)}"
-            lines = [l.strip() for l in text.splitlines() if l.strip()]
+            # header lines rebuilt from word positions (text order differs between PDF libraries)
+            rows = {}
+            for w in words:
+                rows.setdefault(round(w["top"] / 4), []).append(w)
+            lines = [" ".join(w["text"] for w in sorted(ws, key=lambda w: w["x0"]))
+                     for _, ws in sorted(rows.items())]
             hi = next((i for i, l in enumerate(lines) if "staff timetable" in l.lower()), None)
-            name = name_from_header(lines[hi + 1]) if hi is not None and hi + 1 < len(lines) else ""
+            name = ""
+            for l in (lines[hi + 1:hi + 4] if hi is not None else []):
+                if re.search(r"\bmonday\b", l, re.I):
+                    break
+                name = name_from_header(l)
+                if name:
+                    break
             if not name:
                 continue
-            words = page.extract_words(keep_blank_chars=False, use_text_flow=False)
             days = {}
             for w in words:
                 lw = w["text"].strip().lower()
@@ -372,12 +407,10 @@ def parse_timetable_pdf(data, dpi=110):
                 out["warnings"].append(f"Page {pno} ({name}): time rows not found — skipped.")
                 continue
 
-            img = page.to_image(resolution=dpi).original.convert("L")
             sc = dpi / 72.0
             W, H = img.size
             pix = img.load()
 
-            ox, oy = float(page.bbox[0]), float(page.bbox[1])   # some PDFs have an offset page box
 
             def px(x, y):
                 xi = min(max(int(round((x - ox) * sc)), 0), W - 1)
@@ -406,7 +439,7 @@ def parse_timetable_pdf(data, dpi=110):
                 l, r = xc, xc
                 while l > ox and not vline(l):
                     l -= 0.25
-                while r < float(page.bbox[2]) and not vline(r):
+                while r < xmax and not vline(r):
                     r += 0.25
                 cols.append((l + 1.2, r - 1.2))
             tl = cols[0][0] - 1.2
