@@ -3963,6 +3963,18 @@ def render_leader_approve_critical_page():
             st.error("❌ Failed to save approval to database")
 
 
+def _parse_dates(series):
+    """Robust date parsing for mixed formats (e.g. '2026-09-10', '2026-09-10T09:15:00',
+    '...+00:00', with/without microseconds). pandas otherwise infers ONE format from the
+    first row and silently turns every row in a different format into NaT, which made
+    valid incidents disappear from the analysis."""
+    try:
+        out = pd.to_datetime(series, utc=True, errors="coerce", format="mixed")
+    except (TypeError, ValueError):
+        out = pd.to_datetime(series, utc=True, errors="coerce")
+    return out.dt.tz_localize(None)
+
+
 def render_student_analysis_page():
     student_id = st.session_state.get("selected_student_id")
     student = get_student(student_id)
@@ -4434,9 +4446,7 @@ def render_student_analysis_page():
 
     if not quick_df.empty:
         quick_df["incident_type"] = "Quick"
-        quick_df["date_parsed"] = pd.to_datetime(
-            quick_df["date"], utc=True, errors="coerce"
-        ).dt.tz_localize(None)
+        quick_df["date_parsed"] = _parse_dates(quick_df["date"])
         if "location" in quick_df.columns:
             quick_df["location"] = quick_df["location"].apply(normalise_location)
         if "intervention" in quick_df.columns:
@@ -4447,9 +4457,7 @@ def render_student_analysis_page():
         _crit_dates_a = crit_df["created_at"] if "created_at" in crit_df.columns else pd.Series(
             [datetime.now().isoformat()] * len(crit_df), index=crit_df.index
         )
-        crit_df["date_parsed"] = pd.to_datetime(
-            _crit_dates_a, utc=True, errors="coerce"
-        ).dt.tz_localize(None)
+        crit_df["date_parsed"] = _parse_dates(_crit_dates_a)
         crit_df["severity"] = crit_df["severity"].fillna(5).astype(int) if "severity" in crit_df.columns else 5
         crit_df["antecedent"] = crit_df["ABCH_primary"].apply(lambda d: d.get("context","") if isinstance(d, dict) else "")
         # Keyword map: ABCH free-text → canonical clinical behaviour label
@@ -7334,17 +7342,13 @@ def render_student_dashboard():
     crit_df = pd.DataFrame(critical) if critical else pd.DataFrame()
     if not quick_df.empty:
         quick_df["incident_type"] = "Quick"
-        quick_df["date_parsed"] = pd.to_datetime(
-            quick_df["date"], utc=True, errors="coerce"
-        ).dt.tz_localize(None)
+        quick_df["date_parsed"] = _parse_dates(quick_df["date"])
     if not crit_df.empty:
         crit_df["incident_type"] = "Critical"
         _crit_dates = crit_df["created_at"] if "created_at" in crit_df.columns else pd.Series(
             [datetime.now().isoformat()] * len(crit_df), index=crit_df.index
         )
-        crit_df["date_parsed"] = pd.to_datetime(
-            _crit_dates, utc=True, errors="coerce"
-        ).dt.tz_localize(None)
+        crit_df["date_parsed"] = _parse_dates(_crit_dates)
         crit_df["severity"] = crit_df["severity"].fillna(5).astype(int) if "severity" in crit_df.columns else 5
         crit_df["time"] = crit_df["ABCH_primary"].apply(
             lambda d: d.get("time", "09:00:00") if isinstance(d, dict) else "09:00:00"
@@ -8706,11 +8710,11 @@ def render_support_plan_page():
     crit_df  = pd.DataFrame(critical) if critical else pd.DataFrame()
     if not quick_df.empty:
         quick_df["incident_type"] = "Quick"
-        quick_df["date_parsed"] = pd.to_datetime(quick_df["date"], errors="coerce")
+        quick_df["date_parsed"] = _parse_dates(quick_df["date"])
     if not crit_df.empty:
         crit_df["incident_type"] = "Critical"
         _crit_dates = crit_df["created_at"] if "created_at" in crit_df.columns else pd.Series([None]*len(crit_df))
-        crit_df["date_parsed"] = pd.to_datetime(_crit_dates, errors="coerce", utc=True).dt.tz_localize(None)
+        crit_df["date_parsed"] = _parse_dates(_crit_dates)
         crit_df["severity"] = crit_df["severity"].fillna(5).astype(int) if "severity" in crit_df.columns else 5
         crit_df["behaviour_type"] = crit_df["ABCH_primary"].apply(
             lambda d: d.get("behaviour", "") if isinstance(d, dict) else "") if "ABCH_primary" in crit_df.columns else ""
