@@ -3077,35 +3077,49 @@ def build_trial_suggestions(full_df, max_n: int = 3) -> list[dict]:
 
 
 def load_trials(student_id) -> list[dict]:
-    """Trials from Supabase when the table exists, merged with any held only
-    in this session (used if the table hasn't been created yet)."""
-    rows = []
-    if supabase and student_id:
-        try:
-            res = supabase.table("strategy_trials").select("*").eq("student_id", student_id).order("start_date", desc=True).execute()
-            rows = res.data or []
-            st.session_state["_trials_db_ok"] = True
-        except Exception:
-            st.session_state["_trials_db_ok"] = False
+    """Trials from Supabase (cached for the session, refreshed after any save), merged
+    with any held only in this session (used if the table hasn't been created yet)."""
+    ck = f"_trials_cache_{student_id}"
+    if ck in st.session_state:
+        rows = st.session_state[ck]
+    else:
+        rows = []
+        if supabase and student_id:
+            try:
+                res = _db_retry(lambda: supabase.table("strategy_trials").select("*").eq("student_id", student_id).order("start_date", desc=True).execute())
+                rows = res.data or []
+                st.session_state["_trials_db_ok"] = True
+                st.session_state[ck] = rows
+            except Exception as e:
+                # Only a missing table means "not saved permanently"; a network blip just retries next time.
+                if not _is_transient_db_error(e):
+                    st.session_state["_trials_db_ok"] = False
     local = st.session_state.get(f"trials_local_{student_id}", [])
     return rows + [t for t in local if t.get("id") not in {r.get("id") for r in rows}]
 
 
 def save_trial(student_id, trial: dict) -> bool:
-    """Insert or update a trial. Falls back to session storage if the table is missing."""
+    """Insert or update a trial. Falls back to session storage (returning False, with the
+    reason in session_state['_last_save_error']) if the database save fails."""
     trial = dict(trial)
     trial["student_id"] = student_id
+    st.session_state.pop(f"_trials_cache_{student_id}", None)
+    st.session_state.pop("_last_save_error", None)
     if supabase:
         try:
             if trial.get("id") and not str(trial["id"]).startswith("local-"):
                 tid = trial.pop("id")
-                supabase.table("strategy_trials").update(trial).eq("id", tid).execute()
+                _db_retry(lambda: supabase.table("strategy_trials").update(trial).eq("id", tid).execute())
             else:
                 trial.pop("id", None)
-                supabase.table("strategy_trials").insert(trial).execute()
+                _db_retry(lambda: supabase.table("strategy_trials").insert(trial).execute())
+            st.session_state.pop("_trials_save_problem", None)
+            st.session_state["_trials_db_ok"] = True
             return True
-        except Exception:
-            pass
+        except Exception as e:
+            st.session_state["_last_save_error"] = str(e)
+    else:
+        st.session_state["_last_save_error"] = "No database connection."
     loc_key = f"trials_local_{student_id}"
     lst = st.session_state.get(loc_key, [])
     if trial.get("id"):
@@ -3114,6 +3128,7 @@ def save_trial(student_id, trial: dict) -> bool:
         trial["id"] = f"local-{uuid.uuid4()}"
         lst.append(trial)
     st.session_state[loc_key] = lst
+    st.session_state["_trials_save_problem"] = True
     return False
 
 
@@ -3176,9 +3191,8 @@ def render_strategy_trials(student, full_df):
     st.caption("Suggestions are drawn from this student's own pattern. Each is a hypothesis to test, not a conclusion. "
                "Run it for a few weeks, note what you see, then record what you learned. That evidence can travel "
                "with the student to a receiving school.")
-    if st.session_state.get("_trials_db_ok") is False:
-        st.warning("Trials are not being saved permanently yet. Ask your admin to create the strategy_trials table; "
-                   "until then they only last for this session.")
+    if st.session_state.get("_trials_db_ok") is False or st.session_state.get("_trials_save_problem"):
+        show_save_problem("Strategy trials", STRATEGY_TRIALS_SQL)
     me = (st.session_state.get("current_user") or {}).get("name", "") or ""
     trials = load_trials(student_id)
     running_titles = {t.get("title") for t in trials if t.get("status") == "Running"}
@@ -3471,33 +3485,73 @@ def extract_starting_profile(text: str, student_name: str) -> dict:
 
 
 def load_starting_profile(student_id) -> dict:
+    ck = f"_profile_cache_{student_id}"
+    if ck in st.session_state:
+        return st.session_state[ck]
     if supabase and student_id:
         try:
-            res = supabase.table("starting_profiles").select("*").eq("student_id", student_id).limit(1).execute()
-            if res.data and res.data[0].get("profile"):
-                st.session_state["_profile_db_ok"] = True
-                return res.data[0]["profile"]
+            res = _db_retry(lambda: supabase.table("starting_profiles").select("*").eq("student_id", student_id).limit(1).execute())
             st.session_state["_profile_db_ok"] = True
-        except Exception:
-            st.session_state["_profile_db_ok"] = False
+            prof = (res.data[0].get("profile") if res.data else None) or st.session_state.get(f"starting_profile_{student_id}", {})
+            st.session_state[ck] = prof
+            return prof
+        except Exception as e:
+            if not _is_transient_db_error(e):
+                st.session_state["_profile_db_ok"] = False
     return st.session_state.get(f"starting_profile_{student_id}", {})
 
 
 def save_starting_profile(student_id, profile: dict, by: str = "") -> bool:
+    """Save to the database. Always keeps a session copy; returns False (and records
+    why in session_state['_last_save_error']) if the database save did not go through."""
     st.session_state[f"starting_profile_{student_id}"] = profile
-    if supabase:
+    st.session_state[f"_profile_cache_{student_id}"] = profile
+    st.session_state.pop("_last_save_error", None)
+    if not supabase:
+        st.session_state["_last_save_error"] = "No database connection."
+        return False
+    try:
+        payload = {"student_id": str(student_id), "profile": profile, "updated_by": by,
+                   "updated_at": datetime.utcnow().isoformat()}
         try:
-            payload = {"student_id": student_id, "profile": profile, "updated_by": by,
-                       "updated_at": datetime.utcnow().isoformat()}
-            ex = supabase.table("starting_profiles").select("student_id").eq("student_id", student_id).limit(1).execute()
-            if ex.data:
-                supabase.table("starting_profiles").update(payload).eq("student_id", student_id).execute()
-            else:
-                supabase.table("starting_profiles").insert(payload).execute()
-            return True
-        except Exception:
-            return False
-    return False
+            _db_retry(lambda: supabase.table("starting_profiles").upsert(payload, on_conflict="student_id").execute())
+        except TypeError:
+            _db_retry(lambda: supabase.table("starting_profiles").upsert(payload).execute())
+        st.session_state["_profile_db_ok"] = True
+        return True
+    except Exception as e:
+        st.session_state["_last_save_error"] = str(e)
+        return False
+
+
+STARTING_PROFILES_SQL = """create table if not exists starting_profiles (
+  student_id text primary key,
+  profile jsonb,
+  updated_by text,
+  updated_at timestamptz default now()
+);
+alter table starting_profiles disable row level security;"""
+
+STRATEGY_TRIALS_SQL = """create table if not exists strategy_trials (
+  id uuid primary key default gen_random_uuid(),
+  student_id text not null,
+  title text, hypothesis text, strategy text, measure text,
+  focus_session text, start_date date, review_date date, end_date date,
+  status text default 'Running', outcome text, conclusion text,
+  observations jsonb default '[]'::jsonb, created_by text,
+  created_at timestamptz default now()
+);
+alter table strategy_trials disable row level security;"""
+
+
+def show_save_problem(what: str, sql: str):
+    """Tell staff plainly when something only saved for this session, and why."""
+    err = st.session_state.get("_last_save_error", "")
+    st.warning(f"⚠️ {what} was kept for this session only, because it couldn't be saved to the database.")
+    if err:
+        st.caption(f"Reason given: {err}")
+    st.caption("This usually means the table hasn't been created yet. Copy this into the Supabase SQL Editor and run it once:")
+    st.code(sql, language="sql")
 
 
 def build_profile_trial_suggestions(profile: dict, data_suggestions: list | None = None) -> list[dict]:
@@ -3539,7 +3593,7 @@ def render_starting_profile(student):
                    "can trial in the first weeks. The student's name is removed before the AI reads it, only the themes you "
                    "confirm are kept, and the document itself is not stored.")
         if st.session_state.get("_profile_db_ok") is False:
-            st.warning("The starting_profiles table doesn't exist yet, so this only lasts for the current session.")
+            show_save_problem("The starting profile", STARTING_PROFILES_SQL)
         files = st.file_uploader("Upload one or more documents", type=["docx", "pdf", "odt", "txt"],
                                  accept_multiple_files=True, key=f"sp_files_{sid}")
         pasted = st.text_area("…or paste text here", height=120, key=f"sp_paste_{sid}",
@@ -3554,7 +3608,8 @@ def render_starting_profile(student):
                 with st.spinner("Reading and matching to strategies..."):
                     try:
                         prof = extract_starting_profile(text, student["name"])
-                        save_starting_profile(sid, prof, me)
+                        if not save_starting_profile(sid, prof, me):
+                            st.session_state[f"sp_save_problem_{sid}"] = True
                         for k in [k for k in st.session_state if str(k).startswith(f"sp_inc_") and str(k).endswith(sid)]:
                             del st.session_state[k]
                         st.rerun()
@@ -3591,16 +3646,54 @@ def render_starting_profile(student):
                                key=f"sp_ev_{i}_{sid}", label_visibility="collapsed")
             edited.append({**t, "include": inc, "evidence": ev})
         if st.button("💾 Save confirmed themes", key=f"sp_save_{sid}"):
-            save_starting_profile(sid, {**profile, "tags": edited}, me)
-            st.success("Saved. See the suggested trials under 🧪 Strategies to Trial.")
-            st.rerun()
+            if save_starting_profile(sid, {**profile, "tags": edited}, me):
+                st.session_state.pop(f"sp_save_problem_{sid}", None)
+                st.success("Saved. See the suggested trials under 🧪 Strategies to Trial.")
+                st.rerun()
+            else:
+                st.session_state[f"sp_save_problem_{sid}"] = True
+        if st.session_state.get(f"sp_save_problem_{sid}"):
+            show_save_problem("The starting profile", STARTING_PROFILES_SQL)
+
+
+import time as _time_mod
+
+
+def _is_transient_db_error(e) -> bool:
+    msg = str(e).lower()
+    return (isinstance(e, (BlockingIOError, ConnectionError, TimeoutError, OSError))
+            or any(x in msg for x in ("temporarily unavailable", "timed out", "timeout", "connection", "reset by peer",
+                                      "eof", "disconnected", "errno 11", "502", "503", "504")))
+
+
+def _db_retry(fn, tries: int = 4, base: float = 0.5):
+    """Run a database call, retrying brief network hiccups (e.g. [Errno 11]
+    'Resource temporarily unavailable') with a short back-off before giving up."""
+    for i in range(tries):
+        try:
+            return fn()
+        except Exception as e:
+            if i == tries - 1 or not _is_transient_db_error(e):
+                raise
+            _time_mod.sleep(base * (2 ** i))
+
+
+def _reload_into_session(key: str, loader):
+    """Refresh a cached list from the database, but never replace good data
+    with an empty list when the database could not be reached."""
+    st.session_state.pop("_load_failed", None)
+    data = loader()
+    if st.session_state.pop("_load_failed", False):
+        st.warning("Couldn't refresh from the database just now, so the previous data is still showing. Please try again in a moment.")
+        return
+    st.session_state[key] = data
 
 
 def load_students_from_db():
     if not supabase:
         return MOCK_STUDENTS
     try:
-        response = supabase.table('students').select('*').execute()
+        response = _db_retry(lambda: supabase.table('students').select('*').execute())
         students = []
         for row in response.data:
             students.append({
@@ -3618,6 +3711,7 @@ def load_students_from_db():
             })
         return students
     except Exception as e:
+        st.session_state["_load_failed"] = True
         st.error(f"Error loading students: {e}")
         return []
 
@@ -3660,7 +3754,7 @@ def load_staff_from_db():
     if not supabase:
         return MOCK_STAFF
     try:
-        response = supabase.table('staff').select('*').execute()
+        response = _db_retry(lambda: supabase.table('staff').select('*').execute())
         staff = []
         for row in response.data:
             staff.append({
@@ -3679,6 +3773,7 @@ def load_staff_from_db():
         return staff
     except Exception as e:
         print(f"[load_staff_from_db error]: {e}")  # log to Render logs, not UI
+        st.session_state["_load_failed"] = True
         return []
 
 def save_staff_to_db(staff_member):
@@ -3734,7 +3829,7 @@ def load_incidents_from_db(student_id=None):
         query = supabase.table('incidents').select('*')
         if student_id:
             query = query.eq('student_id', student_id)
-        response = query.execute()
+        response = _db_retry(lambda: query.execute())
         incidents = []
         for row in response.data:
             incidents.append({
@@ -3758,6 +3853,7 @@ def load_incidents_from_db(student_id=None):
             })
         return incidents
     except Exception as e:
+        st.session_state["_load_failed"] = True
         st.error(f"Error loading incidents: {e}")
         return []
 
@@ -3803,7 +3899,7 @@ def load_critical_incidents_from_db(student_id=None):
         query = supabase.table('critical_incidents').select('*')
         if student_id:
             query = query.eq('student_id', student_id)
-        response = query.execute()
+        response = _db_retry(lambda: query.execute())
         critical = []
         for row in response.data:
             critical.append({
@@ -3828,6 +3924,7 @@ def load_critical_incidents_from_db(student_id=None):
             })
         return critical
     except Exception as e:
+        st.session_state["_load_failed"] = True
         st.error(f"Error loading critical incidents: {e}")
         return []
 
@@ -4098,14 +4195,27 @@ def init_state():
     if "logged_in" not in ss: ss.logged_in = False
     if "current_user" not in ss: ss.current_user = None
     if "current_page" not in ss: ss.current_page = "login"
-    if "students" not in ss:
-        ss.students = load_students_from_db() if supabase else MOCK_STUDENTS
-    if "staff" not in ss:
-        ss.staff = load_staff_from_db() if supabase else MOCK_STAFF
-    if "incidents" not in ss:
-        ss.incidents = load_incidents_from_db() if supabase else generate_mock_incidents(70)
-    if "critical_incidents" not in ss:
-        ss.critical_incidents = load_critical_incidents_from_db() if supabase else []
+    def _init_load(key, loader, fallback):
+        # A failed load must NOT be cached as "no data": that made incidents look
+        # lost until the session was restarted. Stop with a retry button instead.
+        if key in ss:
+            return
+        if not supabase:
+            ss[key] = fallback() if callable(fallback) else fallback
+            return
+        ss.pop("_load_failed", None)
+        data = loader()
+        if ss.pop("_load_failed", False):
+            st.error("The database couldn't be reached just now (this is usually a brief network hiccup). "
+                     "Nothing has been lost. Please try again.")
+            if st.button("🔄 Try again", key=f"retry_load_{key}"):
+                st.rerun()
+            st.stop()
+        ss[key] = data
+    _init_load("students", load_students_from_db, MOCK_STUDENTS)
+    _init_load("staff", load_staff_from_db, MOCK_STAFF)
+    _init_load("incidents", load_incidents_from_db, lambda: generate_mock_incidents(70))
+    _init_load("critical_incidents", load_critical_incidents_from_db, [])
     if "selected_program" not in ss: ss.selected_program = "JP"
     if "selected_student_id" not in ss: ss.selected_student_id = None
     if "current_incident_id" not in ss: ss.current_incident_id = None
@@ -8218,8 +8328,8 @@ def _render_student_analysis_page_inner():
                         "db_exists": True,
                     })
                     if save_incident_to_db(_updated):
-                        st.session_state.incidents = load_incidents_from_db()
-                        st.session_state.critical_incidents = load_critical_incidents_from_db()
+                        _reload_into_session("incidents", load_incidents_from_db)
+                        _reload_into_session("critical_incidents", load_critical_incidents_from_db)
                         st.success("✅ Incident updated.")
                         st.rerun()
             _ve_print_data = {
@@ -8262,8 +8372,8 @@ def _render_student_analysis_page_inner():
                     }
                     try:
                         supabase.table("critical_incidents").update(_update_payload).eq("id", _ve_id).execute()
-                        st.session_state.incidents = load_incidents_from_db()
-                        st.session_state.critical_incidents = load_critical_incidents_from_db()
+                        _reload_into_session("incidents", load_incidents_from_db)
+                        _reload_into_session("critical_incidents", load_critical_incidents_from_db)
                         st.success("✅ Critical incident updated.")
                         st.rerun()
                     except Exception as e:
@@ -8402,8 +8512,8 @@ def _render_student_analysis_page_inner():
                         # incident is actually gone everywhere it's counted
                         # (program roster, dashboard, analysis), with no
                         # dependency on an in-memory id-match succeeding.
-                        st.session_state.incidents = load_incidents_from_db()
-                        st.session_state.critical_incidents = load_critical_incidents_from_db()
+                        _reload_into_session("incidents", load_incidents_from_db)
+                        _reload_into_session("critical_incidents", load_critical_incidents_from_db)
                         for k in [confirm_key, confirm2_key, f"confirm_chk_{selected_id}"]:
                             st.session_state.pop(k, None)
                         st.success("✅ Incident permanently deleted and removed from the data set.")
@@ -8667,11 +8777,17 @@ def _render_student_analysis_page_inner():
                 use_container_width=True,
                 **_dl_kwargs)
 
+    _prep_print = st.checkbox("🖨️ Prepare print versions (Full Screen + Full Analysis Word)", key=f"prep_print_{student_id}",
+                              help="Built only when ticked, so the page stays quick for everyday use.")
     st.markdown("#### 🖨️ Print the Whole Screen")
     st.caption("Prints everything on this page exactly as shown: every chart with its 'Understanding this chart' note, "
                "tables, recommendations and trials, plus the incident register and a notes page. Open the file, press Print, "
                "then pick your printer or Save as PDF.")
+    if not _prep_print:
+        st.caption("Tick the box above to prepare the print versions.")
     try:
+        if not _prep_print:
+            raise StopIteration
         _screen_html = build_print_html(
             student, full_df, list(_SCREEN["rec"]), supports_trialled=_supports_trialled,
             supports_success=_supports_success, before_after=_before_after, trials=None)
@@ -8679,6 +8795,8 @@ def _render_student_analysis_page_inner():
             "🖨️ Print-ready Full Screen (HTML)", _screen_html,
             file_name=f"FullScreen_{student['name'].replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.html",
             mime="text/html", use_container_width=True, key=f"dl_fullscreen_{student_id}")
+    except StopIteration:
+        pass
     except Exception as _e:
         st.warning(f"Could not prepare the print-ready version: {_e}")
     st.markdown("#### 📄 Full Analysis — Word version")
@@ -8686,7 +8804,7 @@ def _render_student_analysis_page_inner():
                "Window of Tolerance, patterns, considerations, Berry Street strategies, a full incident "
                "register, and a blank page for notes and agreed actions.")
     with st.spinner("Preparing print pack..."):
-        _pack_file = generate_behaviour_analysis_plan_docx(
+        _pack_file = None if not _prep_print else generate_behaviour_analysis_plan_docx(
             student, full_df, top_ant, top_beh, top_loc, top_session, risk_score, risk_level,
             supports_trialled=_supports_trialled, supports_success=_supports_success,
             before_after=_before_after, full_pack=True,
@@ -9219,8 +9337,8 @@ def render_student_dashboard():
                     # to correctly repopulate it on the next run — this
                     # guarantees the dashboard reflects the new incident
                     # immediately, with no dependency on rerun ordering.
-                    st.session_state.incidents = load_incidents_from_db()
-                    st.session_state.critical_incidents = load_critical_incidents_from_db()
+                    _reload_into_session("incidents", load_incidents_from_db)
+                    _reload_into_session("critical_incidents", load_critical_incidents_from_db)
                     _new_total = (
                         len([i for i in st.session_state.incidents if i["student_id"] == student_id])
                         + len([c for c in st.session_state.critical_incidents if c["student_id"] == student_id])
@@ -9469,8 +9587,8 @@ def render_admin_portal():
                                         # student's now-deleted records linger in the cached lists
                                         # and inflate site-wide totals elsewhere in the portal.
                                         if supabase:
-                                            st.session_state.incidents = load_incidents_from_db()
-                                            st.session_state.critical_incidents = load_critical_incidents_from_db()
+                                            _reload_into_session("incidents", load_incidents_from_db)
+                                            _reload_into_session("critical_incidents", load_critical_incidents_from_db)
                                         st.session_state[f"confirm_delete_{student['id']}"] = False
                                         st.rerun()
                                 with col_no:
