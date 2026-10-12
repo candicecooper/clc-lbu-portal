@@ -2757,8 +2757,8 @@ def load_attendance_from_db(student_id):
     if not supabase or not student_id:
         return {}
     try:
-        res = supabase.table("student_attendance") \
-            .select("*").eq("student_id", student_id).limit(1).execute()
+        res = _db_retry(lambda: supabase.table("student_attendance")
+                        .select("*").eq("student_id", student_id).limit(1).execute())
         if res.data:
             row = res.data[0]
             return {
@@ -2766,34 +2766,380 @@ def load_attendance_from_db(student_id):
                 "pt_days":      row.get("pt_days") or ["Monday","Tuesday","Wednesday","Thursday","Friday"],
                 "pt_sessions":  row.get("pt_sessions") or ["Full day"],
                 "pt_notes":     row.get("pt_notes") or "",
+                "schedule":     row.get("schedule") or [],
+                "exceptions":   row.get("exceptions") or [],
             }
     except Exception:
         pass
     return {}
 
 
-def save_attendance_to_db(student_id, absent_dates, pt_days, pt_sessions, pt_notes):
-    """Upsert attendance record for a student in Supabase."""
+ATTENDANCE_SQL = """alter table student_attendance add column if not exists schedule jsonb default '[]'::jsonb;
+alter table student_attendance add column if not exists exceptions jsonb default '[]'::jsonb;"""
+
+
+def save_attendance_to_db(student_id, absent_dates, pt_days, pt_sessions, pt_notes, schedule=None, exceptions=None):
+    """Upsert attendance record for a student in Supabase. If the newer schedule /
+    exceptions columns don't exist yet, the older fields are still saved and a flag is set
+    so the page can show the one-line SQL needed."""
     if not supabase or not student_id:
         return False
-    try:
-        data = {
-            "student_id":   student_id,
-            "absent_dates": absent_dates or [],
-            "pt_days":      pt_days or [],
-            "pt_sessions":  pt_sessions or [],
-            "pt_notes":     pt_notes or "",
-        }
-        # Try update first
-        res = supabase.table("student_attendance") \
-            .update(data).eq("student_id", student_id).execute()
+    base = {
+        "student_id":   student_id,
+        "absent_dates": absent_dates or [],
+        "pt_days":      pt_days or [],
+        "pt_sessions":  pt_sessions or [],
+        "pt_notes":     pt_notes or "",
+    }
+    full = dict(base)
+    if schedule is not None: full["schedule"] = schedule
+    if exceptions is not None: full["exceptions"] = exceptions
+
+    def _write(data):
+        res = _db_retry(lambda: supabase.table("student_attendance").update(data).eq("student_id", student_id).execute())
         if not res.data:
-            # No existing row — insert
-            supabase.table("student_attendance").insert(data).execute()
+            _db_retry(lambda: supabase.table("student_attendance").insert(data).execute())
+
+    try:
+        _write(full)
+        st.session_state.pop("_att_new_cols_missing", None)
         return True
     except Exception as e:
+        st.session_state["_last_save_error"] = str(e)
+        if len(full) > len(base):
+            try:
+                _write(base)
+                st.session_state["_att_new_cols_missing"] = True
+                return True
+            except Exception as e2:
+                st.session_state["_last_save_error"] = str(e2)
         return False
 
+
+# ── Attendance model: weekly schedule (versioned) + dated exceptions ─────────
+# Staff set the usual weekly pattern once and only touch it when the pattern changes
+# ("applies from" a given Monday). Day-to-day variation is recorded as an exception
+# only when it happens, so no one needs to enter attendance daily.
+ATT_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+ATT_DAYS_FULL = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+ATT_SESSIONS = ["Morning", "Middle", "Afternoon"]
+ATT_SESSION_LABEL = {"Morning": "AM", "Middle": "Mid", "Afternoon": "PM"}
+ATT_TYPES = ["Absent", "Finished early", "Arrived late", "Different sessions", "Extra day", "No school"]
+ATT_TYPE_HELP = {
+    "Absent": "Did not attend at all",
+    "Finished early": "Went home before the end of the day (e.g. a planned day end to avoid escalation)",
+    "Arrived late": "Missed the start of the day",
+    "Different sessions": "Attended a different mix of sessions to usual",
+    "Extra day": "Attended on a day they don't usually",
+    "No school": "Holiday, closure or student-free day (not counted as expected attendance)",
+}
+ATT_REASONS = ["Day end to avoid escalation", "Illness", "Appointment", "Family / personal",
+               "Suspension / exclusion", "Other"]
+ATT_ESCALATION_REASON = "Day end to avoid escalation"
+
+
+def _att_monday(d):
+    return d - timedelta(days=d.weekday())
+
+
+def _att_sess_text(sessions) -> str:
+    sessions = [x for x in ATT_SESSIONS if x in (sessions or [])]
+    if len(sessions) == len(ATT_SESSIONS): return "Full day"
+    if not sessions: return "—"
+    return " + ".join(sessions)
+
+
+def attendance_state(student_id) -> dict:
+    """The student's attendance model, cached per session. Legacy fields (regular days,
+    sessions, absent dates) are converted the first time so nothing already entered is lost."""
+    ck = f"att2_{student_id}"
+    if ck in st.session_state:
+        return st.session_state[ck]
+    state = {"schedule": [], "exceptions": [], "notes": ""}
+    leg = load_attendance_from_db(student_id)
+    if leg:
+        state["notes"] = leg.get("pt_notes", "") or ""
+        state["schedule"] = list(leg.get("schedule") or [])
+        state["exceptions"] = list(leg.get("exceptions") or [])
+        if not state["schedule"]:
+            pt_days = leg.get("pt_days") or ATT_DAYS_FULL
+            sess_opts = leg.get("pt_sessions") or ["Full day"]
+            sess = set()
+            for o in sess_opts:
+                if o == "Full day": sess |= set(ATT_SESSIONS)
+                elif o == "Morning only": sess.add("Morning")
+                elif o == "Middle of day only": sess.add("Middle")
+                elif o == "Afternoon only": sess.add("Afternoon")
+                elif o == "Morning + Middle": sess |= {"Morning", "Middle"}
+                elif o == "Middle + Afternoon": sess |= {"Middle", "Afternoon"}
+            sess = [x for x in ATT_SESSIONS if x in sess] or list(ATT_SESSIONS)
+            days_map = {ATT_DAYS[i]: (sess if ATT_DAYS_FULL[i] in pt_days else []) for i in range(5)}
+            if any(v != list(ATT_SESSIONS) for v in days_map.values()):
+                state["schedule"] = [{"from": "2000-01-01", "days": days_map, "note": ""}]
+        have = {e.get("date") for e in state["exceptions"]}
+        for d in leg.get("absent_dates") or []:
+            if d not in have:
+                state["exceptions"].append({"date": d, "type": "Absent", "sessions": [], "reason": "", "note": ""})
+    st.session_state[ck] = state
+    return state
+
+
+def attendance_persist(student_id, state) -> bool:
+    """Save the model and refresh the older session keys other parts of the page still read."""
+    state["schedule"] = sorted(state.get("schedule", []), key=lambda v: v["from"])
+    state["exceptions"] = sorted(state.get("exceptions", []), key=lambda e: e["date"])
+    st.session_state[f"att2_{student_id}"] = state
+    absent = sorted({e["date"] for e in state["exceptions"] if e.get("type") == "Absent"})
+    st.session_state[f"absent_dates_{student_id}"] = absent
+    cur = attendance_current_days(state)
+    days_on = [ATT_DAYS_FULL[i] for i, dname in enumerate(ATT_DAYS) if cur.get(dname)]
+    full_week = all(set(cur.get(d, [])) == set(ATT_SESSIONS) for d in ATT_DAYS)
+    return save_attendance_to_db(student_id, absent, days_on, ["Full day"] if full_week else ["See weekly schedule"],
+                                 state.get("notes", ""), schedule=state["schedule"], exceptions=state["exceptions"])
+
+
+def attendance_current_days(state, on=None) -> dict:
+    """Sessions per weekday in force on a given date (default today)."""
+    on = on or date.today()
+    vers = sorted(state.get("schedule", []), key=lambda v: v["from"])
+    if not vers:
+        return {d: list(ATT_SESSIONS) for d in ATT_DAYS}
+    chosen = vers[0]
+    for v in vers:
+        if v["from"] <= on.isoformat():
+            chosen = v
+    return {d: list(chosen["days"].get(d, [])) for d in ATT_DAYS}
+
+
+def attendance_day(state, d) -> dict:
+    """Planned vs actual sessions for one date, after any exception."""
+    exc = next((e for e in state.get("exceptions", []) if e.get("date") == d.isoformat()), None)
+    planned = attendance_current_days(state, d).get(ATT_DAYS[d.weekday()], []) if d.weekday() < 5 else []
+    if exc and exc.get("type") == "No school":
+        return {"planned": [], "actual": [], "exc": exc, "no_school": True}
+    actual = planned
+    if exc:
+        actual = [] if exc.get("type") == "Absent" else [x for x in ATT_SESSIONS if x in (exc.get("sessions") or [])]
+    return {"planned": planned, "actual": actual, "exc": exc, "no_school": False}
+
+
+def attendance_summary(state, start, end) -> dict:
+    exp = act = 0
+    days_on = early = esc = absent = 0
+    esc_dates, early_dates = [], []
+    d = start
+    while d <= end:
+        day = attendance_day(state, d)
+        if not day["no_school"]:
+            exp += len(day["planned"]); act += len(day["actual"])
+            if day["actual"]: days_on += 1
+            exc = day["exc"]
+            if exc:
+                if exc["type"] == "Absent": absent += 1
+                if exc["type"] == "Finished early":
+                    early += 1; early_dates.append(d)
+                    if exc.get("reason") == ATT_ESCALATION_REASON:
+                        esc += 1; esc_dates.append(d)
+        d += timedelta(days=1)
+    return {"expected": exp, "attended": act, "lost": max(exp - act, 0), "days_attended": days_on,
+            "absent_days": absent, "early_days": early, "escalation_day_ends": esc,
+            "early_dates": early_dates, "esc_dates": esc_dates}
+
+
+def render_attendance_tracking(student_id):
+    """Weekly schedule + exceptions + week view. Edits save immediately."""
+    state = attendance_state(student_id)
+    if st.session_state.get("_att_new_cols_missing"):
+        st.warning("⚠️ Saved, but the newer schedule details can't be stored permanently until two columns are added. "
+                   "Copy this into the Supabase SQL Editor and run it once:")
+        st.code(ATTENDANCE_SQL, language="sql")
+    st.caption("Set the usual week once. Only change it when the pattern changes, and add an exception only on days that "
+               "differ. Nothing needs entering on days that go to plan.")
+
+    # ── week view ──
+    wk = st.date_input("Week to view", value=date.today(), key=f"att_wk_{student_id}")
+    mon = _att_monday(wk)
+    rows = {"Planned": [], "Actual": [], "Note": []}
+    heads = []
+    for i in range(5):
+        d = mon + timedelta(days=i)
+        day = attendance_day(state, d)
+        heads.append(f"{ATT_DAYS[i]} {d.strftime('%-d/%-m')}")
+        fmt = lambda lst: "  ".join(f"{ATT_SESSION_LABEL[x]}{'✓' if x in lst else '·'}" for x in ATT_SESSIONS)
+        rows["Planned"].append("No school" if day["no_school"] else fmt(day["planned"]))
+        rows["Actual"].append("—" if day["no_school"] else fmt(day["actual"]))
+        e = day["exc"]
+        rows["Note"].append("" if not e else (e["type"] + (f": {e['reason']}" if e.get("reason") else "")))
+    st.table(pd.DataFrame(rows, index=None).T.rename(columns=dict(enumerate(heads))))
+
+    t1, t2 = st.tabs(["📅 Usual weekly schedule", "✏️ Add an exception for a day"])
+
+    # ── usual weekly schedule ──
+    with t1:
+        cur = attendance_current_days(state)
+        for dname in ATT_DAYS:
+            if f"att_sched_{student_id}_{dname}" not in st.session_state:
+                st.session_state[f"att_sched_{student_id}_{dname}"] = cur[dname]
+        presets = {
+            "Choose a quick start…": None,
+            "Full time (all sessions, Mon–Fri)": {d: list(ATT_SESSIONS) for d in ATT_DAYS},
+            "Mornings only, Mon–Fri": {d: ["Morning"] for d in ATT_DAYS},
+            "Mon–Wed full days": {d: (list(ATT_SESSIONS) if d in ("Mon", "Tue", "Wed") else []) for d in ATT_DAYS},
+            "Tue–Thu full days": {d: (list(ATT_SESSIONS) if d in ("Tue", "Wed", "Thu") else []) for d in ATT_DAYS},
+        }
+        pc1, pc2 = st.columns([3, 1])
+        pick = pc1.selectbox("Quick start", list(presets), key=f"att_preset_{student_id}", label_visibility="collapsed")
+        if pc2.button("Apply", key=f"att_preset_go_{student_id}", use_container_width=True) and presets[pick]:
+            for dname in ATT_DAYS:
+                st.session_state[f"att_sched_{student_id}_{dname}"] = presets[pick][dname]
+        cols = st.columns(5)
+        new_days = {}
+        for i, dname in enumerate(ATT_DAYS):
+            new_days[dname] = cols[i].multiselect(ATT_DAYS_FULL[i], ATT_SESSIONS, key=f"att_sched_{student_id}_{dname}")
+        frm = st.date_input("Applies from (the Monday this pattern starts)", value=_att_monday(date.today()),
+                            key=f"att_from_{student_id}")
+        notes = st.text_input("Schedule notes (optional)", value=state.get("notes", ""), key=f"att_notes_{student_id}",
+                              placeholder="e.g. Building up to full days over Term 4")
+        if st.button("💾 Save weekly schedule", type="primary", key=f"att_save_sched_{student_id}", use_container_width=True):
+            ver = {"from": frm.isoformat(), "days": {d: [x for x in ATT_SESSIONS if x in new_days[d]] for d in ATT_DAYS}, "note": notes}
+            state["schedule"] = [v for v in state["schedule"] if v["from"] != ver["from"]] + [ver]
+            state["notes"] = notes
+            attendance_persist(student_id, state)
+            st.success("✅ Schedule saved.")
+            st.rerun()
+        if state["schedule"]:
+            st.markdown("**Schedule history** (the pattern in force on each date is used for the analysis)")
+            for v in sorted(state["schedule"], key=lambda v: v["from"], reverse=True):
+                txt = " · ".join(f"{d} {_att_sess_text(v['days'].get(d, []))}" for d in ATT_DAYS)
+                c1, c2 = st.columns([6, 1])
+                c1.markdown(f"From **{v['from'] if v['from'] != '2000-01-01' else 'the start'}**: {txt}")
+                if c2.button("Remove", key=f"att_rmv_{student_id}_{v['from']}"):
+                    state["schedule"] = [x for x in state["schedule"] if x["from"] != v["from"]]
+                    attendance_persist(student_id, state); st.rerun()
+
+    # ── exceptions ──
+    with t2:
+        c1, c2 = st.columns(2)
+        d1 = c1.date_input("Date", value=date.today(), key=f"att_ex_date_{student_id}")
+        typ = c2.selectbox("What happened", ATT_TYPES, key=f"att_ex_type_{student_id}")
+        st.caption(ATT_TYPE_HELP[typ])
+        d2 = d1
+        if typ in ("Absent", "No school"):
+            if st.checkbox("Several days in a row", key=f"att_ex_multi_{student_id}_{typ}"):
+                d2 = st.date_input("Last day", value=d1, min_value=d1, key=f"att_ex_end_{student_id}_{typ}")
+        sessions = []
+        if typ not in ("Absent", "No school"):
+            default = {"Finished early": ["Morning", "Middle"], "Arrived late": ["Middle", "Afternoon"],
+                       "Extra day": list(ATT_SESSIONS)}.get(typ) or attendance_day(state, d1)["planned"]
+            sessions = st.multiselect("Sessions attended", ATT_SESSIONS, default=default,
+                                      key=f"att_ex_sess_{student_id}_{typ}_{d1.isoformat()}")
+        rdef = {"Finished early": 0, "Absent": 1, "Arrived late": 1}.get(typ, 5)
+        reason = st.selectbox("Reason", ATT_REASONS, index=rdef, key=f"att_ex_reason_{student_id}_{typ}")
+        note = st.text_input("Note (optional)", key=f"att_ex_note_{student_id}",
+                             placeholder="e.g. Left after recess when the first signs of escalation appeared")
+        if st.button("➕ Add exception", type="primary", key=f"att_ex_add_{student_id}", use_container_width=True):
+            added, d = 0, d1
+            while d <= d2:
+                if d.weekday() < 5 or typ in ("Extra day", "Different sessions"):
+                    state["exceptions"] = [e for e in state["exceptions"] if e["date"] != d.isoformat()] + [
+                        {"date": d.isoformat(), "type": typ, "sessions": sessions,
+                         "reason": ("" if typ == "No school" else reason), "note": note}]
+                    added += 1
+                d += timedelta(days=1)
+            if added:
+                attendance_persist(student_id, state)
+                st.rerun()
+            else:
+                st.warning("That range only covers weekend days.")
+        excs = sorted(state["exceptions"], key=lambda e: e["date"], reverse=True)
+        if excs:
+            st.markdown(f"**Recorded exceptions ({len(excs)})**, most recent first")
+            for e in excs[:12]:
+                c1, c2 = st.columns([6, 1])
+                extra = (f" ({_att_sess_text(e.get('sessions'))})" if e["type"] in ("Finished early", "Arrived late", "Different sessions", "Extra day") else "")
+                c1.markdown(f"**{e['date']}** · {e['type']}{extra}" + (f" · {e['reason']}" if e.get("reason") else "")
+                            + (f" · *{e['note']}*" if e.get("note") else ""))
+                if c2.button("Remove", key=f"att_ex_rm_{student_id}_{e['date']}"):
+                    state["exceptions"] = [x for x in state["exceptions"] if x["date"] != e["date"]]
+                    attendance_persist(student_id, state); st.rerun()
+            if len(excs) > 12:
+                st.caption(f"{len(excs) - 12} older exception(s) not shown.")
+        else:
+            st.info("No exceptions recorded. Days are assumed to go to plan.")
+
+
+def render_attendance_context(student, full_df):
+    """Attendance in the analysis: how much school the student actually attended, incidents
+    relative to that, and what early finishes show."""
+    sid = student["id"]
+    state = attendance_state(sid)
+    if not state["schedule"] and not state["exceptions"]:
+        return
+    if full_df is None or full_df.empty or "date_parsed" not in full_df.columns:
+        return
+    start, end = full_df["date_parsed"].min().date(), full_df["date_parsed"].max().date()
+    sm = attendance_summary(state, start, end)
+    if sm["expected"] == 0:
+        return
+    st.markdown("### 🗓️ Attendance Context")
+    st.caption("Incident counts mean more when set against how much school the student actually attended.")
+    n = len(full_df)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Sessions expected", sm["expected"])
+    c2.metric("Sessions attended", sm["attended"], f"{sm['attended'] / sm['expected'] * 100:.0f}% of expected")
+    c3.metric("Incidents per 10 sessions", f"{(n / sm['attended'] * 10) if sm['attended'] else 0:.1f}")
+    c4.metric("Finished early", sm["early_days"], f"{sm['escalation_day_ends']} to avoid escalation" if sm["escalation_day_ends"] else None)
+
+    # weekly chart: attended sessions and incidents per 10 attended sessions
+    wk, d = [], _att_monday(start)
+    inc_dates = full_df["date_parsed"].dt.date
+    while d <= end:
+        wend = d + timedelta(days=6)
+        att = sum(len(attendance_day(state, d + timedelta(days=i))["actual"]) for i in range(5)
+                  if not attendance_day(state, d + timedelta(days=i))["no_school"])
+        cnt = int(((inc_dates >= d) & (inc_dates <= wend)).sum())
+        wk.append((d, att, cnt)); d += timedelta(days=7)
+    if len(wk) >= 2:
+        fig = go.Figure()
+        fig.add_bar(x=[w[0].strftime("%-d %b") for w in wk], y=[w[1] for w in wk], name="Sessions attended",
+                    marker_color="#99d5cf", yaxis="y")
+        fig.add_scatter(x=[w[0].strftime("%-d %b") for w in wk],
+                        y=[(w[2] / w[1] * 10) if w[1] else None for w in wk], name="Incidents per 10 sessions attended",
+                        mode="lines+markers", line=dict(color="#be123c", width=3), yaxis="y2")
+        fig.update_layout(height=340, margin=dict(t=30, b=40, l=50, r=50), legend=dict(orientation="h", y=1.12),
+                          yaxis=dict(title="Sessions attended"), yaxis2=dict(title="Incidents per 10 sessions", overlaying="y", side="right", rangemode="tozero"),
+                          xaxis=dict(title="Week starting"))
+        st.plotly_chart(fig, use_container_width=True)
+        busiest = max((w for w in wk if w[1]), key=lambda w: w[2] / w[1], default=None)
+        st.markdown(
+            "<div style='background:#f8fafc;border-left:4px solid #1A7A7A;border-radius:8px;padding:.75rem 1.1rem;margin:.5rem 0;"
+            "font-size:.84rem;color:#1e293b;line-height:1.65;'><b>📊 Understanding this chart:</b><br>"
+            "The bars show how many sessions the student attended each week. The line shows incidents for every 10 sessions "
+            "attended, so a quiet week caused by a short week isn't mistaken for improvement, and a busy week isn't blamed on "
+            "behaviour alone. " + (f"The highest rate was the week starting {busiest[0].strftime('%-d %b')} "
+                                    f"({busiest[2]} incident(s) in {busiest[1]} sessions)." if busiest else "") + "</div>",
+            unsafe_allow_html=True)
+
+    if sm["early_days"]:
+        st.markdown("**Early finishes**")
+        ed = set(sm["early_dates"])
+        on_day = int(inc_dates.isin(ed).sum())
+        lost = sum(len(attendance_day(state, x)["planned"]) - len(attendance_day(state, x)["actual"]) for x in ed)
+        st.markdown(f"- {sm['early_days']} day(s) finished early" + (f", {sm['escalation_day_ends']} of them planned to avoid escalation" if sm["escalation_day_ends"] else "")
+                    + f", losing {lost} session(s) in total.\n- {on_day} incident(s) were logged on those days before the student left.")
+        st.caption("A day end that heads off an escalation is a successful support, and each one also shows when the school day starts "
+                   "to become too much. Look for the session where it usually happens: it points to where a planned break, "
+                   "lower demand or a different start would be worth trialling.")
+        missed_first = {}
+        for x in ed:
+            day = attendance_day(state, x)
+            miss = [m for m in day["planned"] if m not in day["actual"]]
+            if miss:
+                missed_first[miss[0]] = missed_first.get(miss[0], 0) + 1
+        if missed_first:
+            top = max(missed_first, key=missed_first.get)
+            st.markdown(f"- Most often the first session missed was **{top}** ({missed_first[top]} of {sm['early_days']}).")
+    st.markdown("---")
 
 def load_placement_extensions_from_db(student_id):
     """Load all recorded placement extensions for a student from Supabase,
@@ -5524,23 +5870,15 @@ def _render_student_analysis_page_inner():
         if st.button("📋 Support Plan", key="sp_from_analysis"):
             go_to("support_plan", selected_student_id=student_id)
 
-    # ── Part-time schedule context ───────────────────────────────────────────
-    # ── Load saved attendance from Supabase on first render ─────────────────
-    _att_cache_key = f"att_loaded_{student_id}"
-    if _att_cache_key not in st.session_state:
-        _att_from_db = load_attendance_from_db(student_id)
-        if _att_from_db:
-            st.session_state[f"absent_dates_{student_id}"]  = _att_from_db.get("absent_dates", [])
-            st.session_state[f"pt_days_{student_id}"]       = _att_from_db.get("pt_days", ["Monday","Tuesday","Wednesday","Thursday","Friday"])
-            st.session_state[f"pt_sess_{student_id}"]       = _att_from_db.get("pt_sessions", ["Full day"])
-            st.session_state[f"pt_notes_{student_id}"]      = _att_from_db.get("pt_notes", "")
-        st.session_state[_att_cache_key] = True
-
-    _abs_key   = f"absent_dates_{student_id}"
-    _abs_stored = st.session_state.get(_abs_key, [])
-    _pt_days    = st.session_state.get(f"pt_days_{student_id}", ["Monday","Tuesday","Wednesday","Thursday","Friday"])
-    _pt_sessions = st.session_state.get(f"pt_sess_{student_id}", ["Full day"])
-    _pt_notes   = st.session_state.get(f"pt_notes_{student_id}", "")
+    # ── Attendance: weekly schedule + exceptions (legacy fields derived for older code) ──
+    _att_state = attendance_state(student_id)
+    _abs_key = f"absent_dates_{student_id}"
+    _abs_stored = sorted({e["date"] for e in _att_state["exceptions"] if e.get("type") == "Absent"})
+    st.session_state[_abs_key] = _abs_stored
+    _att_cur = attendance_current_days(_att_state)
+    _pt_days = [ATT_DAYS_FULL[i] for i, dn in enumerate(ATT_DAYS) if _att_cur.get(dn)]
+    _pt_sessions = ["Full day"] if all(set(_att_cur.get(dn, [])) == set(ATT_SESSIONS) for dn in ATT_DAYS) else ["See weekly schedule"]
+    _pt_notes = _att_state.get("notes", "")
 
     # ══ Placement Timeline ═══════════════════════════════════════════════════
     with st.expander("📌 Placement Timeline & Extensions", expanded=False):
@@ -5817,98 +6155,25 @@ def _render_student_analysis_page_inner():
                         del st.session_state[_k]
                 st.rerun()
 
-    with st.expander("⏱️ Attendance & Absence Tracking — saved automatically", expanded=False):
-        st.caption(
-            "Record attendance pattern and specific absent dates. "
-            "Data is saved automatically to the database. "
-            "Absent days appear on the frequency chart and are used in the pattern analysis below."
-        )
-
-        _att_tab1, _att_tab2 = st.tabs(["📅 Regular Schedule", "🗓️ Absent Dates"])
-
-        with _att_tab1:
-            _pt_days_new = st.multiselect(
-                "Days the student regularly attends",
-                ["Monday","Tuesday","Wednesday","Thursday","Friday"],
-                default=_pt_days,
-                key=f"pt_days_w_{student_id}"
-            )
-            _pt_sess_new = st.multiselect(
-                "Sessions attended",
-                ["Full day","Morning only","Middle of day only","Afternoon only","Morning + Middle","Middle + Afternoon"],
-                default=_pt_sessions,
-                key=f"pt_sess_w_{student_id}"
-            )
-            _pt_notes_new = st.text_area(
-                "Schedule notes",
-                value=_pt_notes,
-                placeholder="e.g. Attends Tue–Thu, mornings only. Transition to full days planned Term 2.",
-                height=65, key=f"pt_notes_w_{student_id}"
-            )
-            if st.button("💾 Save schedule", key=f"pt_save_{student_id}", type="primary", use_container_width=True):
-                st.session_state[f"pt_days_{student_id}"]  = _pt_days_new
-                st.session_state[f"pt_sess_{student_id}"]  = _pt_sess_new
-                st.session_state[f"pt_notes_{student_id}"] = _pt_notes_new
-                _pt_days = _pt_days_new; _pt_sessions = _pt_sess_new; _pt_notes = _pt_notes_new
-                save_attendance_to_db(student_id, _abs_stored, _pt_days_new, _pt_sess_new, _pt_notes_new)
-                st.success("✅ Schedule saved.")
-
-        with _att_tab2:
-            st.caption(
-                "Add dates when the student was absent. "
-                "Each date is saved immediately. Saved dates appear on the frequency chart."
-            )
-            _abs_col1, _abs_col2 = st.columns([2, 1])
-            with _abs_col1:
-                _abs_new = st.date_input(
-                    "Date to add",
-                    value=None, key=f"abs_date_input_{student_id}"
-                )
-            with _abs_col2:
-                st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("➕ Add & save", key=f"abs_add_{student_id}",
-                             type="primary", use_container_width=True):
-                    if _abs_new and str(_abs_new) not in _abs_stored:
-                        _abs_stored = sorted(_abs_stored + [str(_abs_new)])
-                        st.session_state[_abs_key] = _abs_stored
-                        save_attendance_to_db(student_id, _abs_stored, _pt_days, _pt_sessions, _pt_notes)
-                        st.rerun()
-
-            if _abs_stored:
-                st.markdown(f"**{len(_abs_stored)} absent date(s) recorded:**")
-                _abs_display_cols = st.columns(4)
-                for _i, _d in enumerate(sorted(_abs_stored)):
-                    with _abs_display_cols[_i % 4]:
-                        if st.button(f"❌ {_d}", key=f"abs_rm_{student_id}_{_i}", use_container_width=True):
-                            _abs_stored = [x for x in _abs_stored if x != _d]
-                            st.session_state[_abs_key] = _abs_stored
-                            save_attendance_to_db(student_id, _abs_stored, _pt_days, _pt_sessions, _pt_notes)
-                            st.rerun()
-            else:
-                st.info("No absent dates recorded yet — add dates above.")
+    with st.expander("⏱️ Attendance — weekly schedule & day-to-day changes (saved automatically)", expanded=False):
+        render_attendance_tracking(student_id)
 
     # ── Active attendance summary (always visible below expander) ─────────
-    _parttime_active = len(_pt_days) < 5 or (len(_pt_sessions) > 0 and "Full day" not in _pt_sessions)
-    _absent_dates    = _abs_stored
-    if _parttime_active or _absent_dates:
+    _has_sched = bool(_att_state["schedule"])
+    _n_early = sum(1 for e in _att_state["exceptions"] if e.get("type") == "Finished early")
+    if _has_sched or _att_state["exceptions"]:
         _att_html = (
             "<div style='background:#eff6ff;border-left:4px solid #3b82f6;border-radius:8px;"
             "padding:.65rem 1rem;margin:.4rem 0;font-size:.84rem;color:#1e293b;'>"
             "<b>⏱️ Attendance context active</b><br>"
         )
-        if _parttime_active:
-            _att_html += (
-                f"<b>Part-time schedule:</b> attends {len(_pt_days)}/5 days "
-                f"({", ".join(_pt_days[:3])}{"..." if len(_pt_days) > 3 else ""}). "
-                "Sessions: " + (", ".join(_pt_sessions) if _pt_sessions else "not specified") + ". "
-                "Zero-incident days may reflect absence. Time-of-day analysis reflects attended sessions only.<br>"
-            )
-        if _absent_dates:
-            _att_html += (
-                f"<b>Absent dates recorded: {len(_absent_dates)}</b> — "
-                "marked on the frequency chart below. "
-                "Zero-incident days on these dates reflect absence, not regulation.<br>"
-            )
+        if _has_sched:
+            _att_html += ("<b>This week's pattern:</b> " + " · ".join(f"{dn} {_att_sess_text(_att_cur.get(dn, []))}" for dn in ATT_DAYS)
+                          + ". Zero-incident days may reflect days not attended.<br>")
+        if _abs_stored:
+            _att_html += f"<b>Absent days recorded: {len(_abs_stored)}</b>, marked on the frequency chart below.<br>"
+        if _n_early:
+            _att_html += f"<b>Days finished early: {_n_early}</b>, shown in the Attendance Context section below.<br>"
         if _pt_notes:
             _att_html += f"<i>Note: {_pt_notes}</i>"
         _att_html += "</div>"
@@ -6244,6 +6509,7 @@ def _render_student_analysis_page_inner():
             f"<b>📊 Understanding this chart:</b><br>{_fi_insight}</div>",
             unsafe_allow_html=True
         )
+    render_attendance_context(student, full_df)
     # ══ Absence–Incident Pattern Analysis ═══════════════════════════════════
     _absent_dates_analysis = st.session_state.get(f"absent_dates_{student_id}", [])
     if _absent_dates_analysis and not full_df.empty:
