@@ -4814,6 +4814,139 @@ def login_user(email: str, password: str) -> bool:
             return True
     return False
 
+# ── Persistent sign-in ────────────────────────────────────────────────────
+# Streamlit drops st.session_state whenever the browser connection drops
+# (laptop sleep, idle tab, wifi change, refresh). To stop that logging staff out
+# and losing their place, a signed, expiring token is kept in the page URL
+# (?s=...) together with the current page (?p=) and student (?sid=). On a fresh
+# session the token is verified and the user is put straight back where they were.
+AUTH_TTL_SECONDS = 10 * 60 * 60      # stay signed in for 10 hours of the same browser tab
+AUTH_REFRESH_SECONDS = 15 * 60       # re-issue the token when this much time has passed
+
+
+def _auth_secret() -> bytes:
+    import os, hashlib
+    sec = ""
+    try:
+        sec = st.secrets.get("auth_secret", "") or ""
+    except Exception:
+        sec = ""
+    sec = sec or os.environ.get("BEHAVIOUR_AUTH_SECRET", "")
+    if not sec:
+        # Fallback: derived from existing private settings so no new setup is required.
+        parts = []
+        try:
+            parts.append(str(st.secrets.get("admin", {}).get("password", "")))
+            parts.append(str(st.secrets.get("supabase", {}).get("key", "")))
+        except Exception:
+            pass
+        parts.append(os.environ.get("BEHAVIOUR_ADMIN_PASSWORD", ""))
+        sec = "clc-lbu|" + "|".join(parts)
+    return hashlib.sha256(sec.encode("utf-8")).digest()
+
+
+def make_auth_token(user: dict) -> str:
+    import base64, hmac, hashlib, json, time
+    payload = {"id": str(user.get("id", "")), "role": user.get("role", ""),
+               "exp": int(time.time()) + AUTH_TTL_SECONDS, "iat": int(time.time())}
+    body = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode().rstrip("=")
+    sig = hmac.new(_auth_secret(), body.encode(), hashlib.sha256).hexdigest()[:32]
+    return f"{body}.{sig}"
+
+
+def read_auth_token(token: str):
+    import base64, hmac, hashlib, json, time
+    try:
+        body, sig = (token or "").split(".", 1)
+        good = hmac.new(_auth_secret(), body.encode(), hashlib.sha256).hexdigest()[:32]
+        if not hmac.compare_digest(sig, good):
+            return None
+        data = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)).decode())
+        if int(data.get("exp", 0)) < time.time():
+            return None
+        return data
+    except Exception:
+        return None
+
+
+def _qp_get(key: str) -> str:
+    try:
+        v = st.query_params.get(key, "")
+        return v[0] if isinstance(v, list) else (v or "")
+    except Exception:
+        try:
+            return st.experimental_get_query_params().get(key, [""])[0]
+        except Exception:
+            return ""
+
+
+def _qp_set(**items):
+    """Set/clear URL params (empty/None clears) without touching others, only when changed."""
+    try:
+        qp = st.query_params
+        for k, v in items.items():
+            if v:
+                if qp.get(k, "") != str(v):
+                    qp[k] = str(v)
+            elif k in qp:
+                del qp[k]
+    except Exception:
+        pass
+
+
+def restore_login_from_url() -> bool:
+    ss = st.session_state
+    data = read_auth_token(_qp_get("s"))
+    if not data:
+        return False
+    uid = data.get("id")
+    user = None
+    if uid == "admin_bypass":
+        import os
+        try:
+            em = st.secrets.get("admin", {}).get("email", "") or os.environ.get("BEHAVIOUR_ADMIN_EMAIL", "")
+        except Exception:
+            em = os.environ.get("BEHAVIOUR_ADMIN_EMAIL", "")
+        if em:
+            user = {"id": "admin_bypass", "name": "Admin", "email": em, "role": "ADM"}
+    else:
+        user = next((s for s in ss.get("staff", []) if str(s.get("id")) == str(uid)), None)
+    if not user:
+        return False
+    ss.logged_in = True
+    ss.current_user = user
+    p = _qp_get("p")
+    ss.current_page = p if (p in VALID_PAGES and p != "login") else "landing"
+    sid = _qp_get("sid")
+    if sid and any(str(s.get("id")) == sid for s in ss.get("students", [])):
+        match = next(s for s in ss.students if str(s.get("id")) == sid)
+        ss.selected_student_id = match["id"]
+    ss["_auth_issued"] = float(data.get("iat", 0))
+    return True
+
+
+def persist_login_to_url():
+    import time
+    ss = st.session_state
+    if not ss.get("logged_in") or not ss.get("current_user"):
+        return
+    issued = ss.get("_auth_issued", 0) or 0
+    if not _qp_get("s") or time.time() - issued > AUTH_REFRESH_SECONDS:
+        _qp_set(s=make_auth_token(ss.current_user))
+        ss["_auth_issued"] = time.time()
+    _qp_set(p=ss.get("current_page") if ss.get("current_page") != "landing" else "",
+            sid=str(ss.get("selected_student_id") or ""))
+
+
+def do_logout():
+    ss = st.session_state
+    ss.logged_in = False
+    ss.current_user = None
+    ss.current_page = "login"
+    ss.pop("_auth_issued", None)
+    _qp_set(s="", p="", sid="")
+
+
 def go_to(page: str, **kwargs):
     if page not in VALID_PAGES: return
     st.session_state.current_page = page
@@ -4919,8 +5052,7 @@ def render_landing_page():
     with col_logout:
         st.markdown("<div style='height:1.2rem'></div>", unsafe_allow_html=True)
         if st.button("Sign Out", key="logout_btn_landing"):
-            st.session_state.logged_in = False
-            st.session_state.current_page = "login"
+            do_logout()
             st.rerun()
     if st.session_state.current_user.get("role") == "ADM":
         st.markdown("---")
@@ -11472,11 +11604,14 @@ def main():
         return
 
     init_state()
+    if not st.session_state.logged_in:
+        restore_login_from_url()
     page = st.session_state.current_page
     if not st.session_state.logged_in:
         render_login_page()
         return
-    if page == "landing":                   render_landing_page()
+    persist_login_to_url()
+    if page == "landing":                  render_landing_page()
     elif page == "program_students":        render_program_students_page()
     elif page == "incident_log":            render_incident_log_page()
     elif page == "critical_incident":       render_critical_incident_page()
