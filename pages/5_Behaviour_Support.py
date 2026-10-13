@@ -2839,7 +2839,8 @@ ATT_TYPE_HELP = {
 ATT_ESCALATION_REASON = "Day end: avoid potential escalation"
 ATT_RESET_REASON = "Day end: needs reset"
 ATT_NEGOTIATED_REASON = "Day end: negotiated"
-ATT_REASONS = [ATT_ESCALATION_REASON, ATT_RESET_REASON, ATT_NEGOTIATED_REASON, "Illness", "Appointment",
+ATT_CI_REASON = "C.I. (critical incident)"
+ATT_REASONS = [ATT_ESCALATION_REASON, ATT_RESET_REASON, ATT_NEGOTIATED_REASON, ATT_CI_REASON, "Illness", "Appointment",
                "Family / personal", "Other"]
 ATT_DAYEND_REASONS = (ATT_ESCALATION_REASON, ATT_RESET_REASON, ATT_NEGOTIATED_REASON)
 # Earlier wording, converted automatically when a record is loaded
@@ -2977,7 +2978,8 @@ def render_attendance_tracking(student_id):
         d = mon + timedelta(days=i)
         day = attendance_day(state, d)
         heads.append(f"{ATT_DAYS[i]} {d.strftime('%-d/%-m')}")
-        fmt = lambda lst: "  ".join(f"{ATT_SESSION_LABEL[x]}{'✓' if x in lst else '·'}" for x in ATT_SESSIONS)
+        # Show only the sessions that apply (e.g. "AM  Mid"), not a tick/dot for every session
+        fmt = lambda lst: "  ".join(ATT_SESSION_LABEL[x] for x in ATT_SESSIONS if x in lst) or "—"
         rows["Planned"].append("No school" if day["no_school"] else fmt(day["planned"]))
         rows["Actual"].append("—" if day["no_school"] else fmt(day["actual"]))
         e = day["exc"]
@@ -3092,6 +3094,7 @@ ATT_CAT_COLORS = {
     "Day end: avoid potential escalation": "#d97706",
     "Day end: needs reset": "#3b82f6",
     "Day end: negotiated": "#7c3aed",
+    "C.I. (critical incident)": "#be123c",
     "Left early (other reason)": "#94a3b8",
     "Absent": "#cbd5e1",
     "Arrived late": "#c4b5a5",
@@ -3109,6 +3112,7 @@ def _att_loss_category(exc) -> str:
         if r == ATT_ESCALATION_REASON: return "Day end: avoid potential escalation"
         if r == ATT_RESET_REASON: return "Day end: needs reset"
         if r == ATT_NEGOTIATED_REASON: return "Day end: negotiated"
+        if r == ATT_CI_REASON: return "C.I. (critical incident)"
         return "Left early (other reason)"
     return "Different sessions"
 
