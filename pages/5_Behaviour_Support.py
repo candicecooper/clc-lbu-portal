@@ -2539,6 +2539,9 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
                         for _ln in (_fmt_effect(_eff.get("focus"), f"{_t.get('focus_session')} session"), _fmt_effect(_eff.get("all"), "Whole day")):
                             if _ln:
                                 _pp = _tc.add_paragraph(); arun(_pp, _ln, size=16, color="1A7A6E")
+                    _al = trial_attendance_line(student.get("id"), _st_, _en_ if _t.get("status") != "Running" else None, full_df)
+                    if _al:
+                        _pp = _tc.add_paragraph(); arun(_pp, _al, size=16, color="1A7A6E")
                     for _o in (_t.get("observations") or []):
                         _pp = _tc.add_paragraph(); arun(_pp, f"• {_o.get('date','')} — {_o.get('text','')}", size=15)
                     if _t.get("conclusion"):
@@ -2833,9 +2836,11 @@ ATT_TYPE_HELP = {
     "Extra day": "Attended on a day they don't usually",
     "No school": "Holiday, closure or student-free day (not counted as expected attendance)",
 }
-ATT_REASONS = ["Day end to avoid escalation", "Illness", "Appointment", "Family / personal",
-               "Suspension / exclusion", "Other"]
+ATT_NEGOTIATED_REASON = "Day end: needs reset, negotiated time"
+ATT_REASONS = ["Day end to avoid escalation", ATT_NEGOTIATED_REASON, "Illness", "Appointment",
+               "Family / personal", "Other"]
 ATT_ESCALATION_REASON = "Day end to avoid escalation"
+ATT_DAYEND_REASONS = (ATT_ESCALATION_REASON, ATT_NEGOTIATED_REASON)
 
 
 def _att_monday(d):
@@ -2938,7 +2943,7 @@ def attendance_summary(state, start, end) -> dict:
                 if exc["type"] == "Absent": absent += 1
                 if exc["type"] == "Finished early":
                     early += 1; early_dates.append(d)
-                    if exc.get("reason") == ATT_ESCALATION_REASON:
+                    if exc.get("reason") in ATT_DAYEND_REASONS:
                         esc += 1; esc_dates.append(d)
         d += timedelta(days=1)
     return {"expected": exp, "attended": act, "lost": max(exp - act, 0), "days_attended": days_on,
@@ -3033,8 +3038,14 @@ def render_attendance_tracking(student_id):
                        "Extra day": list(ATT_SESSIONS)}.get(typ) or attendance_day(state, d1)["planned"]
             sessions = st.multiselect("Sessions attended", ATT_SESSIONS, default=default,
                                       key=f"att_ex_sess_{student_id}_{typ}_{d1.isoformat()}")
-        rdef = {"Finished early": 0, "Absent": 1, "Arrived late": 1}.get(typ, 5)
+        rdef = {"Finished early": 0, "Absent": 2, "Arrived late": 2}.get(typ, 5)
         reason = st.selectbox("Reason", ATT_REASONS, index=rdef, key=f"att_ex_reason_{student_id}_{typ}")
+        left_t = ""
+        if typ == "Finished early":
+            left_t = st.text_input("Time they left (optional, e.g. 11:30)", key=f"att_ex_left_{student_id}",
+                                   help="For a negotiated day end, the time agreed with the student.").strip()
+            if left_t and not re.match(r"^\d{1,2}:\d{2}$", left_t):
+                st.caption("Use the form 11:30 so it can be charted. It will be saved as text otherwise.")
         note = st.text_input("Note (optional)", key=f"att_ex_note_{student_id}",
                              placeholder="e.g. Left after recess when the first signs of escalation appeared")
         if st.button("➕ Add exception", type="primary", key=f"att_ex_add_{student_id}", use_container_width=True):
@@ -3043,7 +3054,7 @@ def render_attendance_tracking(student_id):
                 if d.weekday() < 5 or typ in ("Extra day", "Different sessions"):
                     state["exceptions"] = [e for e in state["exceptions"] if e["date"] != d.isoformat()] + [
                         {"date": d.isoformat(), "type": typ, "sessions": sessions,
-                         "reason": ("" if typ == "No school" else reason), "note": note}]
+                         "reason": ("" if typ == "No school" else reason), "note": note, "left": left_t}]
                     added += 1
                 d += timedelta(days=1)
             if added:
@@ -3058,6 +3069,7 @@ def render_attendance_tracking(student_id):
                 c1, c2 = st.columns([6, 1])
                 extra = (f" ({_att_sess_text(e.get('sessions'))})" if e["type"] in ("Finished early", "Arrived late", "Different sessions", "Extra day") else "")
                 c1.markdown(f"**{e['date']}** · {e['type']}{extra}" + (f" · {e['reason']}" if e.get("reason") else "")
+                            + (f" · left {e['left']}" if e.get("left") else "")
                             + (f" · *{e['note']}*" if e.get("note") else ""))
                 if c2.button("Remove", key=f"att_ex_rm_{student_id}_{e['date']}"):
                     state["exceptions"] = [x for x in state["exceptions"] if x["date"] != e["date"]]
@@ -3068,9 +3080,96 @@ def render_attendance_tracking(student_id):
             st.info("No exceptions recorded. Days are assumed to go to plan.")
 
 
+ATT_CAT_COLORS = {
+    "Attended": "#99d5cf",
+    "Day end: avoid escalation": "#d97706",
+    "Day end: reset / negotiated time": "#3b82f6",
+    "Left early (other reason)": "#94a3b8",
+    "Absent": "#cbd5e1",
+    "Arrived late": "#c4b5a5",
+    "Different sessions": "#e9d5ff",
+}
+
+
+def _att_loss_category(exc) -> str:
+    if not exc:
+        return "Different sessions"
+    t, r = exc.get("type"), exc.get("reason")
+    if t == "Absent": return "Absent"
+    if t == "Arrived late": return "Arrived late"
+    if t == "Finished early":
+        if r == ATT_ESCALATION_REASON: return "Day end: avoid escalation"
+        if r == ATT_NEGOTIATED_REASON: return "Day end: reset / negotiated time"
+        return "Left early (other reason)"
+    return "Different sessions"
+
+
+def _att_insight(text: str) -> None:
+    st.markdown(
+        "<div style='background:#f8fafc;border-left:4px solid #1A7A7A;border-radius:8px;padding:.75rem 1.1rem;margin:.5rem 0;"
+        "font-size:.84rem;color:#1e293b;line-height:1.65;'><b>📊 Understanding this chart:</b><br>" + text + "</div>",
+        unsafe_allow_html=True)
+
+
+def attendance_analysis(state, full_df, start, end) -> dict:
+    """Everything the attendance charts and conclusions are built from."""
+    inc_dates = full_df["date_parsed"].dt.date
+    weeks, d = [], _att_monday(start)
+    while d <= end:
+        row = {"week": d, "attended": 0, "lost": {}, "incidents": int(((inc_dates >= d) & (inc_dates <= d + timedelta(days=6))).sum())}
+        for i in range(7):
+            day = attendance_day(state, d + timedelta(days=i))
+            if day["no_school"]:
+                continue
+            row["attended"] += len(day["actual"])
+            gap = len([x for x in day["planned"] if x not in day["actual"]])
+            if gap:
+                c = _att_loss_category(day["exc"])
+                row["lost"][c] = row["lost"].get(c, 0) + gap
+        weeks.append(row); d += timedelta(days=7)
+    by_dow = {n: {"attended": 0, "dayends": 0, "absent": 0, "inc": 0} for n in ATT_DAYS}
+    ended = {x: {"Day end: avoid escalation": 0, "Day end: reset / negotiated time": 0, "Left early (other reason)": 0} for x in ATT_SESSIONS}
+    dayend_dates, d = [], start
+    while d <= end:
+        if d.weekday() < 5:
+            day = attendance_day(state, d); n = ATT_DAYS[d.weekday()]
+            if not day["no_school"]:
+                by_dow[n]["attended"] += len(day["actual"])
+                e = day["exc"]
+                if e and e["type"] == "Absent": by_dow[n]["absent"] += 1
+                if e and e["type"] == "Finished early":
+                    by_dow[n]["dayends"] += 1
+                    cat = _att_loss_category(e)
+                    last = [x for x in ATT_SESSIONS if x in day["actual"]]
+                    ended[last[-1] if last else "Morning"][cat] += 1
+                    dayend_dates.append(d)
+        d += timedelta(days=1)
+    for dt, n in zip(inc_dates, full_df["date_parsed"].dt.weekday):
+        if n < 5: by_dow[ATT_DAYS[n]]["inc"] += 1
+    # what follows a day end: the next day the student attended
+    follow_inc = follow_att = 0
+    followed = 0
+    for de in dayend_dates:
+        nd = de + timedelta(days=1)
+        while nd <= end and not attendance_day(state, nd)["actual"]:
+            nd += timedelta(days=1)
+        if nd <= end:
+            followed += 1
+            follow_att += len(attendance_day(state, nd)["actual"])
+            follow_inc += int((inc_dates == nd).sum())
+    total_att = sum(w["attended"] for w in weeks)
+    other_att = max(total_att - follow_att, 0)
+    other_inc = max(len(full_df) - follow_inc - int(inc_dates.isin(set(dayend_dates)).sum()), 0)
+    half = start + (end - start) / 2
+    first_half = sum(1 for x in dayend_dates if x <= half); second_half = len(dayend_dates) - first_half
+    return {"weeks": weeks, "by_dow": by_dow, "ended": ended, "dayend_dates": dayend_dates,
+            "follow": {"n": followed, "inc": follow_inc, "att": follow_att, "other_inc": other_inc, "other_att": other_att},
+            "halves": (first_half, second_half), "total_att": total_att}
+
+
 def render_attendance_context(student, full_df):
     """Attendance in the analysis: how much school the student actually attended, incidents
-    relative to that, and what early finishes show."""
+    relative to that, and what early finishes and day ends show about what helps."""
     sid = student["id"]
     state = attendance_state(sid)
     if not state["schedule"] and not state["exceptions"]:
@@ -3081,65 +3180,138 @@ def render_attendance_context(student, full_df):
     sm = attendance_summary(state, start, end)
     if sm["expected"] == 0:
         return
-    st.markdown("### 🗓️ Attendance Context")
-    st.caption("Incident counts mean more when set against how much school the student actually attended.")
+    an = attendance_analysis(state, full_df, start, end)
     n = len(full_df)
+    st.markdown("### 🗓️ Attendance Context")
+    st.caption("Incident counts mean more when set against how much school the student actually attended, and day ends show "
+               "where the day becomes too much and whether the reset works.")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Sessions expected", sm["expected"])
     c2.metric("Sessions attended", sm["attended"], f"{sm['attended'] / sm['expected'] * 100:.0f}% of expected")
     c3.metric("Incidents per 10 sessions", f"{(n / sm['attended'] * 10) if sm['attended'] else 0:.1f}")
-    c4.metric("Finished early", sm["early_days"], f"{sm['escalation_day_ends']} to avoid escalation" if sm["escalation_day_ends"] else None)
+    c4.metric("Day ends / early finishes", sm["early_days"], f"{sm['escalation_day_ends']} planned day ends" if sm["escalation_day_ends"] else None)
 
-    # weekly chart: attended sessions and incidents per 10 attended sessions
-    wk, d = [], _att_monday(start)
-    inc_dates = full_df["date_parsed"].dt.date
-    while d <= end:
-        wend = d + timedelta(days=6)
-        att = sum(len(attendance_day(state, d + timedelta(days=i))["actual"]) for i in range(5)
-                  if not attendance_day(state, d + timedelta(days=i))["no_school"])
-        cnt = int(((inc_dates >= d) & (inc_dates <= wend)).sum())
-        wk.append((d, att, cnt)); d += timedelta(days=7)
-    if len(wk) >= 2:
+    # ── 1. weekly picture ──
+    weeks = an["weeks"]
+    if len(weeks) >= 2:
+        xs = [w["week"].strftime("%-d %b") for w in weeks]
         fig = go.Figure()
-        fig.add_bar(x=[w[0].strftime("%-d %b") for w in wk], y=[w[1] for w in wk], name="Sessions attended",
-                    marker_color="#99d5cf", yaxis="y")
-        fig.add_scatter(x=[w[0].strftime("%-d %b") for w in wk],
-                        y=[(w[2] / w[1] * 10) if w[1] else None for w in wk], name="Incidents per 10 sessions attended",
-                        mode="lines+markers", line=dict(color="#be123c", width=3), yaxis="y2")
-        fig.update_layout(height=340, margin=dict(t=30, b=40, l=50, r=50), legend=dict(orientation="h", y=1.12),
-                          yaxis=dict(title="Sessions attended"), yaxis2=dict(title="Incidents per 10 sessions", overlaying="y", side="right", rangemode="tozero"),
+        fig.add_bar(x=xs, y=[w["attended"] for w in weeks], name="Attended", marker_color=ATT_CAT_COLORS["Attended"], yaxis="y")
+        for cat in [c for c in ATT_CAT_COLORS if c != "Attended"]:
+            vals = [w["lost"].get(cat, 0) for w in weeks]
+            if any(vals):
+                fig.add_bar(x=xs, y=vals, name=cat, marker_color=ATT_CAT_COLORS[cat], yaxis="y")
+        fig.add_scatter(x=xs, y=[(w["incidents"] / w["attended"] * 10) if w["attended"] else None for w in weeks],
+                        name="Incidents per 10 sessions attended", mode="lines+markers", line=dict(color="#be123c", width=3), yaxis="y2")
+        fig.update_layout(barmode="stack", height=380, margin=dict(t=30, b=40, l=50, r=50), legend=dict(orientation="h", y=1.18),
+                          yaxis=dict(title="Sessions"), yaxis2=dict(title="Incidents per 10 sessions", overlaying="y", side="right", rangemode="tozero"),
                           xaxis=dict(title="Week starting"))
         st.plotly_chart(fig, use_container_width=True)
-        busiest = max((w for w in wk if w[1]), key=lambda w: w[2] / w[1], default=None)
-        st.markdown(
-            "<div style='background:#f8fafc;border-left:4px solid #1A7A7A;border-radius:8px;padding:.75rem 1.1rem;margin:.5rem 0;"
-            "font-size:.84rem;color:#1e293b;line-height:1.65;'><b>📊 Understanding this chart:</b><br>"
-            "The bars show how many sessions the student attended each week. The line shows incidents for every 10 sessions "
-            "attended, so a quiet week caused by a short week isn't mistaken for improvement, and a busy week isn't blamed on "
-            "behaviour alone. " + (f"The highest rate was the week starting {busiest[0].strftime('%-d %b')} "
-                                    f"({busiest[2]} incident(s) in {busiest[1]} sessions)." if busiest else "") + "</div>",
-            unsafe_allow_html=True)
+        busiest = max((w for w in weeks if w["attended"]), key=lambda w: w["incidents"] / w["attended"], default=None)
+        _att_insight("Each bar is one week of school. The teal part is the sessions the student attended; the coloured parts are sessions "
+                     "planned but not attended, by reason (amber and blue are day ends). The red line is incidents for every 10 sessions "
+                     "attended, so a short week isn't mistaken for improvement. Look for weeks where coloured blocks grow and the line "
+                     "rises or falls with them. "
+                     + (f"The highest rate was the week starting {busiest['week'].strftime('%-d %b')} ({busiest['incidents']} incident(s) in "
+                        f"{busiest['attended']} sessions)." if busiest else ""))
 
-    if sm["early_days"]:
-        st.markdown("**Early finishes**")
-        ed = set(sm["early_dates"])
-        on_day = int(inc_dates.isin(ed).sum())
-        lost = sum(len(attendance_day(state, x)["planned"]) - len(attendance_day(state, x)["actual"]) for x in ed)
-        st.markdown(f"- {sm['early_days']} day(s) finished early" + (f", {sm['escalation_day_ends']} of them planned to avoid escalation" if sm["escalation_day_ends"] else "")
-                    + f", losing {lost} session(s) in total.\n- {on_day} incident(s) were logged on those days before the student left.")
-        st.caption("A day end that heads off an escalation is a successful support, and each one also shows when the school day starts "
-                   "to become too much. Look for the session where it usually happens: it points to where a planned break, "
-                   "lower demand or a different start would be worth trialling.")
-        missed_first = {}
-        for x in ed:
-            day = attendance_day(state, x)
-            miss = [m for m in day["planned"] if m not in day["actual"]]
-            if miss:
-                missed_first[miss[0]] = missed_first.get(miss[0], 0) + 1
-        if missed_first:
-            top = max(missed_first, key=missed_first.get)
-            st.markdown(f"- Most often the first session missed was **{top}** ({missed_first[top]} of {sm['early_days']}).")
+    # ── 2. which day of the week ──
+    dow = an["by_dow"]
+    if any(v["attended"] or v["dayends"] or v["absent"] for v in dow.values()):
+        fig2 = go.Figure()
+        fig2.add_bar(x=ATT_DAYS, y=[dow[x]["dayends"] for x in ATT_DAYS], name="Day ends / early finishes", marker_color="#d97706")
+        fig2.add_bar(x=ATT_DAYS, y=[dow[x]["absent"] for x in ATT_DAYS], name="Absent days", marker_color="#cbd5e1")
+        fig2.add_scatter(x=ATT_DAYS, y=[(dow[x]["inc"] / dow[x]["attended"] * 10) if dow[x]["attended"] else None for x in ATT_DAYS],
+                         name="Incidents per 10 sessions attended", mode="lines+markers", line=dict(color="#be123c", width=3), yaxis="y2")
+        fig2.update_layout(barmode="group", height=320, margin=dict(t=30, b=40, l=50, r=50), legend=dict(orientation="h", y=1.18),
+                           yaxis=dict(title="Number of days"), yaxis2=dict(title="Incidents per 10 sessions", overlaying="y", side="right", rangemode="tozero"))
+        st.plotly_chart(fig2, use_container_width=True)
+        top_de = max(ATT_DAYS, key=lambda x: dow[x]["dayends"])
+        _att_insight("Which weekdays carry the day ends, absences and incidents. A weekday where all three rise together points to something about "
+                     "that day (the timetable, the staffing, what came before it) rather than the student alone."
+                     + (f" Day ends are most frequent on {ATT_DAYS_FULL[ATT_DAYS.index(top_de)]}s ({dow[top_de]['dayends']})." if dow[top_de]["dayends"] else ""))
+
+    # ── 3. when the day ends ──
+    if an["dayend_dates"]:
+        fig3 = go.Figure()
+        for cat in ("Day end: avoid escalation", "Day end: reset / negotiated time", "Left early (other reason)"):
+            vals = [an["ended"][x][cat] for x in ATT_SESSIONS]
+            if any(vals):
+                fig3.add_bar(x=[f"After {x}" for x in ATT_SESSIONS], y=vals, name=cat, marker_color=ATT_CAT_COLORS[cat])
+        fig3.update_layout(barmode="stack", height=300, margin=dict(t=30, b=40, l=50, r=30), legend=dict(orientation="h", y=1.2),
+                           yaxis=dict(title="Number of day ends", dtick=1))
+        st.plotly_chart(fig3, use_container_width=True)
+        tot = {x: sum(an["ended"][x].values()) for x in ATT_SESSIONS}
+        topk = max(tot, key=tot.get)
+        _att_insight("The last session the student attended on days that finished early. Day ends bunched after one session show where "
+                     "the day starts to become too much, which is the place to try a planned break, lower demand or a negotiated "
+                     f"alternative earlier. Most often the day ended after {topk} ({tot[topk]} of {len(an['dayend_dates'])}).")
+
+        # ── 4. what the data suggests ──
+        st.markdown("**What the day ends suggest**")
+        pts = []
+        f = an["follow"]
+        if f["n"] >= 3 and f["att"] and f["other_att"]:
+            r1, r2 = f["inc"] / f["att"] * 10, f["other_inc"] / f["other_att"] * 10
+            if r1 < r2 * 0.8:
+                pts.append(f"On the next day attended after a day end, incidents were lower ({r1:.1f} per 10 sessions) than on other days ({r2:.1f}). "
+                           "The reset appears to be helping the student return settled.")
+            elif r1 > r2 * 1.2:
+                pts.append(f"On the next day attended after a day end, incidents were higher ({r1:.1f} per 10 sessions) than on other days ({r2:.1f}). "
+                           "The day end may be postponing the difficulty rather than resolving it, so consider acting earlier in the day or planning the return.")
+            else:
+                pts.append(f"Incidents on the day after a day end ({r1:.1f} per 10 sessions) were similar to other days ({r2:.1f}), so there is no clear sign yet "
+                           "of the day end helping or hurting the next day.")
+        elif f["n"]:
+            pts.append(f"Only {f['n']} day end(s) have a following day to compare, which is too few to draw a conclusion yet.")
+        a1, a2 = an["halves"]
+        if len(an["dayend_dates"]) >= 4:
+            if a2 < a1:
+                pts.append(f"Day ends are reducing: {a1} in the first half of the period and {a2} in the second half.")
+            elif a2 > a1:
+                pts.append(f"Day ends are increasing: {a1} in the first half of the period and {a2} in the second half. This is worth raising at the next case meeting.")
+            else:
+                pts.append(f"Day ends are steady at {a1} in each half of the period.")
+        neg = sum(1 for dd in an["dayend_dates"] if next((e for e in state["exceptions"] if e["date"] == dd.isoformat()), {}).get("reason") == ATT_NEGOTIATED_REASON)
+        if neg:
+            pts.append(f"{neg} day end(s) were negotiated with the student, which builds their say in the plan. Note whether these become earlier, later or shorter over time.")
+        for ptxt in pts:
+            st.markdown(f"- {ptxt}")
+        st.caption("Early patterns with few days are signals to discuss, not conclusions. Absences are not counted as day ends.")
     st.markdown("---")
+
+
+def trial_attendance_line(student_id, start, end=None, full_df=None) -> str:
+    """Attendance before vs during a strategy trial: how much school the student attended,
+    how often the day ended early, and incidents per attended session."""
+    state = attendance_state(student_id)
+    if not start or (not state["schedule"] and not state["exceptions"]):
+        return ""
+    end = end or date.today()
+    if end < start:
+        return ""
+    b_start, b_end = start - timedelta(days=28), start - timedelta(days=1)
+
+    def _win(a, b):
+        sm = attendance_summary(state, a, b)
+        days = sum(1 for i in range((b - a).days + 1) if (a + timedelta(days=i)).weekday() < 5
+                   and not attendance_day(state, a + timedelta(days=i))["no_school"])
+        weeks = max(days, 1) / 5.0
+        rate = None
+        if full_df is not None and not full_df.empty and sm["attended"]:
+            d = full_df["date_parsed"].dt.date
+            rate = int(((d >= a) & (d <= b)).sum()) / sm["attended"] * 10
+        return sm, weeks, rate
+    sb, wb, rb = _win(b_start, b_end)
+    sd, wd, rd = _win(start, end)
+    if not sb["expected"] or not sd["expected"]:
+        return ""
+    bits = [f"{sb['attended'] / sb['expected'] * 100:.0f}% of expected sessions attended before, {sd['attended'] / sd['expected'] * 100:.0f}% during",
+            f"day ends/early finishes {sb['early_days'] / wb:.1f}/wk before, {sd['early_days'] / wd:.1f}/wk during"]
+    if rb is not None and rd is not None:
+        bits.append(f"incidents per 10 attended sessions {rb:.1f} before, {rd:.1f} during")
+    return "Attendance: " + "; ".join(bits) + "."
+
 
 def load_placement_extensions_from_db(student_id):
     """Load all recorded placement extensions for a student from Supabase,
@@ -3629,8 +3801,11 @@ def render_strategy_trials(student, full_df):
                 for line in (_fmt_effect(eff.get("focus"), f"{t.get('focus_session')} session"), _fmt_effect(eff.get("all"), "Whole day")):
                     if line:
                         st.markdown(f"📈 {line}")
-                st.caption("Preliminary read from logged incidents. It does not account for absences, and fewer logged incidents is only one "
-                           "measure, so weigh it with the staff observations below.")
+                _al = trial_attendance_line(student_id, start, end if not running else None, full_df)
+                if _al:
+                    st.markdown(f"🗓️ {_al}")
+                st.caption("Preliminary read from logged incidents. Fewer logged incidents is only one measure, and the attendance line shows whether "
+                           "the student was at school more or less, so weigh both with the staff observations below.")
             obs = t.get("observations") or []
             if obs:
                 st.markdown("**Staff observations**")
@@ -6424,6 +6599,17 @@ def _render_student_analysis_page_inner():
                     yanchor="bottom", font=dict(size=8, color="#94a3b8"),
                     yshift=4
                 )
+
+    # Overlay day-end markers (planned early finishes) on the daily chart
+    try:
+        _de_state = attendance_state(student_id)
+        for _de in [e for e in _de_state["exceptions"] if e.get("type") == "Finished early"]:
+            _de_lbl = date.fromisoformat(_de["date"]).strftime("%a %-d %b")
+            if _de_lbl in label_order:
+                fig1.add_annotation(x=_de_lbl, y=0.6, text="day end", showarrow=False, yanchor="bottom",
+                                    font=dict(size=9, color="#b45309"), bgcolor="#fef3c7")
+    except Exception:
+        pass
 
     # Overlay absent day markers on the chart
     _absent_dates_chart = st.session_state.get(f"absent_dates_{student_id}", [])
