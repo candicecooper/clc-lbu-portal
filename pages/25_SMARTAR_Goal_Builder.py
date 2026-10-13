@@ -1753,12 +1753,16 @@ elif view == "📊 Daily Tracking":
                 st.rerun()
 
         # ── Delete a mistaken observation ───────────────────────────────────
+        # Always visible (even with 0 entries) so the control is easy to find —
+        # only its contents depend on whether anything's been recorded yet.
         day_entries = get_tracking_entries(goal["id"], track_date.isoformat())
-        if day_entries:
-            with st.expander(
-                f"🗑 Manage observations for {track_date.strftime('%d %b %Y')} "
-                f"({len(day_entries)} recorded)"
-            ):
+        with st.expander(
+            f"🗑 Manage observations for {track_date.strftime('%d %b %Y')} "
+            f"({len(day_entries)} recorded)"
+        ):
+            if not day_entries:
+                st.caption(f"No observations recorded for {selected_name} on this date yet.")
+            else:
                 st.caption("Tapped the wrong button? Delete the incorrect observation below.")
                 for row in day_entries:
                     lvl   = row.get("performance_level", "")
