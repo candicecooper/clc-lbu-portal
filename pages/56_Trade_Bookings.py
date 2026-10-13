@@ -30,6 +30,7 @@ from supabase import create_client, Client
 from datetime import date, datetime, time as dtime, timedelta
 import pandas as pd
 import os
+import html
 
 st.set_page_config(page_title="Trade Bookings", page_icon="🔧", layout="wide", initial_sidebar_state="collapsed")
 apply_clc_theme()
@@ -114,6 +115,14 @@ LOCATIONS = [
 
 STATUSES = ["Booked", "Confirmed", "Completed", "Cancelled"]
 
+# Ventia service requests: lodged first (work order number + priority), then
+# the contractor booking is added later once Ventia says who has been allocated.
+# An "open" request has no booking date yet, so it never shows on the Calendar
+# or Daily Bulletin until it has been booked.
+PRIORITIES = ["P1", "P2", "P3", "P4"]
+PRIORITY_COLOURS = {"P1": "#c0392b", "P2": "#e8731a", "P3": "#e8a125", "P4": "#6b7280"}
+REQUEST_STATUSES = ["Requested", "Allocated"]   # Requested = waiting on Ventia; Allocated = contractor known, not yet booked
+
 # South Australian public (state) school term dates, as published by the
 # Department for Education (education.sa.gov.au/students/term-dates-south-australian-state-schools).
 # SA DfE publishes these year by year — add the next year here once they're
@@ -150,7 +159,37 @@ def fetch_bookings(sb, start_date=None, end_date=None, status_filter=None):
     if status_filter and status_filter != "All":
         query = query.eq("status", status_filter)
     result = query.order("booking_date").order("start_time").execute()
-    return result.data or []
+    rows = result.data or []
+    # Open Ventia requests have no booking date yet — they live in the
+    # "Ventia requests" tab, not in the dated bookings list or term view.
+    return [r for r in rows if r.get("booking_date")]
+
+
+def fetch_requests(sb):
+    """Open Ventia requests (no contractor booked yet), most urgent first."""
+    result = sb.table(TABLE_NAME).select("*").in_("status", REQUEST_STATUSES).execute()
+    rows = result.data or []
+    return sorted(rows, key=lambda r: (r.get("priority") or "P9", str(r.get("requested_date") or ""), r.get("id") or 0))
+
+
+def wo_matches(sb, wo_number, exclude_id=None):
+    """Existing, non-cancelled rows already using this Ventia work order number."""
+    rows = sb.table(TABLE_NAME).select("id,status").eq("ventia_wo_number", wo_number).execute().data or []
+    return [r for r in rows if r.get("id") != exclude_id and r.get("status") != "Cancelled"]
+
+
+def explain_db_error(err):
+    msg = str(err)
+    if any(k in msg for k in ("ventia_wo_number", "priority", "requested_date", "requested_by")) \
+            or "booking_date" in msg or "23502" in msg:
+        return (msg + "  —  this looks like the Ventia upgrade SQL hasn't been run yet. "
+                "Run trade_bookings_ventia_upgrade.sql in the Supabase SQL editor, then try again.")
+    return msg
+
+
+def flash(message, kind="success"):
+    """Show a message after the next rerun (a plain st.success followed by st.rerun() vanishes instantly)."""
+    st.session_state["_tb_flash"] = (kind, message)
 
 
 def insert_booking(sb, record):
@@ -161,7 +200,10 @@ def insert_booking(sb, record):
 
 
 def update_booking(sb, booking_id, record):
-    return sb.table(TABLE_NAME).update(record).eq("id", booking_id).execute()
+    result = sb.table(TABLE_NAME).update(record).eq("id", booking_id).execute()
+    if not getattr(result, "data", None):
+        raise RuntimeError("Supabase update returned no data — the change may not have been saved.")
+    return result
 
 
 def delete_booking(sb, booking_id):
@@ -181,14 +223,25 @@ def build_public_summary(work_type: str, work_summary: str) -> str:
 
 def booking_form(sb, existing=None):
     is_edit = existing is not None
-    st.subheader("Edit booking" if is_edit else "New tradesperson / contractor booking")
+    # A request already lodged with Ventia, with no contractor booked yet
+    from_request = is_edit and existing.get("status") in REQUEST_STATUSES
+    if from_request:
+        st.subheader(f"Book contractor — Ventia WO {existing.get('ventia_wo_number') or ''}")
+        st.caption(
+            f"{existing.get('priority') or ''} · {existing.get('work_type') or ''}. "
+            "Add the contractor and the date/time now that Ventia has allocated the job."
+        )
+    else:
+        st.subheader("Edit booking" if is_edit else "New tradesperson / contractor booking")
 
-    with st.form("trade_booking_form", clear_on_submit=not is_edit):
+    # Unique key per form — two forms sharing one key raises a Streamlit error
+    form_key = f"trade_booking_form_{existing['id']}" if is_edit else "trade_booking_form_new"
+    with st.form(form_key, clear_on_submit=not is_edit):
         col1, col2 = st.columns(2)
         with col1:
             booking_date = st.date_input(
                 "Date",
-                value=pd.to_datetime(existing["booking_date"]).date() if is_edit else date.today(),
+                value=pd.to_datetime(existing["booking_date"]).date() if is_edit and existing.get("booking_date") else date.today(),
             )
             start_time = st.time_input(
                 "Expected start time",
@@ -215,12 +268,24 @@ def booking_form(sb, existing=None):
             contact_email = st.text_input("Contact email (optional)", value=existing.get("contact_email", "") if is_edit else "")
             booked_by = st.text_input(
                 "Booked by",
-                value=existing.get("booked_by", "") if is_edit else _tb_staff_name(),
+                value=(existing.get("booked_by") or _tb_staff_name()) if is_edit else _tb_staff_name(),
             )
-            status = st.selectbox(
-                "Status",
-                STATUSES,
-                index=STATUSES.index(existing["status"]) if is_edit and existing.get("status") in STATUSES else 0,
+            default_status = existing.get("status") if is_edit and existing.get("status") in STATUSES else "Booked"
+            status = st.selectbox("Status", STATUSES, index=STATUSES.index(default_status))
+
+        colv1, colv2 = st.columns(2)
+        with colv1:
+            ventia_wo_number = st.text_input(
+                "Ventia work order no. (optional)",
+                value=(existing.get("ventia_wo_number") or "") if is_edit else "",
+            )
+        with colv2:
+            _prio_opts = [""] + PRIORITIES
+            _cur_prio = (existing.get("priority") or "") if is_edit else ""
+            priority = st.selectbox(
+                "Ventia priority (optional)", _prio_opts,
+                index=_prio_opts.index(_cur_prio) if _cur_prio in _prio_opts else 0,
+                format_func=lambda p: p or "Not set",
             )
 
         st.markdown("---")
@@ -292,6 +357,11 @@ def booking_form(sb, existing=None):
                 "booked_by": booked_by,
                 "status": status,
             }
+            # Only send the Ventia columns when there is something to record (or
+            # something to clear), so plain bookings keep working either way.
+            for _key, _val in (("ventia_wo_number", ventia_wo_number.strip()), ("priority", priority)):
+                if _val or (is_edit and existing.get(_key)):
+                    record[_key] = _val or None
 
             try:
                 if is_edit:
@@ -299,13 +369,197 @@ def booking_form(sb, existing=None):
                 else:
                     insert_booking(sb, record)
             except Exception as _save_err:
-                st.error(f"⚠️ Couldn't save this booking — nothing was recorded: {_save_err}")
+                st.error(f"⚠️ Couldn't save this booking — nothing was recorded: {explain_db_error(_save_err)}")
                 return
 
             saved_label = build_public_summary(work_type, work_summary)
-            st.success(f"✅ Saved: {booking_date.strftime('%A %-d %B')} — {saved_label} ({company_name})")
-            if is_edit:
-                del st.session_state["editing_booking"]
+            flash(f"✅ Saved: {booking_date.strftime('%A %-d %B')} — {saved_label} ({company_name})")
+            st.session_state.pop("editing_booking", None)
+            st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# UI: Ventia service requests — lodge first, book the contractor later
+# ---------------------------------------------------------------------------
+
+def request_form(sb, existing=None):
+    is_edit = existing is not None
+    st.subheader("Edit Ventia request" if is_edit else "Lodge a Ventia service request")
+    st.caption(
+        "Record the work order number and priority when you lodge the job with Ventia. "
+        "The contractor and booking details are added later, once Ventia tells you who has been allocated."
+    )
+
+    form_key = f"ventia_request_form_{existing['id']}" if is_edit else "ventia_request_form_new"
+    with st.form(form_key, clear_on_submit=not is_edit):
+        c1, c2 = st.columns(2)
+        with c1:
+            wo_number = st.text_input(
+                "Ventia work order number",
+                value=(existing.get("ventia_wo_number") or "") if is_edit else "",
+            )
+            _prio_opts = [""] + PRIORITIES
+            _cur_prio = (existing.get("priority") or "") if is_edit else ""
+            priority = st.selectbox(
+                "Priority", _prio_opts,
+                index=_prio_opts.index(_cur_prio) if _cur_prio in _prio_opts else 0,
+                format_func=lambda p: p or "Select priority…",
+            )
+            work_type = st.selectbox(
+                "Type of service required", WORK_TYPES,
+                index=WORK_TYPES.index(existing["work_type"]) if is_edit and existing.get("work_type") in WORK_TYPES else 0,
+            )
+        with c2:
+            requested_date = st.date_input(
+                "Date lodged",
+                value=pd.to_datetime(existing["requested_date"]).date() if is_edit and existing.get("requested_date") else date.today(),
+            )
+            requested_by = st.text_input(
+                "Lodged by",
+                value=(existing.get("requested_by") or _tb_staff_name()) if is_edit else _tb_staff_name(),
+            )
+            location_onsite = st.selectbox(
+                "Location onsite", LOCATIONS,
+                index=LOCATIONS.index(existing["location_onsite"]) if is_edit and existing.get("location_onsite") in LOCATIONS else 0,
+            )
+
+        work_summary = st.text_input(
+            "Short work summary (becomes the generic Calendar/Bulletin line once a contractor is booked — keep it brief)",
+            value=(existing.get("work_summary") or "") if is_edit else "",
+            placeholder="e.g. repairing wall, blocked drain, replacing air-con unit",
+        )
+        st.caption(f"Public display preview: **{build_public_summary(work_type, work_summary)}**")
+        internal_notes = st.text_area(
+            "Notes on the fault / job (staff only — never shown on Calendar or Bulletin)",
+            value=(existing.get("internal_notes") or "") if is_edit else "",
+        )
+
+        submitted = st.form_submit_button("Save request")
+        if submitted:
+            if not wo_number.strip() or not priority:
+                st.error("A Ventia work order number and a priority (P1–P4) are both required.")
+                return
+
+            record = {
+                "ventia_wo_number": wo_number.strip(),
+                "priority": priority,
+                "work_type": work_type,
+                "display_category": DISPLAY_CATEGORY_MAP.get(work_type, "Onsite Works"),
+                "work_summary": work_summary.strip(),
+                "internal_notes": internal_notes.strip(),
+                "location_onsite": location_onsite,
+                "requested_date": requested_date.isoformat(),
+                "requested_by": requested_by.strip(),
+            }
+            try:
+                if wo_matches(sb, wo_number.strip(), exclude_id=existing["id"] if is_edit else None):
+                    st.error(f"Work order {wo_number.strip()} is already recorded in this tool — "
+                             "find it in the Ventia requests list or the bookings list instead of entering it twice.")
+                    return
+                if is_edit:
+                    update_booking(sb, existing["id"], record)
+                else:
+                    record.update({
+                        "booking_date": None, "status": "Requested",
+                        # blank strings (not NULL) so the booking form and lists never show "None"
+                        "company_name": "", "contact_name": "", "contact_phone": "", "contact_email": "",
+                        "access_requirements": "", "booked_by": "",
+                    })
+                    insert_booking(sb, record)
+            except Exception as _save_err:
+                st.error(f"⚠️ Couldn't save this request — nothing was recorded: {explain_db_error(_save_err)}")
+                return
+
+            flash(f"✅ Request saved: WO {wo_number.strip()} ({priority}) — {build_public_summary(work_type, work_summary)}. "
+                  "It will stay in the open list until you book a contractor.")
+            st.session_state.pop("editing_request", None)
+            st.rerun()
+
+
+def requests_view(sb, open_requests, load_error=None):
+    st.subheader("Open Ventia requests")
+    st.caption(
+        "Jobs lodged with Ventia that don't have a contractor booked yet — most urgent first. "
+        "When Ventia tells you who has been allocated and you've agreed a time, click **Book contractor**. "
+        "These don't appear on the Calendar or Daily Bulletin until they're booked."
+    )
+    if load_error:
+        st.error(f"⚠️ Couldn't load Ventia requests: {load_error}")
+        return
+    if not open_requests:
+        st.info("No open Ventia requests. Lodge one above and it will wait here until you book a contractor.")
+        return
+
+    today_d = date.today()
+    for r in open_requests:
+        rid = r["id"]
+        wo = r.get("ventia_wo_number") or "no WO no."
+        prio = r.get("priority") or "—"
+        state = "Awaiting allocation" if r.get("status") == "Requested" else "Allocated — needs booking"
+        title = f"{prio} · WO {wo} · {r.get('work_type') or ''}"
+        if r.get("work_summary"):
+            title += f" — {r['work_summary']}"
+        title += f"  [{state}]"
+
+        with st.expander(title):
+            colour = PRIORITY_COLOURS.get(prio, "#6b7280")
+            st.markdown(
+                f'<span style="background:{colour};color:white;padding:.15rem .6rem;border-radius:10px;'
+                f'font-weight:700;font-size:.85rem;">{html.escape(prio)}</span> '
+                f'<span style="font-weight:600;">{state}</span>',
+                unsafe_allow_html=True,
+            )
+            if r.get("requested_date"):
+                try:
+                    lodged = pd.to_datetime(r["requested_date"]).date()
+                    waited = (today_d - lodged).days
+                    st.write(f"**Lodged:** {lodged.strftime('%a %-d %b %Y')} ({waited} day{'s' if waited != 1 else ''} ago)"
+                             + (f" by {r['requested_by']}" if r.get("requested_by") else ""))
+                except Exception:
+                    pass
+            st.write(f"**Service required:** {r.get('work_type') or ''}")
+            st.write(f"**Location:** {r.get('location_onsite') or ''}")
+            if r.get("company_name"):
+                st.write(f"**Contractor allocated:** {r['company_name']}")
+            if r.get("internal_notes"):
+                st.write(f"**Notes:** {r['internal_notes']}")
+
+            if r.get("status") == "Requested":
+                alloc_co = st.text_input("Contractor allocated by Ventia (optional)", key=f"alloc_co_{rid}",
+                                         placeholder="Fill in if Ventia has told you who it is")
+                if st.button("✅ Ventia has allocated a contractor", key=f"alloc_{rid}"):
+                    changes = {"status": "Allocated"}
+                    if alloc_co.strip():
+                        changes["company_name"] = alloc_co.strip()
+                    try:
+                        update_booking(sb, rid, changes)
+                    except Exception as _e:
+                        st.error(f"⚠️ Couldn't update this request: {explain_db_error(_e)}")
+                    else:
+                        flash(f"WO {wo} marked as allocated — book the contractor when you've agreed a time.")
+                        st.rerun()
+
+            ca, cb, cc = st.columns(3)
+            with ca:
+                if st.button("📅 Book contractor", key=f"book_{rid}", type="primary"):
+                    st.session_state.pop("editing_request", None)
+                    st.session_state["editing_booking"] = r
+                    st.rerun()
+            with cb:
+                if st.button("✏️ Edit request", key=f"editreq_{rid}"):
+                    st.session_state.pop("editing_booking", None)
+                    st.session_state["editing_request"] = r
+                    st.rerun()
+            with cc:
+                sure = st.checkbox("Tick to confirm cancelling", key=f"cancel_ok_{rid}")
+                if st.button("🚫 Cancel request", key=f"cancel_{rid}", disabled=not sure):
+                    try:
+                        update_booking(sb, rid, {"status": "Cancelled"})
+                    except Exception as _e:
+                        st.error(f"⚠️ Couldn't cancel this request: {explain_db_error(_e)}")
+                    else:
+                        flash(f"WO {wo} cancelled.")
+                        st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -344,6 +598,7 @@ def list_view(sb):
             if s in (b.get("company_name") or "").lower()
             or s in (b.get("contact_name") or "").lower()
             or s in (b.get("work_summary") or "").lower()
+            or s in (b.get("ventia_wo_number") or "").lower()
         ]
 
     if not bookings:
@@ -352,8 +607,12 @@ def list_view(sb):
 
     for b in bookings:
         header = f"{b['booking_date']} — {build_public_summary(b['work_type'], b['work_summary'])} — {b.get('company_name','')}"
+        if b.get("ventia_wo_number"):
+            header += f" — WO {b['ventia_wo_number']}"
         with st.expander(header):
             st.write(f"**Status:** {b.get('status','')}")
+            if b.get("ventia_wo_number"):
+                st.write(f"**Ventia WO:** {b['ventia_wo_number']}" + (f" ({b['priority']})" if b.get("priority") else ""))
             st.write(f"**Time:** {b.get('start_time','')} – {b.get('end_time','')}")
             st.write(f"**Location:** {b.get('location_onsite','')}")
             st.write(f"**Company:** {b.get('company_name','')}")
@@ -378,7 +637,7 @@ def list_view(sb):
             with colB:
                 if st.button("Delete", key=f"delete_{b['id']}"):
                     delete_booking(sb, b["id"])
-                    st.success("Deleted.")
+                    flash("Booking deleted.")
                     st.rerun()
 
 
@@ -468,7 +727,11 @@ def term_view(sb):
                                 f'<div style="background:#eef6f6;border-left:3px solid {status_dot};padding:.25rem .4rem;'
                                 f'margin:.3rem .3rem 0;border-radius:4px;font-size:.68rem;line-height:1.25;">'
                                 f'<strong>{t_str}</strong> {label}<br>'
-                                f'<span style="color:#888;">{b.get("company_name","")}</span></div>'
+                                f'<span style="color:#888;">{b.get("company_name","")}</span>'
+                                + (f'<br><span style="color:#888;">WO {html.escape(str(b["ventia_wo_number"]))}'
+                                   f'{" · " + html.escape(str(b["priority"])) if b.get("priority") else ""}</span>'
+                                   if b.get("ventia_wo_number") else "")
+                                + '</div>'
                             )
                         body_html = chips + '<div style="height:.3rem;"></div>'
 
@@ -501,14 +764,38 @@ def main():
 
     sb = supabase
 
+    # Result of the last save/update (shown after the rerun so it actually stays on screen)
+    _flash = st.session_state.pop("_tb_flash", None)
+    if _flash:
+        (st.success if _flash[0] == "success" else st.error)(_flash[1])
+
+    # While a booking or request is being edited, show only that form —
+    # no tabs underneath, so it can't be missed or clash with the "new" forms.
     if "editing_booking" in st.session_state:
         booking_form(sb, existing=st.session_state["editing_booking"])
-        if st.button("Cancel edit"):
-            del st.session_state["editing_booking"]
+        if st.button("Cancel", key="cancel_edit_booking"):
+            st.session_state.pop("editing_booking", None)
             st.rerun()
-        st.markdown("---")
+        return
+    if "editing_request" in st.session_state:
+        request_form(sb, existing=st.session_state["editing_request"])
+        if st.button("Cancel", key="cancel_edit_request"):
+            st.session_state.pop("editing_request", None)
+            st.rerun()
+        return
 
-    tab1, tab2, tab3 = st.tabs(["📋 View bookings", "➕ Add booking", "🗓️ Term view"])
+    try:
+        open_requests, request_err = fetch_requests(sb), None
+    except Exception as _req_err:
+        open_requests, request_err = [], str(_req_err)
+
+    tab0, tab1, tab2, tab3 = st.tabs([
+        f"📨 Ventia requests ({len(open_requests)})", "📋 View bookings", "➕ Add booking", "🗓️ Term view",
+    ])
+    with tab0:
+        with st.expander("➕ Lodge a new Ventia request", expanded=not open_requests):
+            request_form(sb)
+        requests_view(sb, open_requests, request_err)
     with tab1:
         list_view(sb)
     with tab2:
@@ -528,7 +815,10 @@ except Exception as _page_err:
 #
 # 1) Run trade_bookings_schema.sql once in the SQL editor of the same
 #    Supabase project your other tables (clc_events, pac_meetings, etc.)
-#    already live in.
+#    already live in. If the trade_bookings table ALREADY exists (it does if
+#    you've been using this tool), run trade_bookings_ventia_upgrade.sql
+#    instead — it adds the Ventia work order / priority columns and lets
+#    requests exist without a booking date.
 #
 # 2) Push this file as 56_Trade_Bookings.py into your Streamlit pages
 #    folder in the clc-lbu-portal repo, alongside 12_Calendar.py, and
