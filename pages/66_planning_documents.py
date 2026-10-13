@@ -8,10 +8,10 @@ st.set_page_config(page_title="Planning Documents", page_icon="📄", layout="wi
 
 BUCKET = "planning-documents"
 MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-PROGRAMS = {"JP": ("Junior Primary", "Reception to Year 2", "#44546A"),
-            "PY": ("Primary Years", "Years 3 to 6", "#6B4226"),
-            "SY": ("Senior Years", "Years 7 to 10", "#2F4858"),
-            "ALL": ("All programs", "Specialist and whole-unit documents", "#475569")}
+DEFAULT_SECTIONS = [("JP", "Junior Primary", "Reception to Year 2", "#44546A", 1),
+                    ("PY", "Primary Years", "Years 3 to 6", "#6B4226", 2),
+                    ("SY", "Senior Years", "Years 7 to 10", "#2F4858", 3),
+                    ("ALL", "All programs", "Specialist and whole-unit documents", "#475569", 4)]
 
 
 def _call_first(module_name, names):
@@ -101,12 +101,25 @@ def admin_gate():
     return False
 
 
+def load_sections():
+    """Sections come from Supabase; falls back to the four defaults if the table is empty or missing."""
+    try:
+        r = get_client().table("planning_doc_sections").select("*").order("sort_order").execute()
+        if r.data:
+            return {x["code"]: (x["name"], x.get("subtitle") or "", x.get("colour") or "#475569") for x in r.data}, r.data
+    except Exception:
+        pass
+    d = {c: (n, sub, col) for c, n, sub, col, _ in DEFAULT_SECTIONS}
+    return d, []
+
+
 # ---- staff-level gate (same shared module as the other staff tools)
 _call_first("staff_auth", ["require_staff_auth", "require_staff", "check_staff_auth", "staff_gate"])
 
 st.title("Planning Documents")
-tab_dl, tab_admin = st.tabs(["Download", "Admin"])
+tab_dl, tab_admin = st.tabs(["Download", "Admin: add, replace and organise"])
 
+SECTIONS, SECTION_ROWS = load_sections()
 try:
     rows = load_rows()
     db_ok = True
@@ -115,15 +128,23 @@ except Exception as e:
     st.error("The document list could not be loaded. Check that planning_documents_schema.sql has been run and the "
              "Supabase secrets are set. Detail: " + str(e)[:200])
 
+def sec_label(code):
+    return SECTIONS.get(code, (code,))[0]
+
+def doc_label(r):
+    return f"{sec_label(r['program'])} - {r['title']} (v{r['version']})"
+
 with tab_dl:
     st.write("Download a blank Word copy to complete for each unit or student. Save it under a new name so the "
              "original template stays clean. Older versions are listed under each document.")
     q = st.text_input("Search documents", "").lower().strip()
-    for code, (name, sub, colour) in PROGRAMS.items():
+    shown = 0
+    for code, (name, sub, colour) in SECTIONS.items():
         cur = [r for r in rows if r["program"] == code and r["is_current"]
                and q in (r["title"] + " " + (r["description"] or "")).lower()]
         if not cur:
             continue
+        shown += len(cur)
         st.markdown(f"<h3 style='color:{colour};margin-bottom:0'>{name}</h3><div style='color:#666'>{sub}</div>",
                     unsafe_allow_html=True)
         cols = st.columns(2)
@@ -149,18 +170,39 @@ with tab_dl:
                                                        mime=MIME, key=f"d_{o['id']}")
                                 except Exception:
                                     st.caption(f"Version {o['version']} unavailable")
-    if db_ok and not rows:
-        st.info("No documents have been added yet. Use the Admin tab to upload the first ones.")
+    if db_ok and not shown:
+        st.info("No documents to show. Use the Admin tab to upload documents.")
 
 with tab_admin:
     if not admin_gate():
         st.stop()
     if not db_ok:
         st.stop()
+    cur_all = [r for r in rows if r["is_current"]]
+    codes = list(SECTIONS)
 
-    st.subheader("Add a new document")
+    st.subheader("1. Replace a document with a new version")
+    st.caption("The old version stays available under Previous versions.")
+    if cur_all:
+        with st.form("new_ver", clear_on_submit=True):
+            pick = st.selectbox("Document", cur_all, format_func=doc_label)
+            nver = st.text_input("New version number", placeholder="e.g. 1.1")
+            nup = st.file_uploader("Updated Word file", type=["docx"])
+            if st.form_submit_button("Publish new version"):
+                if not (nver.strip() and nup):
+                    st.error("A version number and a Word file are required.")
+                else:
+                    upload(pick["program"], pick["title"], pick.get("description") or "", nver.strip(), nup)
+                    get_client().table("planning_documents").update({"is_current": False}).eq("id", pick["id"]).execute()
+                    st.cache_data.clear()
+                    st.success("New version published.")
+                    st.rerun()
+    else:
+        st.info("No documents yet. Add one below.")
+
+    st.subheader("2. Add a new document")
     with st.form("add_doc", clear_on_submit=True):
-        prog = st.selectbox("Group", list(PROGRAMS), format_func=lambda c: PROGRAMS[c][0])
+        prog = st.selectbox("Section", codes, format_func=sec_label)
         title = st.text_input("Title")
         desc = st.text_area("Short description")
         ver = st.text_input("Version", "1.0")
@@ -171,28 +213,71 @@ with tab_admin:
             else:
                 upload(prog, title.strip(), desc.strip(), ver.strip() or "1.0", up)
                 st.cache_data.clear()
-                st.success(f"Added {title.strip()} (version {ver}).")
+                st.success(f"Added {title.strip()}.")
+                st.rerun()
 
-    st.subheader("Publish a new version")
-    cur_all = [r for r in rows if r["is_current"]]
-    if cur_all:
-        with st.form("new_ver", clear_on_submit=True):
-            pick = st.selectbox("Document", cur_all, format_func=lambda r: f"{PROGRAMS[r['program']][0]} - {r['title']} (v{r['version']})")
-            nver = st.text_input("New version number", placeholder="1.1")
-            nup = st.file_uploader("Updated Word file", type=["docx"])
-            if st.form_submit_button("Publish new version"):
-                if not (nver.strip() and nup):
-                    st.error("A version number and a Word file are required.")
+    st.subheader("3. Create or edit sections")
+    if not SECTION_ROWS:
+        st.warning("Sections can only be saved once the planning_doc_sections table has been created "
+                   "(see planning_documents_schema.sql).")
+    with st.form("new_sec", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        sname = c1.text_input("New section name", placeholder="e.g. Specialist Program")
+        ssub = c2.text_input("Subtitle (optional)")
+        c3, c4 = st.columns(2)
+        scol = c3.color_picker("Colour", "#475569")
+        sord = c4.number_input("Display order", 1, 999, len(SECTIONS) + 1)
+        if st.form_submit_button("Create section"):
+            if not sname.strip():
+                st.error("A section name is required.")
+            else:
+                code = re.sub(r"[^A-Za-z0-9]+", "_", sname.strip()).strip("_")[:30] or "SEC"
+                get_client().table("planning_doc_sections").upsert(
+                    {"code": code, "name": sname.strip(), "subtitle": ssub.strip(), "colour": scol, "sort_order": int(sord)}).execute()
+                st.success(f"Section '{sname.strip()}' created. Add documents to it above.")
+                st.rerun()
+    if SECTION_ROWS:
+        with st.form("edit_sec"):
+            esec = st.selectbox("Edit existing section", [x["code"] for x in SECTION_ROWS], format_func=sec_label)
+            cur_s = next(x for x in SECTION_ROWS if x["code"] == esec)
+            en = st.text_input("Name", cur_s["name"])
+            es = st.text_input("Subtitle", cur_s.get("subtitle") or "")
+            ec = st.color_picker("Colour", cur_s.get("colour") or "#475569")
+            eo = st.number_input("Display order", 1, 999, int(cur_s.get("sort_order") or 100))
+            b1, b2 = st.columns(2)
+            save = b1.form_submit_button("Save section changes")
+            dele = b2.form_submit_button("Delete section (only if empty)")
+            if save:
+                get_client().table("planning_doc_sections").update(
+                    {"name": en.strip(), "subtitle": es.strip(), "colour": ec, "sort_order": int(eo)}).eq("code", esec).execute()
+                st.success("Section updated.")
+                st.rerun()
+            if dele:
+                if any(r["program"] == esec for r in rows):
+                    st.error("Move or remove the documents in this section first.")
                 else:
-                    upload(pick["program"], pick["title"], pick.get("description") or "", nver.strip(), nup)
-                    get_client().table("planning_documents").update({"is_current": False}).eq("id", pick["id"]).execute()
-                    st.cache_data.clear()
-                    st.success("New version published. The previous version is kept under Previous versions.")
+                    get_client().table("planning_doc_sections").delete().eq("code", esec).execute()
+                    st.success("Section deleted.")
+                    st.rerun()
 
-    st.subheader("Remove a document from the list")
+    st.subheader("4. Edit, move or remove a document")
     if cur_all:
-        rm = st.selectbox("Document to remove", cur_all, key="rm",
-                          format_func=lambda r: f"{PROGRAMS[r['program']][0]} - {r['title']} (v{r['version']})")
-        if st.button("Remove from list"):
-            get_client().table("planning_documents").update({"hidden": True}).eq("program", rm["program"]).eq("title", rm["title"]).execute()
-            st.success("Removed from the list. The files stay in storage.")
+        ed = st.selectbox("Document", cur_all, format_func=doc_label, key="ed_doc")
+        with st.form(f"edit_doc_{ed['id']}"):
+            nt = st.text_input("Title", ed["title"])
+            nd = st.text_area("Description", ed.get("description") or "")
+            ns = st.selectbox("Section", codes, index=codes.index(ed["program"]) if ed["program"] in codes else 0,
+                              format_func=sec_label)
+            c1, c2 = st.columns(2)
+            sv = c1.form_submit_button("Save changes")
+            rmv = c2.form_submit_button("Remove from list")
+            if sv:
+                get_client().table("planning_documents").update(
+                    {"title": nt.strip(), "description": nd.strip(), "program": ns}
+                ).eq("program", ed["program"]).eq("title", ed["title"]).execute()
+                st.success("Saved.")
+                st.rerun()
+            if rmv:
+                get_client().table("planning_documents").update({"hidden": True}).eq("program", ed["program"]).eq("title", ed["title"]).execute()
+                st.success("Removed from the list. The files stay in storage.")
+                st.rerun()
