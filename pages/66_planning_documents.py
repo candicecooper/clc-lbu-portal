@@ -51,9 +51,36 @@ def safe_name(s):
     return re.sub(r"[^A-Za-z0-9._-]+", "_", s)
 
 
+def ensure_bucket():
+    """Create the storage bucket if it does not exist yet (needs a key allowed to create buckets)."""
+    try:
+        names = [b.name if hasattr(b, "name") else b.get("name") for b in get_client().storage.list_buckets()]
+        if BUCKET not in names:
+            get_client().storage.create_bucket(BUCKET, options={"public": False})
+    except Exception:
+        pass
+
+
 def upload(program, title, desc, version, up):
     path = f"{program}/{datetime.now():%Y%m%d%H%M%S}_{safe_name(up.name)}"
-    get_client().storage.from_(BUCKET).upload(path, up.getvalue(), {"content-type": MIME})
+    try:
+        get_client().storage.from_(BUCKET).upload(path, up.getvalue(), {"content-type": MIME})
+    except Exception as e:
+        msg = str(getattr(e, "message", "") or e)
+        if "not found" in msg.lower() or "bucket" in msg.lower():
+            ensure_bucket()
+            try:
+                get_client().storage.from_(BUCKET).upload(path, up.getvalue(), {"content-type": MIME})
+            except Exception as e2:
+                st.error("Upload failed: " + str(getattr(e2, "message", "") or e2))
+                st.info("Fix in Supabase: Storage > create a bucket named planning-documents, then run the storage "
+                        "policy line from planning_documents_schema.sql.")
+                st.stop()
+        else:
+            st.error("Upload failed: " + msg)
+            st.info("If this mentions row-level security or a policy, run the storage policy line from "
+                    "planning_documents_schema.sql. If it mentions the bucket, create a bucket named planning-documents.")
+            st.stop()
     get_client().table("planning_documents").insert({
         "program": program, "title": title, "description": desc, "version": version,
         "file_name": up.name, "storage_path": path, "is_current": True}).execute()
