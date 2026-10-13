@@ -2777,8 +2777,19 @@ def load_attendance_from_db(student_id):
     return {}
 
 
-ATTENDANCE_SQL = """alter table student_attendance add column if not exists schedule jsonb default '[]'::jsonb;
-alter table student_attendance add column if not exists exceptions jsonb default '[]'::jsonb;"""
+ATTENDANCE_SQL = """create table if not exists student_attendance (
+  student_id text primary key,
+  absent_dates jsonb default '[]'::jsonb,
+  pt_days jsonb default '[]'::jsonb,
+  pt_sessions jsonb default '[]'::jsonb,
+  pt_notes text default '',
+  schedule jsonb default '[]'::jsonb,
+  exceptions jsonb default '[]'::jsonb,
+  updated_at timestamptz default now()
+);
+alter table student_attendance add column if not exists schedule jsonb default '[]'::jsonb;
+alter table student_attendance add column if not exists exceptions jsonb default '[]'::jsonb;
+alter table student_attendance disable row level security;"""
 
 
 def save_attendance_to_db(student_id, absent_dates, pt_days, pt_sessions, pt_notes, schedule=None, exceptions=None):
