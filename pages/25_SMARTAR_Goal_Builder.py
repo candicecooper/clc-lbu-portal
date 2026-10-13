@@ -408,6 +408,30 @@ def get_session_counts(goal_id, track_date):
         return {}
 
 
+def get_tracking_entries(goal_id, track_date):
+    """Full tracking rows (including id) for one goal on one date — powers the
+    delete-a-mistaken-observation UI in Daily Tracking."""
+    try:
+        return (
+            sb.table("smartar_tracking").select("id, session_time, performance_level, recorded_at")
+            .eq("goal_id", goal_id)
+            .eq("session_date", track_date)
+            .order("recorded_at")
+            .execute().data or []
+        )
+    except Exception:
+        return []
+
+
+def delete_tracking_entry(tracking_id) -> bool:
+    try:
+        sb.table("smartar_tracking").delete().eq("id", tracking_id).execute()
+        return True
+    except Exception as e:
+        st.error(f"Delete error: {e}")
+        return False
+
+
 def archive_goal(goal_id, reason: str = ""):
     try:
         sb.table("smartar_goals").update({
@@ -1727,6 +1751,62 @@ elif view == "📊 Daily Tracking":
             if st.button("I understand — will refine goal as needed", key=f"ack_{goal['id']}"):
                 st.session_state.pop("show_ref_alert", None)
                 st.rerun()
+
+        # ── Delete a mistaken observation ───────────────────────────────────
+        day_entries = get_tracking_entries(goal["id"], track_date.isoformat())
+        if day_entries:
+            with st.expander(
+                f"🗑 Manage observations for {track_date.strftime('%d %b %Y')} "
+                f"({len(day_entries)} recorded)"
+            ):
+                st.caption("Tapped the wrong button? Delete the incorrect observation below.")
+                for row in day_entries:
+                    lvl   = row.get("performance_level", "")
+                    sess  = row.get("session_time", "")
+                    stamp = row.get("recorded_at", "")
+                    time_str = ""
+                    if stamp:
+                        try:
+                            time_str = datetime.fromisoformat(
+                                str(stamp).replace("Z", "+00:00")
+                            ).strftime("%I:%M %p")
+                        except Exception:
+                            time_str = ""
+
+                    confirm_key = f"confirm_del_track_{row['id']}"
+                    dcol1, dcol2 = st.columns([4, 1])
+                    with dcol1:
+                        st.markdown(
+                            f"{LEVEL_EMOJI.get(lvl,'')} **{sess}** — {lvl}"
+                            + (f"  ·  logged {time_str}" if time_str else "")
+                        )
+                    with dcol2:
+                        if st.button("🗑 Delete", key=f"del_track_{row['id']}",
+                                     use_container_width=True):
+                            st.session_state[confirm_key] = True
+                            st.rerun()
+                    if st.session_state.get(confirm_key):
+                        st.warning(
+                            f"Delete this {lvl} observation for {sess} "
+                            f"({track_date.strftime('%d %b %Y')})? This can't be undone."
+                        )
+                        ccol1, ccol2 = st.columns(2)
+                        with ccol1:
+                            if st.button("✅ Confirm delete", key=f"del_track_confirm_{row['id']}",
+                                         type="primary", use_container_width=True):
+                                if delete_tracking_entry(row["id"]):
+                                    st.session_state.pop(confirm_key, None)
+                                    st.success("Observation deleted.")
+                                    st.rerun()
+                        with ccol2:
+                            if st.button("Cancel", key=f"del_track_cancel_{row['id']}",
+                                         use_container_width=True):
+                                st.session_state.pop(confirm_key, None)
+                                st.rerun()
+                    st.markdown(
+                        "<hr style='margin:6px 0;border:none;border-top:1px solid #eee;'>",
+                        unsafe_allow_html=True,
+                    )
 
         st.markdown("---")
 
