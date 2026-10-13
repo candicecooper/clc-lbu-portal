@@ -2851,7 +2851,7 @@ ATT_ESCALATION_REASON = "Day end: avoid potential escalation"
 ATT_RESET_REASON = "Day end: needs reset"
 ATT_NEGOTIATED_REASON = "Day end: negotiated"
 ATT_CI_REASON = "C.I. (critical incident)"
-ATT_REASONS = [ATT_ESCALATION_REASON, ATT_RESET_REASON, ATT_NEGOTIATED_REASON, ATT_CI_REASON, "Illness", "Appointment",
+ATT_REASONS = [ATT_ESCALATION_REASON, ATT_RESET_REASON, ATT_NEGOTIATED_REASON, ATT_CI_REASON, "Re-entry meeting", "Illness", "Appointment",
                "Family / personal", "Other"]
 ATT_DAYEND_REASONS = (ATT_ESCALATION_REASON, ATT_RESET_REASON, ATT_NEGOTIATED_REASON)
 # Earlier wording, converted automatically when a record is loaded
@@ -3077,12 +3077,14 @@ def render_attendance_tracking(student_id):
             c1, c2, c3 = st.columns([2.2, 1.2, 2.6])
             rk = f"attwr_{student_id}_{mon.isoformat()}_{ATT_DAYS[i]}"
             reason = c1.selectbox("Reason", ATT_REASONS, index=ATT_REASONS.index(dflt), key=f"{rk}_r")
-            left = ""
+            left = arrived = ""
             if typ == "Finished early":
                 left = c2.text_input("Left at (e.g. 11:30)", value=ex.get("left", "") if same else "", key=f"{rk}_l").strip()
+            elif typ == "Arrived late":
+                arrived = c2.text_input("Arrived at (e.g. 10:15)", value=ex.get("arrived", "") if same else "", key=f"{rk}_a").strip()
             note = c3.text_input("Note (optional)", value=ex.get("note", "") if same else "", key=f"{rk}_n",
                                  placeholder="e.g. Left after recess when signs of escalation appeared")
-            details[i] = {"reason": reason, "note": note, "left": left}
+            details[i] = {"reason": reason, "note": note, "left": left, "arrived": arrived}
 
     if st.button("💾 Save this week", type="primary", key=f"att_save_week_{student_id}", use_container_width=True):
         wk_iso = {d.isoformat() for d in days}
@@ -3091,7 +3093,8 @@ def render_attendance_tracking(student_id):
             dd = details.get(i, {})
             state["exceptions"].append({"date": days[i].isoformat(), "type": typ,
                                         "sessions": [] if typ in ("Absent", "No school") else chosen[i],
-                                        "reason": dd.get("reason", ""), "note": dd.get("note", ""), "left": dd.get("left", "")})
+                                        "reason": dd.get("reason", ""), "note": dd.get("note", ""), "left": dd.get("left", ""),
+                                        "arrived": dd.get("arrived", "")})
         _att_clear_widgets(student_id)
         if attendance_persist(student_id, state):
             ss[f"_att_flash_{student_id}"] = True
@@ -3380,7 +3383,293 @@ def render_attendance_context(student, full_df):
         for ptxt in pts:
             st.markdown(f"- {ptxt}")
         st.caption("Early patterns with few days are signals to discuss, not conclusions. Absences are not counted as day ends.")
+    render_attendance_calendar(student, state, full_df)
     st.markdown("---")
+
+
+# ── Attendance calendar: a Term-week × Mon–Fri table for staff reports ───────
+ATT_TERM_STARTS = {  # SA public school terms (Monday of week 1). Add new years here.
+    2026: [date(2026, 2, 2), date(2026, 4, 27), date(2026, 7, 20), date(2026, 10, 12)],
+}
+ATT_SESSION_TIMES = {"Morning": ("9:00", "11:00"), "Middle": ("11:00", "13:30"), "Afternoon": ("13:30", "14:45")}
+
+
+def _att_clock(hhmm: str):
+    """'14:20' or '2:20' -> (display, suffix). School hours: 1-6 are pm, 7-11 am, 12 pm."""
+    m = re.match(r"^\s*(\d{1,2}):(\d{2})\s*(am|pm)?\s*$", hhmm or "", re.I)
+    if not m:
+        return None
+    h, mi, suf = int(m.group(1)), m.group(2), (m.group(3) or "").lower()
+    if not suf:
+        suf = "pm" if (h >= 12 or h <= 6) else "am"
+    h12 = h - 12 if h > 12 else h
+    return (f"{h12}" + ("" if mi == "00" else f":{mi}"), suf)
+
+
+def _att_range_text(start_hhmm: str, end_hhmm: str) -> str:
+    a, b = _att_clock(start_hhmm), _att_clock(end_hhmm)
+    if not a or not b:
+        return f"{start_hhmm}-{end_hhmm}"
+    return f"{a[0]}{a[1] if a[1] == 'pm' else ''}-{b[0]}{b[1]}"
+
+
+def _att_term_week(d):
+    """('T3', 8) for a date, or None when the term dates aren't known."""
+    for yr, starts in ATT_TERM_STARTS.items():
+        if d.year != yr:
+            continue
+        for i in range(len(starts) - 1, -1, -1):
+            if d >= starts[i]:
+                wk = (d - starts[i]).days // 7 + 1
+                return (f"T{i + 1}", wk) if wk <= 10 else None
+    return None
+
+
+def _att_day_times(day, exc) -> str:
+    """The times (or sessions) attended on a day, in the style staff already use, e.g. 9-2:45pm."""
+    act = [x for x in ATT_SESSIONS if x in day["actual"]]
+    if not act:
+        return ""
+    exc = exc or {}
+    start = exc.get("arrived") or ATT_SESSION_TIMES[act[0]][0]
+    end = exc.get("left") or ATT_SESSION_TIMES[act[-1]][1]
+    full = len(act) == len(ATT_SESSIONS)
+    contiguous = ATT_SESSIONS.index(act[-1]) - ATT_SESSIONS.index(act[0]) == len(act) - 1
+    if full or (contiguous and (exc.get("left") or exc.get("arrived"))):
+        return _att_range_text(start, end)
+    return " + ".join(ATT_SESSION_LABEL[x] for x in act)
+
+
+def build_attendance_calendar(student, state, full_df, start, end) -> list:
+    """One record per school day between start and end, for the on-screen table, Word and CSV."""
+    crit_by_day, quick_by_day = {}, {}
+    if full_df is not None and not full_df.empty and "date_parsed" in full_df.columns:
+        for _, r in full_df.iterrows():
+            dd = r["date_parsed"]
+            if pd.isna(dd):
+                continue
+            dd = dd.date()
+            if r.get("incident_type") == "Critical":
+                ab = r.get("ABCH_primary")
+                desc = (ab.get("behaviour", "") if isinstance(ab, dict) else "") or str(r.get("behaviour_type", "") or "")
+                crit_by_day.setdefault(dd, []).append(re.sub(r"\s+", " ", str(desc)).strip()[:110])
+            else:
+                quick_by_day[dd] = quick_by_day.get(dd, 0) + 1
+    recs = []
+    d = _att_monday(start)
+    while d <= end:
+        in_term = (d.year not in ATT_TERM_STARTS) or _att_term_week(d) is not None   # skip school holidays
+        if d.weekday() < 5 and d >= start and in_term:
+            day = attendance_day(state, d)
+            exc = day["exc"] or {}
+            reason, note = exc.get("reason", ""), exc.get("note", "")
+            cis = crit_by_day.get(d, [])
+            is_ci = reason == ATT_CI_REASON or bool(cis)
+            status = "No school" if day["no_school"] else ("Absent" if exc.get("type") == "Absent" else
+                     ("Attended" if day["actual"] else ""))
+            times = "" if day["no_school"] else _att_day_times(day, exc)
+            tw = _att_term_week(d)
+            event = ""
+            if is_ci:
+                event = "CI"
+            elif reason == "Re-entry meeting":
+                event = "Re-entry meeting"
+            elif reason in ATT_DAYEND_REASONS:
+                event = reason
+            ci_text = "; ".join(c for c in cis if c)
+            recs.append({"date": d, "weekday": ATT_DAYS_FULL[d.weekday()], "term": tw[0] if tw else "", "term_week": tw[1] if tw else None,
+                         "week_start": _att_monday(d), "status": status, "times": times, "event": event,
+                         "ci_description": ci_text, "reason": reason, "note": note,
+                         "quick_incidents": quick_by_day.get(d, 0), "critical_incidents": len(cis),
+                         "exc_type": exc.get("type", ""), "no_school": day["no_school"], "planned": bool(day["planned"])})
+        d += timedelta(days=1)
+    return recs
+
+
+def _att_cell_lines(r):
+    """[(text, style)] describing one day, in the order staff read it."""
+    L = []
+    if r["no_school"]:
+        return [("No school", "muted")]
+    if r["event"] == "CI":
+        L.append(("CI", "ci"))
+        txt = r["ci_description"] or r["note"]
+        if txt:
+            L.append((txt, "note"))
+    elif r["event"]:
+        L.append((r["event"], "ci" if r["event"] == "Re-entry meeting" else "event"))
+        if r["note"]:
+            L.append((r["note"], "note"))
+    if r["status"] == "Absent":
+        L.append(("Absent", "absent"))
+        if r["reason"] and r["reason"] != "Illness" and not r["event"]:
+            pass
+        if r["note"] and not r["event"]:
+            L.append((r["note"], "note"))
+    elif r["times"]:
+        L.append((r["times"], "time"))
+    if r["event"] == "CI" and r["note"] and r["ci_description"]:
+        L.append((r["note"], "note"))
+    if r["quick_incidents"]:
+        L.append((f"{r['quick_incidents']} incident(s) logged", "muted"))
+    return L
+
+
+def _att_calendar_weeks(recs):
+    weeks = {}
+    for r in recs:
+        weeks.setdefault(r["week_start"], {})[r["date"].weekday()] = r
+    return [(ws, weeks[ws]) for ws in sorted(weeks)]
+
+
+def _att_week_label(ws):
+    tw = _att_term_week(ws)
+    return f"{tw[0]} Wk {tw[1]}" if tw else f"Wk of {ws.strftime('%-d %b')}"
+
+
+def attendance_calendar_html(recs) -> str:
+    import html as _h
+    col = {"ci": "#b91c1c", "event": "#b45309", "absent": "#166534", "time": "#111827", "note": "#374151", "muted": "#6b7280"}
+    bold = {"ci", "absent", "event"}
+    out = ["<table style='width:100%;border-collapse:collapse;font-size:0.85rem'>",
+           "<tr>" + "".join(f"<th style='background:#a9d18e;border:1px solid #444;padding:6px'>{h}</th>"
+                            for h in ["Week", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]) + "</tr>"]
+    for ws, cells in _att_calendar_weeks(recs):
+        row = f"<tr><td style='background:#e2f0d9;border:1px solid #444;padding:6px;text-align:center;font-weight:600'>{_h.escape(_att_week_label(ws))}</td>"
+        for i in range(5):
+            r = cells.get(i)
+            if not r:
+                row += "<td style='border:1px solid #444;background:#f3f4f6'></td>"
+                continue
+            lab = r["date"].strftime("%-d %B") if r["date"].day == 1 else str(r["date"].day)
+            body = "".join(f"<div style='color:{col[s]};{'font-weight:700;' if s in bold else ''}'>{_h.escape(t)}</div>" for t, s in _att_cell_lines(r))
+            row += f"<td style='border:1px solid #444;padding:5px;vertical-align:top;color:#111827'><div style='font-size:0.75rem;color:#6b7280'>{lab}</div>{body}</td>"
+        out.append(row + "</tr>")
+    out.append("</table>")
+    return "".join(out)
+
+
+def attendance_calendar_csv(student, recs) -> bytes:
+    rows = [{"Student": student.get("name", ""), "Date": r["date"].isoformat(), "Weekday": r["weekday"],
+             "Term": r["term"], "Term week": r["term_week"] or "", "Status": r["status"], "Times / sessions": r["times"],
+             "Event": r["event"], "Critical incident description": r["ci_description"], "Reason": r["reason"],
+             "Note": r["note"], "Incidents logged": r["quick_incidents"], "Critical incidents": r["critical_incidents"]}
+            for r in recs]
+    return pd.DataFrame(rows).to_csv(index=False).encode("utf-8-sig")
+
+
+def generate_attendance_calendar_docx(student, recs, start, end):
+    from docx import Document
+    from docx.shared import Pt, Cm, RGBColor
+    from docx.enum.section import WD_ORIENT
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    doc = Document()
+    sec = doc.sections[0]
+    sec.orientation = WD_ORIENT.LANDSCAPE
+    sec.page_width, sec.page_height = Cm(29.7), Cm(21.0)
+    for m in ("left_margin", "right_margin", "top_margin", "bottom_margin"):
+        setattr(sec, m, Cm(1.3))
+    st0 = doc.styles["Normal"]; st0.font.name = "Calibri"; st0.font.size = Pt(9)
+
+    terms = sorted({(r["term"]) for r in recs if r["term"]})
+    term_txt = (f"Term{'s' if len(terms) > 1 else ''} {' & '.join(t[1:] for t in terms)} {start.year}" if terms else str(start.year))
+    p = doc.add_paragraph()
+    for txt, b in [(f"{term_txt}    ", True), (f"{student.get('name', '')}    ", True), ("Cowandilla Learning Centre    ", True), ("Attendance", True)]:
+        r = p.add_run(txt); r.bold = b; r.font.size = Pt(12)
+    p2 = doc.add_paragraph()
+    r = p2.add_run(f"Dates covered: {start.strftime('%A %-d %b %Y')} – {end.strftime('%A %-d %b %Y')}"); r.font.size = Pt(9)
+
+    def shade(cell, hexcol):
+        tcPr = cell._tc.get_or_add_tcPr()
+        sh = OxmlElement("w:shd"); sh.set(qn("w:val"), "clear"); sh.set(qn("w:color"), "auto"); sh.set(qn("w:fill"), hexcol)
+        tcPr.append(sh)
+
+    def no_split(row):
+        trPr = row._tr.get_or_add_trPr(); e = OxmlElement("w:cantSplit"); trPr.append(e)
+
+    def repeat_header(row):
+        trPr = row._tr.get_or_add_trPr(); e = OxmlElement("w:tblHeader"); e.set(qn("w:val"), "true"); trPr.append(e)
+
+    weeks = _att_calendar_weeks(recs)
+    tbl = doc.add_table(rows=1, cols=6)
+    tbl.style = "Table Grid"
+    tbl.autofit = False
+    widths = [Cm(2.2)] + [Cm(4.9)] * 5
+    hdr = tbl.rows[0]; repeat_header(hdr)
+    for i, h in enumerate(["Week", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]):
+        c = hdr.cells[i]; c.width = widths[i]; shade(c, "A9D18E")
+        c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        rr = c.paragraphs[0].add_run(h); rr.bold = True
+    colors = {"ci": RGBColor(0xB9, 0x1C, 0x1C), "event": RGBColor(0xB4, 0x53, 0x09), "absent": RGBColor(0x16, 0x65, 0x34),
+              "time": RGBColor(0, 0, 0), "note": RGBColor(0x37, 0x41, 0x51), "muted": RGBColor(0x6B, 0x72, 0x80)}
+    for ws, cells in weeks:
+        row = tbl.add_row(); no_split(row)
+        for i in range(6):
+            row.cells[i].width = widths[i]
+        wc = row.cells[0]; shade(wc, "E2F0D9")
+        wc.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        wr = wc.paragraphs[0].add_run(_att_week_label(ws)); wr.bold = True
+        for i in range(5):
+            c = row.cells[i + 1]; r = cells.get(i)
+            if not r:
+                shade(c, "F3F4F6"); continue
+            para = c.paragraphs[0]
+            lab = para.add_run(r["date"].strftime("%-d %B") if r["date"].day == 1 else str(r["date"].day))
+            lab.font.size = Pt(8); lab.font.color.rgb = RGBColor(0x6B, 0x72, 0x80)
+            for txt, sty in _att_cell_lines(r):
+                q = c.add_paragraph(); q.paragraph_format.space_after = Pt(0)
+                rr = q.add_run(txt); rr.font.color.rgb = colors[sty]
+                rr.bold = sty in ("ci", "absent", "event")
+    doc.add_paragraph()
+    k = doc.add_paragraph()
+    kr = k.add_run("Times are shown where known; otherwise the sessions attended (AM, Mid, PM). CI = critical incident. "
+                   "Days with no entry follow the student's usual weekly pattern.")
+    kr.italic = True; kr.font.size = Pt(8)
+    buf = BytesIO(); doc.save(buf); buf.seek(0)
+    return buf.getvalue()
+
+
+def render_attendance_calendar(student, state, full_df):
+    st.markdown("#### 📋 Attendance table for reports")
+    st.caption("Week-by-week table (Monday to Friday) showing the times attended, absences, critical incidents (CI), re-entry "
+               "meetings and day ends. It is built from the attendance and incident records above, so it stays in step with them.")
+    sid = student["id"]
+    dates = [full_df["date_parsed"].min().date(), full_df["date_parsed"].max().date()]
+    for e in state.get("exceptions", []):
+        try:
+            dates.append(date.fromisoformat(e["date"]))
+        except Exception:
+            pass
+    first = min(dates)
+    last = min(max(dates), date.today()) if max(dates) > date.today() else max(dates)
+    last = max(last, first)
+    c1, c2 = st.columns(2)
+    d_from = c1.date_input("Table starts", value=first, key=f"attcal_from_{sid}")
+    d_to = c2.date_input("Table ends", value=last, key=f"attcal_to_{sid}")
+    if d_to < d_from:
+        st.warning("The end date is before the start date.")
+        return
+    recs = build_attendance_calendar(student, state, full_df, d_from, d_to)
+    if not recs:
+        st.info("No school days in that range.")
+        return
+    _att_html = attendance_calendar_html(recs)
+    st.markdown(_att_html, unsafe_allow_html=True)
+    nm = student["name"].replace(" ", "_")
+    stamp = datetime.now().strftime("%Y%m%d")
+    b1, b2 = st.columns(2)
+    try:
+        b1.download_button("⬇️ Attendance table (Word)", generate_attendance_calendar_docx(student, recs, d_from, d_to),
+                           file_name=f"Attendance_{nm}_{stamp}.docx",
+                           mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                           use_container_width=True, key=f"dl_attcal_docx_{sid}")
+    except Exception as e:
+        b1.warning(f"Could not prepare the Word table: {e}")
+    b2.download_button("⬇️ Attendance table (Excel / CSV)", attendance_calendar_csv(student, recs),
+                       file_name=f"Attendance_{nm}_{stamp}.csv", mime="text/csv",
+                       use_container_width=True, key=f"dl_attcal_csv_{sid}")
 
 
 def trial_attendance_line(student_id, start, end=None, full_df=None) -> str:
