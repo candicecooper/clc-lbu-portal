@@ -2970,41 +2970,148 @@ def attendance_summary(state, start, end) -> dict:
             "early_dates": early_dates, "esc_dates": esc_dates}
 
 
+def _att_infer_type(planned, chosen):
+    """What kind of change is this day, compared with the usual pattern? None = went to plan."""
+    P = [x for x in ATT_SESSIONS if x in (planned or [])]
+    C = [x for x in ATT_SESSIONS if x in (chosen or [])]
+    if C == P:
+        return None
+    if not C:
+        return "Absent"
+    if not P:
+        return "Extra day"
+    if set(C) < set(P):
+        iP = [ATT_SESSIONS.index(x) for x in P]
+        iC = [ATT_SESSIONS.index(x) for x in C]
+        if min(iC) == min(iP):
+            return "Finished early"
+        if max(iC) == max(iP):
+            return "Arrived late"
+    return "Different sessions"
+
+
+def _att_clear_widgets(student_id):
+    """Forget cached widget values so the week view re-reads what is actually saved."""
+    pre = (f"attw_{student_id}_", f"attwr_{student_id}_", f"att_sched_{student_id}_")
+    for k in [k for k in st.session_state if isinstance(k, str) and k.startswith(pre)]:
+        del st.session_state[k]
+
+
 def render_attendance_tracking(student_id):
-    """Weekly schedule + exceptions + week view. Edits save immediately."""
+    """Week-by-week attendance. Pick a week, tick the sessions the student actually attended,
+    and save. Anything different from the usual pattern is recorded for that exact date."""
+    ss = st.session_state
     state = attendance_state(student_id)
-    if st.session_state.get("_att_new_cols_missing"):
-        st.warning("⚠️ Saved, but the newer schedule details can't be stored permanently until two columns are added. "
+    if ss.get("_att_new_cols_missing"):
+        st.warning("⚠️ Saved, but the newer schedule details can't be stored permanently until the attendance table is updated. "
                    "Copy this into the Supabase SQL Editor and run it once:")
         st.code(ATTENDANCE_SQL, language="sql")
-    st.caption("Set the usual week once. Only change it when the pattern changes, and add an exception only on days that "
-               "differ. Nothing needs entering on days that go to plan.")
+    if ss.pop(f"_att_flash_{student_id}", False):
+        st.success("✅ Week saved.")
 
-    # ── week view ──
-    wk = st.date_input("Week to view", value=date.today(), key=f"att_wk_{student_id}")
-    mon = _att_monday(wk)
-    rows = {"Planned": [], "Actual": [], "Note": []}
-    heads = []
-    for i in range(5):
-        d = mon + timedelta(days=i)
-        day = attendance_day(state, d)
-        heads.append(f"{ATT_DAYS[i]} {d.strftime('%-d/%-m')}")
-        # Show only the sessions that apply (e.g. "AM  Mid"), not a tick/dot for every session
-        fmt = lambda lst: "  ".join(ATT_SESSION_LABEL[x] for x in ATT_SESSIONS if x in lst) or "—"
-        rows["Planned"].append("No school" if day["no_school"] else fmt(day["planned"]))
-        rows["Actual"].append("—" if day["no_school"] else fmt(day["actual"]))
-        e = day["exc"]
-        rows["Note"].append("" if not e else (e["type"] + (f": {e['reason']}" if e.get("reason") else "")))
-    st.table(pd.DataFrame(rows, index=None).T.rename(columns=dict(enumerate(heads))))
+    # ── 1. choose the week ──
+    dk = f"attdate_{student_id}"
+    if dk not in ss:
+        ss[dk] = date.today()
 
-    t1, t2 = st.tabs(["📅 Usual weekly schedule", "✏️ Add an exception for a day"])
+    def _shift(n):
+        ss[dk] = ss[dk] + timedelta(days=n)
 
-    # ── usual weekly schedule ──
-    with t1:
-        cur = attendance_current_days(state)
+    def _today():
+        ss[dk] = date.today()
+
+    n1, n2, n3, n4 = st.columns([1.2, 2.6, 1.2, 1.4])
+    n1.button("◀ Previous", key=f"att_prev_{student_id}", on_click=_shift, args=(-7,), use_container_width=True)
+    n2.date_input("Any date in the week", key=dk, label_visibility="collapsed")
+    n3.button("Next ▶", key=f"att_next_{student_id}", on_click=_shift, args=(7,), use_container_width=True)
+    n4.button("This week", key=f"att_today_{student_id}", on_click=_today, use_container_width=True)
+    mon = _att_monday(ss[dk])
+    fri = mon + timedelta(days=4)
+    st.markdown(f"#### Week of {mon.strftime('%-d %b')} – {fri.strftime('%-d %b %Y')}")
+    st.caption("Tick the sessions the student **attended**. They start from the usual pattern, so on a normal week there is "
+               "nothing to change and nothing to save. Only days that differ are recorded.")
+
+    # ── 2. the week grid ──
+    days = [mon + timedelta(days=i) for i in range(5)]
+    info = [attendance_day(state, d) for d in days]
+    cols = st.columns(5)
+    chosen, no_school = {}, {}
+    for i, d in enumerate(days):
+        base_key = f"attw_{student_id}_{mon.isoformat()}_{ATT_DAYS[i]}"
+        with cols[i]:
+            st.markdown(f"**{ATT_DAYS[i]}** · {d.strftime('%-d %b')}")
+            planned_txt = " ".join(ATT_SESSION_LABEL[x] for x in ATT_SESSIONS if x in info[i]["planned"]) or "not usual day"
+            st.caption(f"Usual: {planned_txt}")
+            ns = st.checkbox("No school", value=info[i]["no_school"], key=f"{base_key}_ns")
+            no_school[i] = ns
+            got = []
+            for s in ATT_SESSIONS:
+                if st.checkbox(ATT_SESSION_LABEL[s], value=(s in info[i]["actual"]), key=f"{base_key}_{s}", disabled=ns):
+                    got.append(s)
+            chosen[i] = [] if ns else got
+
+    # ── 3. what changed ──
+    changes = {}
+    for i, d in enumerate(days):
+        typ = "No school" if no_school[i] else _att_infer_type(info[i]["planned"], chosen[i])
+        if no_school[i] and not info[i]["planned"]:
+            typ = None            # a non-attending day that is also "no school" needs no record
+        if typ:
+            changes[i] = typ
+    details = {}
+    if changes:
+        st.markdown("**Changes from the usual pattern**")
+        for i, typ in changes.items():
+            d = days[i]
+            ex = info[i]["exc"] or {}
+            same = ex.get("type") == typ
+            label = f"**{ATT_DAYS[i]} {d.strftime('%-d %b')}** · {typ}"
+            if typ not in ("Absent", "No school"):
+                label += f" ({_att_sess_text(chosen[i])})"
+            st.markdown(label)
+            if typ == "No school":
+                details[i] = {"reason": "", "note": ex.get("note", "") if same else "", "left": ""}
+                continue
+            dflt = ex.get("reason") if same and ex.get("reason") in ATT_REASONS else {
+                "Finished early": ATT_ESCALATION_REASON, "Absent": "Illness"}.get(typ, "Other")
+            c1, c2, c3 = st.columns([2.2, 1.2, 2.6])
+            rk = f"attwr_{student_id}_{mon.isoformat()}_{ATT_DAYS[i]}"
+            reason = c1.selectbox("Reason", ATT_REASONS, index=ATT_REASONS.index(dflt), key=f"{rk}_r")
+            left = ""
+            if typ == "Finished early":
+                left = c2.text_input("Left at (e.g. 11:30)", value=ex.get("left", "") if same else "", key=f"{rk}_l").strip()
+            note = c3.text_input("Note (optional)", value=ex.get("note", "") if same else "", key=f"{rk}_n",
+                                 placeholder="e.g. Left after recess when signs of escalation appeared")
+            details[i] = {"reason": reason, "note": note, "left": left}
+
+    if st.button("💾 Save this week", type="primary", key=f"att_save_week_{student_id}", use_container_width=True):
+        wk_iso = {d.isoformat() for d in days}
+        state["exceptions"] = [e for e in state["exceptions"] if e["date"] not in wk_iso]
+        for i, typ in changes.items():
+            dd = details.get(i, {})
+            state["exceptions"].append({"date": days[i].isoformat(), "type": typ,
+                                        "sessions": [] if typ in ("Absent", "No school") else chosen[i],
+                                        "reason": dd.get("reason", ""), "note": dd.get("note", ""), "left": dd.get("left", "")})
+        _att_clear_widgets(student_id)
+        if attendance_persist(student_id, state):
+            ss[f"_att_flash_{student_id}"] = True
+            st.rerun()
+        else:
+            show_save_problem("This week's attendance", ATTENDANCE_SQL)
+
+    sm = attendance_summary(state, mon, fri)
+    if sm["expected"]:
+        st.caption(f"Saved for this week: {sm['attended']} of {sm['expected']} planned sessions attended"
+                   + (f" · {sm['escalation_day_ends']} day end(s)" if sm["escalation_day_ends"] else "") + ".")
+
+    # ── 4. usual pattern (changes apply from the week being viewed) ──
+    st.markdown("---")
+    with st.expander("📅 Usual weekly pattern (change only when the student's days or times change)", expanded=not state["schedule"]):
+        cur = attendance_current_days(state, mon)
+        st.caption("In force for this week: " + " · ".join(f"{d} {_att_sess_text(cur[d])}" for d in ATT_DAYS))
         for dname in ATT_DAYS:
-            if f"att_sched_{student_id}_{dname}" not in st.session_state:
-                st.session_state[f"att_sched_{student_id}_{dname}"] = cur[dname]
+            if f"att_sched_{student_id}_{mon.isoformat()}_{dname}" not in ss:
+                ss[f"att_sched_{student_id}_{mon.isoformat()}_{dname}"] = cur[dname]
         presets = {
             "Choose a quick start…": None,
             "Full time (all sessions, Mon–Fri)": {d: list(ATT_SESSIONS) for d in ATT_DAYS},
@@ -3016,88 +3123,59 @@ def render_attendance_tracking(student_id):
         pick = pc1.selectbox("Quick start", list(presets), key=f"att_preset_{student_id}", label_visibility="collapsed")
         if pc2.button("Apply", key=f"att_preset_go_{student_id}", use_container_width=True) and presets[pick]:
             for dname in ATT_DAYS:
-                st.session_state[f"att_sched_{student_id}_{dname}"] = presets[pick][dname]
-        cols = st.columns(5)
+                ss[f"att_sched_{student_id}_{mon.isoformat()}_{dname}"] = presets[pick][dname]
+        pcols = st.columns(5)
         new_days = {}
         for i, dname in enumerate(ATT_DAYS):
-            new_days[dname] = cols[i].multiselect(ATT_DAYS_FULL[i], ATT_SESSIONS, key=f"att_sched_{student_id}_{dname}")
-        frm = st.date_input("Applies from (the Monday this pattern starts)", value=_att_monday(date.today()),
-                            key=f"att_from_{student_id}")
+            new_days[dname] = pcols[i].multiselect(ATT_DAYS_FULL[i], ATT_SESSIONS,
+                                                   key=f"att_sched_{student_id}_{mon.isoformat()}_{dname}")
+        scope = st.radio("Use this pattern",
+                         [f"From the week of {mon.strftime('%-d %b')} onward", "For the whole placement (replaces earlier patterns)"],
+                         key=f"att_scope_{student_id}", horizontal=True)
         notes = st.text_input("Schedule notes (optional)", value=state.get("notes", ""), key=f"att_notes_{student_id}",
                               placeholder="e.g. Building up to full days over Term 4")
-        if st.button("💾 Save weekly schedule", type="primary", key=f"att_save_sched_{student_id}", use_container_width=True):
-            ver = {"from": frm.isoformat(), "days": {d: [x for x in ATT_SESSIONS if x in new_days[d]] for d in ATT_DAYS}, "note": notes}
-            state["schedule"] = [v for v in state["schedule"] if v["from"] != ver["from"]] + [ver]
+        if st.button("💾 Save usual pattern", key=f"att_save_sched_{student_id}", use_container_width=True):
+            start = mon.isoformat() if scope.startswith("From") else "2000-01-01"
+            ver = {"from": start, "days": {d: [x for x in ATT_SESSIONS if x in new_days[d]] for d in ATT_DAYS}, "note": notes}
+            if start == "2000-01-01":
+                state["schedule"] = [ver]
+            else:
+                state["schedule"] = [v for v in state["schedule"] if v["from"] != start] + [ver]
             state["notes"] = notes
-            attendance_persist(student_id, state)
-            st.success("✅ Schedule saved.")
-            st.rerun()
+            _att_clear_widgets(student_id)
+            if attendance_persist(student_id, state):
+                ss[f"_att_flash_{student_id}"] = True
+                st.rerun()
+            else:
+                show_save_problem("The usual pattern", ATTENDANCE_SQL)
         if state["schedule"]:
-            st.markdown("**Schedule history** (the pattern in force on each date is used for the analysis)")
+            st.markdown("**Pattern history** (the pattern in force on each date is used for the analysis)")
             for v in sorted(state["schedule"], key=lambda v: v["from"], reverse=True):
                 txt = " · ".join(f"{d} {_att_sess_text(v['days'].get(d, []))}" for d in ATT_DAYS)
                 c1, c2 = st.columns([6, 1])
                 c1.markdown(f"From **{v['from'] if v['from'] != '2000-01-01' else 'the start'}**: {txt}")
                 if c2.button("Remove", key=f"att_rmv_{student_id}_{v['from']}"):
                     state["schedule"] = [x for x in state["schedule"] if x["from"] != v["from"]]
+                    _att_clear_widgets(student_id)
                     attendance_persist(student_id, state); st.rerun()
 
-    # ── exceptions ──
-    with t2:
-        c1, c2 = st.columns(2)
-        d1 = c1.date_input("Date", value=date.today(), key=f"att_ex_date_{student_id}")
-        typ = c2.selectbox("What happened", ATT_TYPES, key=f"att_ex_type_{student_id}")
-        st.caption(ATT_TYPE_HELP[typ])
-        d2 = d1
-        if typ in ("Absent", "No school"):
-            if st.checkbox("Several days in a row", key=f"att_ex_multi_{student_id}_{typ}"):
-                d2 = st.date_input("Last day", value=d1, min_value=d1, key=f"att_ex_end_{student_id}_{typ}")
-        sessions = []
-        if typ not in ("Absent", "No school"):
-            default = {"Finished early": ["Morning", "Middle"], "Arrived late": ["Middle", "Afternoon"],
-                       "Extra day": list(ATT_SESSIONS)}.get(typ) or attendance_day(state, d1)["planned"]
-            sessions = st.multiselect("Sessions attended", ATT_SESSIONS, default=default,
-                                      key=f"att_ex_sess_{student_id}_{typ}_{d1.isoformat()}")
-        rdef = {"Finished early": 0, "Absent": 3, "Arrived late": 3}.get(typ, 6)
-        reason = st.selectbox("Reason", ATT_REASONS, index=rdef, key=f"att_ex_reason_{student_id}_{typ}")
-        left_t = ""
-        if typ == "Finished early":
-            left_t = st.text_input("Time they left (optional, e.g. 11:30)", key=f"att_ex_left_{student_id}",
-                                   help="For a negotiated day end, the time agreed with the student.").strip()
-            if left_t and not re.match(r"^\d{1,2}:\d{2}$", left_t):
-                st.caption("Use the form 11:30 so it can be charted. It will be saved as text otherwise.")
-        note = st.text_input("Note (optional)", key=f"att_ex_note_{student_id}",
-                             placeholder="e.g. Left after recess when the first signs of escalation appeared")
-        if st.button("➕ Add exception", type="primary", key=f"att_ex_add_{student_id}", use_container_width=True):
-            added, d = 0, d1
-            while d <= d2:
-                if d.weekday() < 5 or typ in ("Extra day", "Different sessions"):
-                    state["exceptions"] = [e for e in state["exceptions"] if e["date"] != d.isoformat()] + [
-                        {"date": d.isoformat(), "type": typ, "sessions": sessions,
-                         "reason": ("" if typ == "No school" else reason), "note": note, "left": left_t}]
-                    added += 1
-                d += timedelta(days=1)
-            if added:
-                attendance_persist(student_id, state)
-                st.rerun()
-            else:
-                st.warning("That range only covers weekend days.")
-        excs = sorted(state["exceptions"], key=lambda e: e["date"], reverse=True)
-        if excs:
-            st.markdown(f"**Recorded exceptions ({len(excs)})**, most recent first")
-            for e in excs[:12]:
-                c1, c2 = st.columns([6, 1])
-                extra = (f" ({_att_sess_text(e.get('sessions'))})" if e["type"] in ("Finished early", "Arrived late", "Different sessions", "Extra day") else "")
-                c1.markdown(f"**{e['date']}** · {e['type']}{extra}" + (f" · {e['reason']}" if e.get("reason") else "")
-                            + (f" · left {e['left']}" if e.get("left") else "")
-                            + (f" · *{e['note']}*" if e.get("note") else ""))
-                if c2.button("Remove", key=f"att_ex_rm_{student_id}_{e['date']}"):
-                    state["exceptions"] = [x for x in state["exceptions"] if x["date"] != e["date"]]
-                    attendance_persist(student_id, state); st.rerun()
-            if len(excs) > 12:
-                st.caption(f"{len(excs) - 12} older exception(s) not shown.")
-        else:
-            st.info("No exceptions recorded. Days are assumed to go to plan.")
+    # ── 5. everything recorded ──
+    excs = sorted(state["exceptions"], key=lambda e: e["date"], reverse=True)
+    with st.expander(f"🗂️ All recorded changes ({len(excs)})"):
+        if not excs:
+            st.info("Nothing recorded yet. Days are assumed to go to plan.")
+        for e in excs[:40]:
+            c1, c2 = st.columns([6, 1])
+            extra = (f" ({_att_sess_text(e.get('sessions'))})" if e["type"] in ("Finished early", "Arrived late", "Different sessions", "Extra day") else "")
+            c1.markdown(f"**{e['date']}** · {e['type']}{extra}" + (f" · {e['reason']}" if e.get("reason") else "")
+                        + (f" · left {e['left']}" if e.get("left") else "")
+                        + (f" · *{e['note']}*" if e.get("note") else ""))
+            if c2.button("Remove", key=f"att_ex_rm_{student_id}_{e['date']}"):
+                state["exceptions"] = [x for x in state["exceptions"] if x["date"] != e["date"]]
+                _att_clear_widgets(student_id)
+                attendance_persist(student_id, state); st.rerun()
+        if len(excs) > 40:
+            st.caption(f"{len(excs) - 40} older record(s) not shown.")
 
 
 ATT_CAT_COLORS = {
