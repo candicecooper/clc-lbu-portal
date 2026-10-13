@@ -59,6 +59,48 @@ def upload(program, title, desc, version, up):
         "file_name": up.name, "storage_path": path, "is_current": True}).execute()
 
 
+def admin_gate():
+    """Confidential-password gate. Tries the shared confidential_auth module first, then a direct password check."""
+    if st.session_state.get("pd_admin_ok"):
+        return True
+    try:
+        import confidential_auth as ca
+        names = ["require_confidential_auth", "require_confidential", "check_confidential_auth", "confidential_gate",
+                 "require_auth", "check_password", "require_password", "gate", "login", "confidential_login"]
+        found = [n for n in names if callable(getattr(ca, n, None))]
+        for n in found:
+            res = getattr(ca, n)()
+            if res is False:
+                return False
+            return True
+        mod_funcs = [n for n in dir(ca) if not n.startswith("_") and callable(getattr(ca, n))]
+    except Exception:
+        mod_funcs = None
+    # Fallback: ask for the confidential password directly
+    secret = None
+    for k in ("CONFIDENTIAL_PASSWORD", "confidential_password", "ADMIN_PASSWORD", "admin_password"):
+        try:
+            if k in st.secrets:
+                secret = st.secrets[k]
+                break
+        except Exception:
+            pass
+    if secret is None:
+        st.error("The admin password could not be checked from this page.")
+        if mod_funcs is not None:
+            st.caption("Functions found in confidential_auth: " + (", ".join(mod_funcs) or "none"))
+        else:
+            st.caption("confidential_auth could not be imported from this page.")
+        return False
+    pw = st.text_input("Confidential password", type="password", key="pd_pw")
+    if pw and pw == str(secret):
+        st.session_state["pd_admin_ok"] = True
+        st.rerun()
+    elif pw:
+        st.error("Incorrect password.")
+    return False
+
+
 # ---- staff-level gate (same shared module as the other staff tools)
 _call_first("staff_auth", ["require_staff_auth", "require_staff", "check_staff_auth", "staff_gate"])
 
@@ -111,9 +153,7 @@ with tab_dl:
         st.info("No documents have been added yet. Use the Admin tab to upload the first ones.")
 
 with tab_admin:
-    if not _call_first("confidential_auth", ["require_confidential_auth", "require_confidential", "check_confidential_auth",
-                                              "confidential_gate", "require_auth"]):
-        st.error("Could not find the confidential password gate. Admin tab disabled.")
+    if not admin_gate():
         st.stop()
     if not db_ok:
         st.stop()
