@@ -2830,17 +2830,21 @@ ATT_SESSION_LABEL = {"Morning": "AM", "Middle": "Mid", "Afternoon": "PM"}
 ATT_TYPES = ["Absent", "Finished early", "Arrived late", "Different sessions", "Extra day", "No school"]
 ATT_TYPE_HELP = {
     "Absent": "Did not attend at all",
-    "Finished early": "Went home before the end of the day (e.g. a planned day end to avoid escalation)",
+    "Finished early": "Went home before the end of the day (e.g. a day end to avoid potential escalation, to reset, or negotiated with the student)",
     "Arrived late": "Missed the start of the day",
     "Different sessions": "Attended a different mix of sessions to usual",
     "Extra day": "Attended on a day they don't usually",
     "No school": "Holiday, closure or student-free day (not counted as expected attendance)",
 }
-ATT_NEGOTIATED_REASON = "Day end: needs reset, negotiated time"
-ATT_REASONS = ["Day end to avoid escalation", ATT_NEGOTIATED_REASON, "Illness", "Appointment",
+ATT_ESCALATION_REASON = "Day end: avoid potential escalation"
+ATT_RESET_REASON = "Day end: needs reset"
+ATT_NEGOTIATED_REASON = "Day end: negotiated"
+ATT_REASONS = [ATT_ESCALATION_REASON, ATT_RESET_REASON, ATT_NEGOTIATED_REASON, "Illness", "Appointment",
                "Family / personal", "Other"]
-ATT_ESCALATION_REASON = "Day end to avoid escalation"
-ATT_DAYEND_REASONS = (ATT_ESCALATION_REASON, ATT_NEGOTIATED_REASON)
+ATT_DAYEND_REASONS = (ATT_ESCALATION_REASON, ATT_RESET_REASON, ATT_NEGOTIATED_REASON)
+# Earlier wording, converted automatically when a record is loaded
+ATT_LEGACY_REASONS = {"Day end to avoid escalation": ATT_ESCALATION_REASON,
+                      "Day end: needs reset, negotiated time": ATT_RESET_REASON}
 
 
 def _att_monday(d):
@@ -2885,6 +2889,9 @@ def attendance_state(student_id) -> dict:
         for d in leg.get("absent_dates") or []:
             if d not in have:
                 state["exceptions"].append({"date": d, "type": "Absent", "sessions": [], "reason": "", "note": ""})
+    for e in state["exceptions"]:
+        if e.get("reason") in ATT_LEGACY_REASONS:
+            e["reason"] = ATT_LEGACY_REASONS[e["reason"]]
     st.session_state[ck] = state
     return state
 
@@ -3038,7 +3045,7 @@ def render_attendance_tracking(student_id):
                        "Extra day": list(ATT_SESSIONS)}.get(typ) or attendance_day(state, d1)["planned"]
             sessions = st.multiselect("Sessions attended", ATT_SESSIONS, default=default,
                                       key=f"att_ex_sess_{student_id}_{typ}_{d1.isoformat()}")
-        rdef = {"Finished early": 0, "Absent": 2, "Arrived late": 2}.get(typ, 5)
+        rdef = {"Finished early": 0, "Absent": 3, "Arrived late": 3}.get(typ, 6)
         reason = st.selectbox("Reason", ATT_REASONS, index=rdef, key=f"att_ex_reason_{student_id}_{typ}")
         left_t = ""
         if typ == "Finished early":
@@ -3082,8 +3089,9 @@ def render_attendance_tracking(student_id):
 
 ATT_CAT_COLORS = {
     "Attended": "#99d5cf",
-    "Day end: avoid escalation": "#d97706",
-    "Day end: reset / negotiated time": "#3b82f6",
+    "Day end: avoid potential escalation": "#d97706",
+    "Day end: needs reset": "#3b82f6",
+    "Day end: negotiated": "#7c3aed",
     "Left early (other reason)": "#94a3b8",
     "Absent": "#cbd5e1",
     "Arrived late": "#c4b5a5",
@@ -3098,8 +3106,9 @@ def _att_loss_category(exc) -> str:
     if t == "Absent": return "Absent"
     if t == "Arrived late": return "Arrived late"
     if t == "Finished early":
-        if r == ATT_ESCALATION_REASON: return "Day end: avoid escalation"
-        if r == ATT_NEGOTIATED_REASON: return "Day end: reset / negotiated time"
+        if r == ATT_ESCALATION_REASON: return "Day end: avoid potential escalation"
+        if r == ATT_RESET_REASON: return "Day end: needs reset"
+        if r == ATT_NEGOTIATED_REASON: return "Day end: negotiated"
         return "Left early (other reason)"
     return "Different sessions"
 
@@ -3128,7 +3137,7 @@ def attendance_analysis(state, full_df, start, end) -> dict:
                 row["lost"][c] = row["lost"].get(c, 0) + gap
         weeks.append(row); d += timedelta(days=7)
     by_dow = {n: {"attended": 0, "dayends": 0, "absent": 0, "inc": 0} for n in ATT_DAYS}
-    ended = {x: {"Day end: avoid escalation": 0, "Day end: reset / negotiated time": 0, "Left early (other reason)": 0} for x in ATT_SESSIONS}
+    ended = {x: {"Day end: avoid potential escalation": 0, "Day end: needs reset": 0, "Day end: negotiated": 0, "Left early (other reason)": 0} for x in ATT_SESSIONS}
     dayend_dates, d = [], start
     while d <= end:
         if d.weekday() < 5:
@@ -3189,7 +3198,7 @@ def render_attendance_context(student, full_df):
     c1.metric("Sessions expected", sm["expected"])
     c2.metric("Sessions attended", sm["attended"], f"{sm['attended'] / sm['expected'] * 100:.0f}% of expected")
     c3.metric("Incidents per 10 sessions", f"{(n / sm['attended'] * 10) if sm['attended'] else 0:.1f}")
-    c4.metric("Day ends / early finishes", sm["early_days"], f"{sm['escalation_day_ends']} planned day ends" if sm["escalation_day_ends"] else None)
+    c4.metric("Day ends / early finishes", sm["early_days"], f"{sm['escalation_day_ends']} day ends" if sm["escalation_day_ends"] else None)
 
     # ── 1. weekly picture ──
     weeks = an["weeks"]
@@ -3209,7 +3218,7 @@ def render_attendance_context(student, full_df):
         st.plotly_chart(fig, use_container_width=True)
         busiest = max((w for w in weeks if w["attended"]), key=lambda w: w["incidents"] / w["attended"], default=None)
         _att_insight("Each bar is one week of school. The teal part is the sessions the student attended; the coloured parts are sessions "
-                     "planned but not attended, by reason (amber and blue are day ends). The red line is incidents for every 10 sessions "
+                     "planned but not attended, by reason (amber, blue and purple are the three kinds of day end). The red line is incidents for every 10 sessions "
                      "attended, so a short week isn't mistaken for improvement. Look for weeks where coloured blocks grow and the line "
                      "rises or falls with them. "
                      + (f"The highest rate was the week starting {busiest['week'].strftime('%-d %b')} ({busiest['incidents']} incident(s) in "
@@ -3234,7 +3243,7 @@ def render_attendance_context(student, full_df):
     # ── 3. when the day ends ──
     if an["dayend_dates"]:
         fig3 = go.Figure()
-        for cat in ("Day end: avoid escalation", "Day end: reset / negotiated time", "Left early (other reason)"):
+        for cat in ("Day end: avoid potential escalation", "Day end: needs reset", "Day end: negotiated", "Left early (other reason)"):
             vals = [an["ended"][x][cat] for x in ATT_SESSIONS]
             if any(vals):
                 fig3.add_bar(x=[f"After {x}" for x in ATT_SESSIONS], y=vals, name=cat, marker_color=ATT_CAT_COLORS[cat])
