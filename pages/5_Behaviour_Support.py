@@ -3230,7 +3230,7 @@ def attendance_analysis(state, full_df, start, end) -> dict:
                 row["lost"][c] = row["lost"].get(c, 0) + gap
         weeks.append(row); d += timedelta(days=7)
     by_dow = {n: {"attended": 0, "dayends": 0, "absent": 0, "inc": 0} for n in ATT_DAYS}
-    ended = {x: {"Day end: avoid potential escalation": 0, "Day end: needs reset": 0, "Day end: negotiated": 0, "Left early (other reason)": 0} for x in ATT_SESSIONS}
+    ended = {x: {"Day end: avoid potential escalation": 0, "Day end: needs reset": 0, "Day end: negotiated": 0, "C.I. (critical incident)": 0, "Left early (other reason)": 0} for x in ATT_SESSIONS}
     dayend_dates, d = [], start
     while d <= end:
         if d.weekday() < 5:
@@ -3243,7 +3243,7 @@ def attendance_analysis(state, full_df, start, end) -> dict:
                     by_dow[n]["dayends"] += 1
                     cat = _att_loss_category(e)
                     last = [x for x in ATT_SESSIONS if x in day["actual"]]
-                    ended[last[-1] if last else "Morning"][cat] += 1
+                    ended[last[-1] if last else "Morning"][cat] = ended[last[-1] if last else "Morning"].get(cat, 0) + 1
                     dayend_dates.append(d)
         d += timedelta(days=1)
     for dt, n in zip(inc_dates, full_df["date_parsed"].dt.weekday):
@@ -3336,7 +3336,7 @@ def render_attendance_context(student, full_df):
     # ── 3. when the day ends ──
     if an["dayend_dates"]:
         fig3 = go.Figure()
-        for cat in ("Day end: avoid potential escalation", "Day end: needs reset", "Day end: negotiated", "Left early (other reason)"):
+        for cat in ("Day end: avoid potential escalation", "Day end: needs reset", "Day end: negotiated", "C.I. (critical incident)", "Left early (other reason)"):
             vals = [an["ended"][x][cat] for x in ATT_SESSIONS]
             if any(vals):
                 fig3.add_bar(x=[f"After {x}" for x in ATT_SESSIONS], y=vals, name=cat, marker_color=ATT_CAT_COLORS[cat])
