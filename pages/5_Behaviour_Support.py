@@ -1747,6 +1747,21 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
 
         doc.add_paragraph().paragraph_format.space_after = Pt(4)
 
+        # ── ATTENDANCE & ABSENCE (when recorded) ──
+        _ah_w = attendance_headline(student.get("id"), full_df)
+        if _ah_w:
+            at_t = doc.add_table(rows=1, cols=1); at_t.style = 'Table Grid'
+            at_c = at_t.rows[0].cells[0]
+            set_bg(at_c, TEAL_LIGHT); set_borders(at_c, TEAL_HEX)
+            at_c.paragraphs[0].clear()
+            arun(at_c.paragraphs[0], "ATTENDANCE & ABSENCE", bold=True, size=16, color=TEAL_HEX)
+            for _lab, _val in _ah_w["lines"]:
+                _p = at_c.add_paragraph()
+                _p.paragraph_format.space_before = Pt(2); _p.paragraph_format.space_after = Pt(2)
+                arun(_p, f"{_lab}:  ", bold=True, size=15, color=GREY_DARK)
+                arun(_p, _val, size=15)
+            doc.add_paragraph().paragraph_format.space_after = Pt(4)
+
         # ── AT A GLANCE: hypothesis summary + top strategies ──
         # (front-page condensed view — full detail follows after the page break)
         hyp_data_front = generate_strong_clinical_hypothesis(
@@ -2519,6 +2534,54 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
                     _e = OxmlElement('w:instrText'); _e.set(qn('xml:space'), 'preserve'); _e.text = _txt
                 _r._r.append(_e)
 
+            # ── Suggested strategies to trial (same list as on screen) ──
+            try:
+                _sugg_w = get_trial_suggestions(student.get("id"), full_df)
+            except Exception:
+                _sugg_w = []
+            if _sugg_w:
+                doc.add_page_break()
+                section_header(doc, "SUGGESTED STRATEGIES TO TRIAL")
+                note("Each suggestion is a hypothesis to test for a few weeks, with something specific to track, then record what was learned. "
+                     "They come from the starting profile and from this student's own incident pattern.")
+                _running = {t.get("title") for t in (trials or []) if t.get("status") == "Running"}
+                for _sg in _sugg_w:
+                    _tt = doc.add_table(rows=1, cols=1); _tt.style = 'Table Grid'
+                    _tc = _tt.rows[0].cells[0]; set_borders(_tc, TEAL_HEX, size="10"); _tc.paragraphs[0].clear()
+                    arun(_tc.paragraphs[0], _clean(_sg.get("title")), bold=True, size=19, color=GREY_DARK)
+                    arun(_tc.paragraphs[0], "   [from the starting profile]" if _sg.get("source") == "profile" else "   [from incident data]", size=15, color=TEAL_HEX)
+                    if _sg.get("title") in _running:
+                        arun(_tc.paragraphs[0], "   [already running]", bold=True, size=15, color="1A7A6E")
+                    _rows_sg = [("Where this comes from: " if _sg.get("source") == "profile" else "What the data shows: ", _sg.get("evidence")),
+                                ("", _sg.get("data_note")),
+                                ("Hypothesis to test: ", _sg.get("hypothesis")),
+                                ("Strategy to trial: ", _sg.get("strategy")),
+                                ("What to track: ", _sg.get("measure"))]
+                    for _lab, _val in _rows_sg:
+                        if not _val:
+                            continue
+                        _pp = _tc.add_paragraph(); _pp.paragraph_format.space_before = Pt(2)
+                        if _lab:
+                            arun(_pp, _lab, bold=True, size=16, color=GREY_DARK)
+                        arun(_pp, _tr_text(_val, "—"), size=16, italic=not _lab)
+                    _pp = _tc.add_paragraph(); _pp.paragraph_format.space_before = Pt(3)
+                    arun(_pp, "Start date: ____________   Staff: ____________   Review on: ____________", size=15, color="666666")
+                    doc.add_paragraph().paragraph_format.space_after = Pt(4)
+
+            # ── Attendance & absence ──
+            _ah_p = attendance_headline(student.get("id"), full_df)
+            if _ah_p:
+                doc.add_page_break()
+                section_header(doc, "ATTENDANCE & ABSENCE")
+                note("Set against the student's usual weekly pattern. Incident counts mean more when read alongside how much school was attended.")
+                grid_table(["Measure", "Result"], [[a, b] for a, b in _ah_p["lines"]], [6.2, 11.0], font=18)
+                doc.add_paragraph().paragraph_format.space_after = Pt(6)
+                _recs_p = build_attendance_calendar(student, _ah_p["state"], full_df, _ah_p["start"], _ah_p["end"])
+                if _recs_p:
+                    arun(doc.add_paragraph(), "Week-by-week attendance table", bold=True, size=19, color=GREY_DARK)
+                    note("Times shown where known, otherwise the sessions attended. CI = critical incident. Days with no entry follow the usual weekly pattern.", size=15)
+                    _add_att_calendar_table(doc, _recs_p, font_pt=8, widths_cm=(1.7, 3.1, 3.1, 3.1, 3.1, 3.1))
+
             # ── Strategy trials ──
             if trials:
                 doc.add_page_break()
@@ -2995,6 +3058,49 @@ def _att_clear_widgets(student_id):
     pre = (f"attw_{student_id}_", f"attwr_{student_id}_", f"att_sched_{student_id}_")
     for k in [k for k in st.session_state if isinstance(k, str) and k.startswith(pre)]:
         del st.session_state[k]
+
+
+def attendance_headline(student_id, full_df):
+    """Headline attendance/absence facts for the summary and printed reports. None when nothing is recorded."""
+    try:
+        state = attendance_state(student_id)
+        if not state["schedule"] and not state["exceptions"]:
+            return None
+        if full_df is None or full_df.empty or "date_parsed" not in full_df.columns:
+            return None
+        start, end = full_df["date_parsed"].min().date(), full_df["date_parsed"].max().date()
+        for e in state["exceptions"]:
+            try:
+                ed = date.fromisoformat(e["date"])
+                start, end = min(start, ed), max(end, ed)
+            except Exception:
+                pass
+        end = min(end, date.today()) if end > date.today() else end
+        sm = attendance_summary(state, start, end)
+        if not sm["expected"]:
+            return None
+        absent_dates, d = [], start
+        while d <= end:
+            day = attendance_day(state, d)
+            if not day["no_school"] and day["exc"] and day["exc"].get("type") == "Absent":
+                absent_dates.append(d)
+            d += timedelta(days=1)
+        pct = round(sm["attended"] / sm["expected"] * 100) if sm["expected"] else 0
+        per10 = (len(full_df) / sm["attended"] * 10) if sm["attended"] else 0
+        dstr = ", ".join(x.strftime("%-d %b") for x in absent_dates[:12]) + (f" and {len(absent_dates) - 12} more" if len(absent_dates) > 12 else "")
+        lines = [("Sessions attended", f"{sm['attended']} of {sm['expected']} planned ({pct}%)"),
+                 ("Days absent", f"{len(absent_dates)}" + (f" — {dstr}" if absent_dates else "")),
+                 ("Early finishes / day ends", f"{sm['early_days']}" + (f" ({sm['escalation_day_ends']} day end(s) by agreement, to reset or to avoid escalation)" if sm["escalation_day_ends"] else "")),
+                 ("Incidents per 10 sessions attended", f"{per10:.1f}")]
+        if len(absent_dates) >= 2:
+            from collections import Counter
+            wd, n = Counter(ATT_DAYS_FULL[x.weekday()] for x in absent_dates).most_common(1)[0]
+            if n >= 2:
+                lines.insert(2, ("Most absences fall on", f"{wd} ({n} of {len(absent_dates)})"))
+        return {"sm": sm, "pct": pct, "per10": per10, "absent_dates": absent_dates, "lines": lines,
+                "start": start, "end": end, "state": state}
+    except Exception:
+        return None
 
 
 def render_attendance_tracking(student_id):
@@ -3558,13 +3664,59 @@ def attendance_calendar_csv(student, recs) -> bytes:
     return pd.DataFrame(rows).to_csv(index=False).encode("utf-8-sig")
 
 
-def generate_attendance_calendar_docx(student, recs, start, end):
-    from docx import Document
+def _add_att_calendar_table(doc, recs, font_pt=9, widths_cm=(2.2, 4.9, 4.9, 4.9, 4.9, 4.9)):
+    """Append the week × Mon–Fri attendance table to a python-docx document."""
     from docx.shared import Pt, Cm, RGBColor
-    from docx.enum.section import WD_ORIENT
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.oxml import OxmlElement
     from docx.oxml.ns import qn
+
+    def shade(cell, hexcol):
+        tcPr = cell._tc.get_or_add_tcPr()
+        sh = OxmlElement("w:shd"); sh.set(qn("w:val"), "clear"); sh.set(qn("w:color"), "auto"); sh.set(qn("w:fill"), hexcol)
+        tcPr.append(sh)
+
+    def flag(row, tag, val=None):
+        trPr = row._tr.get_or_add_trPr(); e = OxmlElement(tag)
+        if val: e.set(qn("w:val"), val)
+        trPr.append(e)
+
+    weeks = _att_calendar_weeks(recs)
+    tbl = doc.add_table(rows=1, cols=6)
+    tbl.style = "Table Grid"
+    tbl.autofit = False
+    widths = [Cm(w) for w in widths_cm]
+    hdr = tbl.rows[0]; flag(hdr, "w:tblHeader", "true")
+    for i, h in enumerate(["Week", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]):
+        c = hdr.cells[i]; c.width = widths[i]; shade(c, "A9D18E")
+        c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        rr = c.paragraphs[0].add_run(h); rr.bold = True; rr.font.size = Pt(font_pt)
+    colors = {"ci": RGBColor(0xB9, 0x1C, 0x1C), "event": RGBColor(0xB4, 0x53, 0x09), "absent": RGBColor(0x16, 0x65, 0x34),
+              "time": RGBColor(0, 0, 0), "note": RGBColor(0x37, 0x41, 0x51), "muted": RGBColor(0x6B, 0x72, 0x80)}
+    for ws, cells in weeks:
+        row = tbl.add_row(); flag(row, "w:cantSplit")
+        for i in range(6):
+            row.cells[i].width = widths[i]
+        wc = row.cells[0]; shade(wc, "E2F0D9")
+        wc.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        wr = wc.paragraphs[0].add_run(_att_week_label(ws)); wr.bold = True; wr.font.size = Pt(font_pt)
+        for i in range(5):
+            c = row.cells[i + 1]; r = cells.get(i)
+            if not r:
+                shade(c, "F3F4F6"); continue
+            lab = c.paragraphs[0].add_run(r["date"].strftime("%-d %B") if r["date"].day == 1 else str(r["date"].day))
+            lab.font.size = Pt(font_pt - 1); lab.font.color.rgb = RGBColor(0x6B, 0x72, 0x80)
+            for txt, sty in _att_cell_lines(r):
+                q = c.add_paragraph(); q.paragraph_format.space_after = Pt(0)
+                rr = q.add_run(txt); rr.font.size = Pt(font_pt); rr.font.color.rgb = colors[sty]
+                rr.bold = sty in ("ci", "absent", "event")
+    return tbl
+
+
+def generate_attendance_calendar_docx(student, recs, start, end):
+    from docx import Document
+    from docx.shared import Pt, Cm
+    from docx.enum.section import WD_ORIENT
     doc = Document()
     sec = doc.sections[0]
     sec.orientation = WD_ORIENT.LANDSCAPE
@@ -3572,56 +3724,14 @@ def generate_attendance_calendar_docx(student, recs, start, end):
     for m in ("left_margin", "right_margin", "top_margin", "bottom_margin"):
         setattr(sec, m, Cm(1.3))
     st0 = doc.styles["Normal"]; st0.font.name = "Calibri"; st0.font.size = Pt(9)
-
     terms = sorted({(r["term"]) for r in recs if r["term"]})
     term_txt = (f"Term{'s' if len(terms) > 1 else ''} {' & '.join(t[1:] for t in terms)} {start.year}" if terms else str(start.year))
     p = doc.add_paragraph()
-    for txt, b in [(f"{term_txt}    ", True), (f"{student.get('name', '')}    ", True), ("Cowandilla Learning Centre    ", True), ("Attendance", True)]:
-        r = p.add_run(txt); r.bold = b; r.font.size = Pt(12)
+    for txt in (f"{term_txt}    ", f"{student.get('name', '')}    ", "Cowandilla Learning Centre    ", "Attendance"):
+        r = p.add_run(txt); r.bold = True; r.font.size = Pt(12)
     p2 = doc.add_paragraph()
     r = p2.add_run(f"Dates covered: {start.strftime('%A %-d %b %Y')} – {end.strftime('%A %-d %b %Y')}"); r.font.size = Pt(9)
-
-    def shade(cell, hexcol):
-        tcPr = cell._tc.get_or_add_tcPr()
-        sh = OxmlElement("w:shd"); sh.set(qn("w:val"), "clear"); sh.set(qn("w:color"), "auto"); sh.set(qn("w:fill"), hexcol)
-        tcPr.append(sh)
-
-    def no_split(row):
-        trPr = row._tr.get_or_add_trPr(); e = OxmlElement("w:cantSplit"); trPr.append(e)
-
-    def repeat_header(row):
-        trPr = row._tr.get_or_add_trPr(); e = OxmlElement("w:tblHeader"); e.set(qn("w:val"), "true"); trPr.append(e)
-
-    weeks = _att_calendar_weeks(recs)
-    tbl = doc.add_table(rows=1, cols=6)
-    tbl.style = "Table Grid"
-    tbl.autofit = False
-    widths = [Cm(2.2)] + [Cm(4.9)] * 5
-    hdr = tbl.rows[0]; repeat_header(hdr)
-    for i, h in enumerate(["Week", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]):
-        c = hdr.cells[i]; c.width = widths[i]; shade(c, "A9D18E")
-        c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-        rr = c.paragraphs[0].add_run(h); rr.bold = True
-    colors = {"ci": RGBColor(0xB9, 0x1C, 0x1C), "event": RGBColor(0xB4, 0x53, 0x09), "absent": RGBColor(0x16, 0x65, 0x34),
-              "time": RGBColor(0, 0, 0), "note": RGBColor(0x37, 0x41, 0x51), "muted": RGBColor(0x6B, 0x72, 0x80)}
-    for ws, cells in weeks:
-        row = tbl.add_row(); no_split(row)
-        for i in range(6):
-            row.cells[i].width = widths[i]
-        wc = row.cells[0]; shade(wc, "E2F0D9")
-        wc.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-        wr = wc.paragraphs[0].add_run(_att_week_label(ws)); wr.bold = True
-        for i in range(5):
-            c = row.cells[i + 1]; r = cells.get(i)
-            if not r:
-                shade(c, "F3F4F6"); continue
-            para = c.paragraphs[0]
-            lab = para.add_run(r["date"].strftime("%-d %B") if r["date"].day == 1 else str(r["date"].day))
-            lab.font.size = Pt(8); lab.font.color.rgb = RGBColor(0x6B, 0x72, 0x80)
-            for txt, sty in _att_cell_lines(r):
-                q = c.add_paragraph(); q.paragraph_format.space_after = Pt(0)
-                rr = q.add_run(txt); rr.font.color.rgb = colors[sty]
-                rr.bold = sty in ("ci", "absent", "event")
+    _add_att_calendar_table(doc, recs)
     doc.add_paragraph()
     k = doc.add_paragraph()
     kr = k.add_run("Times are shown where known; otherwise the sessions attended (AM, Mid, PM). CI = critical incident. "
@@ -4094,6 +4204,15 @@ def _trial_date(v):
         return None
 
 
+def get_trial_suggestions(student_id, full_df) -> list:
+    """The trial suggestions shown on screen (starting-profile themes first, then data-driven ones)."""
+    _data_sugg = build_trial_suggestions(full_df, max_n=8)
+    _profile = load_starting_profile(student_id)
+    _psugg = build_profile_trial_suggestions(_profile, _data_sugg)
+    _covered = {STARTING_PROFILE_TAGS[t["tag"]].get("equiv") for t in (_profile or {}).get("tags", []) if t.get("include", True) and t.get("tag") in STARTING_PROFILE_TAGS}
+    return _psugg + [d for d in _data_sugg if d["key"] not in _covered][:3]
+
+
 def render_strategy_trials(student, full_df):
     student_id = student["id"]
     st.markdown("### 🧪 Strategies to Trial")
@@ -4106,11 +4225,7 @@ def render_strategy_trials(student, full_df):
     trials = load_trials(student_id)
     running_titles = {t.get("title") for t in trials if t.get("status") == "Running"}
 
-    _data_sugg = build_trial_suggestions(full_df, max_n=8)
-    _profile = load_starting_profile(student_id)
-    _psugg = build_profile_trial_suggestions(_profile, _data_sugg)
-    _covered = {STARTING_PROFILE_TAGS[t["tag"]].get("equiv") for t in (_profile or {}).get("tags", []) if t.get("include", True) and t.get("tag") in STARTING_PROFILE_TAGS}
-    sugg = _psugg + [d for d in _data_sugg if d["key"] not in _covered][:3]
+    sugg = get_trial_suggestions(student_id, full_df)
     if not sugg:
         st.info("Add a Starting Profile above, or log some incidents, to get trial suggestions.")
     for i, sg in enumerate(sugg):
@@ -7046,6 +7161,16 @@ def _render_student_analysis_page_inner():
         days = max((full_df["date_parsed"].max() - full_df["date_parsed"].min()).days, 1)
         st.metric("Days Span", days)
     with col5: st.metric("Per Day", f"{len(full_df) / days:.1f}")
+    _ah = attendance_headline(student_id, full_df)
+    if _ah:
+        a1, a2, a3, a4 = st.columns(4)
+        a1.metric("Sessions attended", f"{_ah['sm']['attended']} of {_ah['sm']['expected']}", f"{_ah['pct']}% of planned", delta_color="off")
+        a2.metric("Days absent", len(_ah["absent_dates"]))
+        a3.metric("Early finishes / day ends", _ah["sm"]["early_days"])
+        a4.metric("Incidents per 10 sessions", f"{_ah['per10']:.1f}")
+        _ad = dict(_ah["lines"]).get("Days absent", "")
+        st.caption("Attendance: " + (f"absent {_ad.split(' — ', 1)[1]}. " if _ah["absent_dates"] else "no days absent recorded. ")
+                   + "Full attendance detail and the week-by-week table are under Attendance Context below.")
     st.markdown("---")
 
     st.markdown("### 📅 Daily Incident Frequency")
