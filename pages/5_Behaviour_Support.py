@@ -2936,7 +2936,7 @@ ATT_ESCALATION_REASON = "Day end: avoid potential escalation"
 ATT_RESET_REASON = "Day end: needs reset"
 ATT_NEGOTIATED_REASON = "Day end: negotiated"
 ATT_CI_REASON = "C.I. (critical incident)"
-ATT_REASONS = [ATT_ESCALATION_REASON, ATT_RESET_REASON, ATT_NEGOTIATED_REASON, ATT_CI_REASON, "Re-entry meeting", "Illness", "Appointment",
+ATT_REASONS = [ATT_ESCALATION_REASON, ATT_RESET_REASON, ATT_NEGOTIATED_REASON, ATT_CI_REASON, "Re-entry meeting", "Transport / travel", "Slow to start / reluctant to come in", "Illness", "Appointment",
                "Family / personal", "Other"]
 ATT_DAYEND_REASONS = (ATT_ESCALATION_REASON, ATT_RESET_REASON, ATT_NEGOTIATED_REASON)
 # Earlier wording, converted automatically when a record is loaded
@@ -3020,21 +3020,48 @@ def attendance_current_days(state, on=None) -> dict:
     return {d: list(chosen["days"].get(d, [])) for d in ATT_DAYS}
 
 
+def attendance_current_starts(state, on=None) -> dict:
+    """Usual arrival time per weekday ('' = the normal start of the day) in force on a date."""
+    on = on or date.today()
+    vers = sorted(state.get("schedule", []), key=lambda v: v["from"])
+    if not vers:
+        return {d: "" for d in ATT_DAYS}
+    chosen = vers[0]
+    for v in vers:
+        if v["from"] <= on.isoformat():
+            chosen = v
+    return {d: (chosen.get("starts") or {}).get(d, "") for d in ATT_DAYS}
+
+
+def _att_minutes(hhmm):
+    """Minutes after midnight for '9:00', '10:15', '1:30' (school hours: 1-6 are pm). None if not a time."""
+    m = re.match(r"^\s*(\d{1,2}):(\d{2})\s*$", hhmm or "")
+    if not m:
+        return None
+    h, mi = int(m.group(1)), int(m.group(2))
+    if h > 23 or mi > 59:
+        return None
+    if h <= 6:
+        h += 12
+    return h * 60 + mi
+
+
 def attendance_day(state, d) -> dict:
     """Planned vs actual sessions for one date, after any exception."""
     exc = next((e for e in state.get("exceptions", []) if e.get("date") == d.isoformat()), None)
     planned = attendance_current_days(state, d).get(ATT_DAYS[d.weekday()], []) if d.weekday() < 5 else []
     if exc and exc.get("type") == "No school":
-        return {"planned": [], "actual": [], "exc": exc, "no_school": True}
+        return {"planned": [], "actual": [], "exc": exc, "no_school": True, "expected_start": ""}
     actual = planned
     if exc:
         actual = [] if exc.get("type") == "Absent" else [x for x in ATT_SESSIONS if x in (exc.get("sessions") or [])]
-    return {"planned": planned, "actual": actual, "exc": exc, "no_school": False}
+    exp_start = attendance_current_starts(state, d).get(ATT_DAYS[d.weekday()], "") if d.weekday() < 5 else ""
+    return {"planned": planned, "actual": actual, "exc": exc, "no_school": False, "expected_start": exp_start}
 
 
 def attendance_summary(state, start, end) -> dict:
     exp = act = 0
-    days_on = early = esc = absent = 0
+    days_on = early = esc = absent = late = late_min = 0
     esc_dates, early_dates = [], []
     d = start
     while d <= end:
@@ -3045,6 +3072,8 @@ def attendance_summary(state, start, end) -> dict:
             exc = day["exc"]
             if exc:
                 if exc["type"] == "Absent": absent += 1
+                if exc["type"] == "Arrived late" or exc.get("late_min"):
+                    late += 1; late_min += int(exc.get("late_min") or 0)
                 if exc["type"] == "Finished early":
                     early += 1; early_dates.append(d)
                     if exc.get("reason") in ATT_DAYEND_REASONS:
@@ -3052,7 +3081,7 @@ def attendance_summary(state, start, end) -> dict:
         d += timedelta(days=1)
     return {"expected": exp, "attended": act, "lost": max(exp - act, 0), "days_attended": days_on,
             "absent_days": absent, "early_days": early, "escalation_day_ends": esc,
-            "early_dates": early_dates, "esc_dates": esc_dates}
+            "early_dates": early_dates, "esc_dates": esc_dates, "late_days": late, "late_minutes": late_min}
 
 
 def _att_infer_type(planned, chosen):
@@ -3114,6 +3143,9 @@ def attendance_headline(student_id, full_df):
                  ("Days absent", f"{len(absent_dates)}" + (f" — {dstr}" if absent_dates else "")),
                  ("Early finishes / day ends", f"{sm['early_days']}" + (f" ({sm['escalation_day_ends']} day end(s) by agreement, to reset or to avoid escalation)" if sm["escalation_day_ends"] else "")),
                  ("Incidents per 10 sessions attended", f"{per10:.1f}")]
+        if sm.get("late_days"):
+            _avg = round(sm["late_minutes"] / sm["late_days"]) if sm["late_minutes"] else 0
+            lines.insert(2, ("Late arrivals", f"{sm['late_days']}" + (f" (about {_avg} min after the expected time, on average)" if _avg else "")))
         if len(absent_dates) >= 2:
             from collections import Counter
             wd, n = Counter(ATT_DAYS_FULL[x.weekday()] for x in absent_dates).most_common(1)[0]
@@ -3163,13 +3195,13 @@ def render_attendance_tracking(student_id):
     days = [mon + timedelta(days=i) for i in range(5)]
     info = [attendance_day(state, d) for d in days]
     cols = st.columns(5)
-    chosen, no_school = {}, {}
+    chosen, no_school, arrived, late_min = {}, {}, {}, {}
     for i, d in enumerate(days):
         base_key = f"attw_{student_id}_{mon.isoformat()}_{ATT_DAYS[i]}"
         with cols[i]:
             st.markdown(f"**{ATT_DAYS[i]}** · {d.strftime('%-d %b')}")
             planned_txt = " ".join(ATT_SESSION_LABEL[x] for x in ATT_SESSIONS if x in info[i]["planned"]) or "not usual day"
-            st.caption(f"Usual: {planned_txt}")
+            st.caption(f"Usual: {planned_txt}" + (f" · from {info[i]['expected_start']}" if info[i]["expected_start"] and info[i]["planned"] else ""))
             ns = st.checkbox("No school", value=info[i]["no_school"], key=f"{base_key}_ns")
             no_school[i] = ns
             got = []
@@ -3177,6 +3209,16 @@ def render_attendance_tracking(student_id):
                 if st.checkbox(ATT_SESSION_LABEL[s], value=(s in info[i]["actual"]), key=f"{base_key}_{s}", disabled=ns):
                     got.append(s)
             chosen[i] = [] if ns else got
+            exp_t = info[i]["expected_start"] or "9:00"
+            arr_in = st.text_input("Arrived at (if late)", value=(info[i]["exc"] or {}).get("arrived", ""), key=f"{base_key}_arr",
+                                   placeholder=f"expected {exp_t}", disabled=ns,
+                                   help="Leave empty if they arrived on time. Enter the time they actually arrived, e.g. 10:15.").strip()
+            arrived[i] = arr_in if _att_minutes(arr_in) is not None else ""
+            if arr_in and not arrived[i]:
+                st.caption("Use the form 10:15")
+            elif arrived[i]:
+                lm = _att_minutes(arrived[i]) - (_att_minutes(exp_t) or 540)
+                late_min[i] = lm if lm > 0 else 0
 
     # ── 3. what changed ──
     changes = {}
@@ -3184,6 +3226,8 @@ def render_attendance_tracking(student_id):
         typ = "No school" if no_school[i] else _att_infer_type(info[i]["planned"], chosen[i])
         if no_school[i] and not info[i]["planned"]:
             typ = None            # a non-attending day that is also "no school" needs no record
+        if not no_school[i] and late_min.get(i, 0) > 0 and typ in (None, "Arrived late"):
+            typ = "Arrived late"   # all sessions attended, but arrived after the expected time
         if typ:
             changes[i] = typ
     details = {}
@@ -3194,7 +3238,9 @@ def render_attendance_tracking(student_id):
             ex = info[i]["exc"] or {}
             same = ex.get("type") == typ
             label = f"**{ATT_DAYS[i]} {d.strftime('%-d %b')}** · {typ}"
-            if typ not in ("Absent", "No school"):
+            if typ == "Arrived late" and late_min.get(i, 0) > 0:
+                label += f" — arrived {arrived[i]}, {late_min[i]} min after the expected {info[i]['expected_start'] or '9:00'}"
+            elif typ not in ("Absent", "No school"):
                 label += f" ({_att_sess_text(chosen[i])})"
             st.markdown(label)
             if typ == "No school":
@@ -3205,14 +3251,13 @@ def render_attendance_tracking(student_id):
             c1, c2, c3 = st.columns([2.2, 1.2, 2.6])
             rk = f"attwr_{student_id}_{mon.isoformat()}_{ATT_DAYS[i]}"
             reason = c1.selectbox("Reason", ATT_REASONS, index=ATT_REASONS.index(dflt), key=f"{rk}_r")
-            left = arrived = ""
+            left = ""
             if typ == "Finished early":
                 left = c2.text_input("Left at (e.g. 11:30)", value=ex.get("left", "") if same else "", key=f"{rk}_l").strip()
-            elif typ == "Arrived late":
-                arrived = c2.text_input("Arrived at (e.g. 10:15)", value=ex.get("arrived", "") if same else "", key=f"{rk}_a").strip()
+            
             note = c3.text_input("Note (optional)", value=ex.get("note", "") if same else "", key=f"{rk}_n",
                                  placeholder="e.g. Left after recess when signs of escalation appeared")
-            details[i] = {"reason": reason, "note": note, "left": left, "arrived": arrived}
+            details[i] = {"reason": reason, "note": note, "left": left}
 
     if st.button("💾 Save this week", type="primary", key=f"att_save_week_{student_id}", use_container_width=True):
         wk_iso = {d.isoformat() for d in days}
@@ -3222,7 +3267,8 @@ def render_attendance_tracking(student_id):
             state["exceptions"].append({"date": days[i].isoformat(), "type": typ,
                                         "sessions": [] if typ in ("Absent", "No school") else chosen[i],
                                         "reason": dd.get("reason", ""), "note": dd.get("note", ""), "left": dd.get("left", ""),
-                                        "arrived": dd.get("arrived", "")})
+                                        "arrived": arrived.get(i, "") if late_min.get(i, 0) > 0 or typ == "Arrived late" else "",
+                                        "late_min": late_min.get(i, 0)})
         _att_clear_widgets(student_id)
         if attendance_persist(student_id, state):
             ss[f"_att_flash_{student_id}"] = True
@@ -3239,7 +3285,8 @@ def render_attendance_tracking(student_id):
     st.markdown("---")
     with st.expander("📅 Usual weekly pattern (change only when the student's days or times change)", expanded=not state["schedule"]):
         cur = attendance_current_days(state, mon)
-        st.caption("In force for this week: " + " · ".join(f"{d} {_att_sess_text(cur[d])}" for d in ATT_DAYS))
+        _cs = attendance_current_starts(state, mon)
+        st.caption("In force for this week: " + " · ".join(f"{d} {_att_sess_text(cur[d])}" + (f" from {_cs[d]}" if _cs.get(d) else "") for d in ATT_DAYS))
         for dname in ATT_DAYS:
             if f"att_sched_{student_id}_{mon.isoformat()}_{dname}" not in ss:
                 ss[f"att_sched_{student_id}_{mon.isoformat()}_{dname}"] = cur[dname]
@@ -3260,6 +3307,14 @@ def render_attendance_tracking(student_id):
         for i, dname in enumerate(ATT_DAYS):
             new_days[dname] = pcols[i].multiselect(ATT_DAYS_FULL[i], ATT_SESSIONS,
                                                    key=f"att_sched_{student_id}_{mon.isoformat()}_{dname}")
+        cur_starts = attendance_current_starts(state, mon)
+        st.caption("Usual arrival time, only for days the student is expected later than the normal start (leave empty for the normal start). "
+                   "A later arrival than this is recorded as a late arrival.")
+        scols = st.columns(5)
+        new_starts = {}
+        for i, dname in enumerate(ATT_DAYS):
+            new_starts[dname] = scols[i].text_input(f"{dname} arrives", value=cur_starts.get(dname, ""), placeholder="9:00",
+                                                    key=f"att_sched_{student_id}_{mon.isoformat()}_start_{dname}").strip()
         scope = st.radio("Use this pattern",
                          [f"From the week of {mon.strftime('%-d %b')} onward", "For the whole placement (replaces earlier patterns)"],
                          key=f"att_scope_{student_id}", horizontal=True)
@@ -3267,7 +3322,8 @@ def render_attendance_tracking(student_id):
                               placeholder="e.g. Building up to full days over Term 4")
         if st.button("💾 Save usual pattern", key=f"att_save_sched_{student_id}", use_container_width=True):
             start = mon.isoformat() if scope.startswith("From") else "2000-01-01"
-            ver = {"from": start, "days": {d: [x for x in ATT_SESSIONS if x in new_days[d]] for d in ATT_DAYS}, "note": notes}
+            ver = {"from": start, "days": {d: [x for x in ATT_SESSIONS if x in new_days[d]] for d in ATT_DAYS}, "note": notes,
+                   "starts": {d: t for d, t in new_starts.items() if t and _att_minutes(t) is not None}}
             if start == "2000-01-01":
                 state["schedule"] = [ver]
             else:
@@ -3563,6 +3619,9 @@ def render_attendance_context(student, full_df):
     c2.metric("Sessions attended", sm["attended"], f"{sm['attended'] / sm['expected'] * 100:.0f}% of expected")
     c3.metric("Incidents per 10 sessions", f"{(n / sm['attended'] * 10) if sm['attended'] else 0:.1f}")
     c4.metric("Day ends / early finishes", sm["early_days"], f"{sm['escalation_day_ends']} day ends" if sm["escalation_day_ends"] else None)
+    if sm.get("late_days"):
+        _avgl = round(sm["late_minutes"] / sm["late_days"]) if sm["late_minutes"] else 0
+        st.caption(f"Late arrivals: {sm['late_days']} day(s)" + (f", about {_avgl} minutes after the expected time on average." if _avgl else "."))
 
     ins = attendance_insights(an, state, full_df, start, end)
     # ── 1. weekly picture ──
@@ -3662,7 +3721,7 @@ def _att_day_times(day, exc) -> str:
     if not act:
         return ""
     exc = exc or {}
-    start = exc.get("arrived") or ATT_SESSION_TIMES[act[0]][0]
+    start = exc.get("arrived") or day.get("expected_start") or ATT_SESSION_TIMES[act[0]][0]
     end = exc.get("left") or ATT_SESSION_TIMES[act[-1]][1]
     full = len(act) == len(ATT_SESSIONS)
     contiguous = ATT_SESSIONS.index(act[-1]) - ATT_SESSIONS.index(act[0]) == len(act) - 1
@@ -3707,12 +3766,14 @@ def build_attendance_calendar(student, state, full_df, start, end) -> list:
                 event = "Re-entry meeting"
             elif reason in ATT_DAYEND_REASONS:
                 event = reason
+            elif exc.get("type") == "Arrived late" or exc.get("late_min"):
+                event = "Late arrival"
             ci_text = "; ".join(c for c in cis if c)
             recs.append({"date": d, "weekday": ATT_DAYS_FULL[d.weekday()], "term": tw[0] if tw else "", "term_week": tw[1] if tw else None,
                          "week_start": _att_monday(d), "status": status, "times": times, "event": event,
                          "ci_description": ci_text, "reason": reason, "note": note,
                          "quick_incidents": quick_by_day.get(d, 0), "critical_incidents": len(cis),
-                         "exc_type": exc.get("type", ""), "no_school": day["no_school"], "planned": bool(day["planned"])})
+                         "exc_type": exc.get("type", ""), "arrived": exc.get("arrived", ""), "late_min": int(exc.get("late_min") or 0), "no_school": day["no_school"], "planned": bool(day["planned"])})
         d += timedelta(days=1)
     return recs
 
@@ -3722,13 +3783,16 @@ def _att_cell_lines(r):
     L = []
     if r["no_school"]:
         return [("No school", "muted")]
+    if r["late_min"] and r["event"] != "Late arrival":
+        L.append((f"Late arrival ({r['late_min']} min)", "event"))
     if r["event"] == "CI":
         L.append(("CI", "ci"))
         txt = r["ci_description"] or r["note"]
         if txt:
             L.append((txt, "note"))
     elif r["event"]:
-        L.append((r["event"], "ci" if r["event"] == "Re-entry meeting" else "event"))
+        L.append((r["event"] + (f" ({r['late_min']} min)" if r["event"] == "Late arrival" and r["late_min"] else ""),
+                  "ci" if r["event"] == "Re-entry meeting" else "event"))
         if r["note"]:
             L.append((r["note"], "note"))
     if r["status"] == "Absent":
@@ -3783,7 +3847,7 @@ def attendance_calendar_html(recs) -> str:
 def attendance_calendar_csv(student, recs) -> bytes:
     rows = [{"Student": student.get("name", ""), "Date": r["date"].isoformat(), "Weekday": r["weekday"],
              "Term": r["term"], "Term week": r["term_week"] or "", "Status": r["status"], "Times / sessions": r["times"],
-             "Event": r["event"], "Critical incident description": r["ci_description"], "Reason": r["reason"],
+             "Event": r["event"], "Arrived at": r["arrived"], "Minutes late": r["late_min"] or "", "Critical incident description": r["ci_description"], "Reason": r["reason"],
              "Note": r["note"], "Incidents logged": r["quick_incidents"], "Critical incidents": r["critical_incidents"]}
             for r in recs]
     return pd.DataFrame(rows).to_csv(index=False).encode("utf-8-sig")
