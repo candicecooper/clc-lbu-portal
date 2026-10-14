@@ -2247,6 +2247,28 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
                         f"during the {_c['session']} session.", size=14)
             doc.add_paragraph().paragraph_format.space_after = Pt(4)
 
+        # ── ATTENDANCE & ABSENCE graphs (when attendance is recorded) ──
+        _att_figs = attendance_report_figures(student.get("id"), full_df)
+        if _att_figs:
+            doc.add_page_break()
+            section_header(doc, "ATTENDANCE, ABSENCE & DAY ENDS — PATTERNS")
+            doc.add_paragraph().paragraph_format.space_after = Pt(4)
+            for _fg, _cap in _att_figs[0]:
+                add_chart(doc, _fg, _cap)
+            if _att_figs[1]:
+                _pt = doc.add_table(rows=1, cols=1); _pt.style = 'Table Grid'
+                _pc = _pt.rows[0].cells[0]
+                set_bg(_pc, TEAL_LIGHT); set_borders(_pc, TEAL_HEX)
+                _pc.paragraphs[0].clear()
+                arun(_pc.paragraphs[0], "WHAT THE DAY ENDS SUGGEST", bold=True, size=16, color=TEAL_HEX)
+                for _t in _att_figs[1]:
+                    _pp = _pc.add_paragraph(); _pp.paragraph_format.space_before = Pt(2); _pp.paragraph_format.space_after = Pt(2)
+                    arun(_pp, "• " + _t, size=15)
+                _pp = _pc.add_paragraph()
+                arun(_pp, "Early patterns with few days are signals to discuss, not conclusions. Absences are not counted as day ends.", italic=True, size=14, color=GREY_DARK)
+                doc.add_paragraph().paragraph_format.space_after = Pt(4)
+            doc.add_page_break()
+
         section_header(doc, "FUNCTIONAL HYPOTHESIS")
         p_sp3 = doc.add_paragraph(); p_sp3.paragraph_format.space_after = Pt(4)
 
@@ -3378,89 +3400,31 @@ def attendance_analysis(state, full_df, start, end) -> dict:
             "halves": (first_half, second_half), "total_att": total_att}
 
 
-def render_attendance_context(student, full_df):
-    """Attendance in the analysis: how much school the student actually attended, incidents
-    relative to that, and what early finishes and day ends show about what helps."""
-    sid = student["id"]
-    state = attendance_state(sid)
-    if not state["schedule"] and not state["exceptions"]:
-        return
-    if full_df is None or full_df.empty or "date_parsed" not in full_df.columns:
-        return
-    start, end = full_df["date_parsed"].min().date(), full_df["date_parsed"].max().date()
-    sm = attendance_summary(state, start, end)
-    if sm["expected"] == 0:
-        return
-    an = attendance_analysis(state, full_df, start, end)
-    n = len(full_df)
-    st.markdown("### 🗓️ Attendance Context")
-    st.caption("Incident counts mean more when set against how much school the student actually attended, and day ends show "
-               "where the day becomes too much and whether the reset works.")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Sessions expected", sm["expected"])
-    c2.metric("Sessions attended", sm["attended"], f"{sm['attended'] / sm['expected'] * 100:.0f}% of expected")
-    c3.metric("Incidents per 10 sessions", f"{(n / sm['attended'] * 10) if sm['attended'] else 0:.1f}")
-    c4.metric("Day ends / early finishes", sm["early_days"], f"{sm['escalation_day_ends']} day ends" if sm["escalation_day_ends"] else None)
-
-    # ── 1. weekly picture ──
+def attendance_insights(an, state, full_df, start, end) -> dict:
+    """The plain-language reading of each attendance chart, shared by the screen and the Word reports."""
+    out = {"weeks": None, "dow": None, "ended": None, "points": []}
     weeks = an["weeks"]
     if len(weeks) >= 2:
-        xs = [w["week"].strftime("%-d %b") for w in weeks]
-        fig = go.Figure()
-        fig.add_bar(x=xs, y=[w["attended"] for w in weeks], name="Attended", marker_color=ATT_CAT_COLORS["Attended"], yaxis="y")
-        for cat in [c for c in ATT_CAT_COLORS if c != "Attended"]:
-            vals = [w["lost"].get(cat, 0) for w in weeks]
-            if any(vals):
-                fig.add_bar(x=xs, y=vals, name=cat, marker_color=ATT_CAT_COLORS[cat], yaxis="y")
-        fig.add_scatter(x=xs, y=[(w["incidents"] / w["attended"] * 10) if w["attended"] else None for w in weeks],
-                        name="Incidents per 10 sessions attended", mode="lines+markers", line=dict(color="#be123c", width=3), yaxis="y2")
-        fig.update_layout(barmode="stack", height=380, margin=dict(t=30, b=40, l=50, r=50), legend=dict(orientation="h", y=1.18),
-                          yaxis=dict(title="Sessions"), yaxis2=dict(title="Incidents per 10 sessions", overlaying="y", side="right", rangemode="tozero"),
-                          xaxis=dict(title="Week starting"))
-        st.plotly_chart(fig, use_container_width=True)
         busiest = max((w for w in weeks if w["attended"]), key=lambda w: w["incidents"] / w["attended"], default=None)
-        _att_insight("Each bar is one week of school. The teal part is the sessions the student attended; the coloured parts are sessions "
-                     "planned but not attended, by reason (amber, blue and purple are the three kinds of day end). The red line is incidents for every 10 sessions "
-                     "attended, so a short week isn't mistaken for improvement. Look for weeks where coloured blocks grow and the line "
-                     "rises or falls with them. "
-                     + (f"The highest rate was the week starting {busiest['week'].strftime('%-d %b')} ({busiest['incidents']} incident(s) in "
-                        f"{busiest['attended']} sessions)." if busiest else ""))
-
-    # ── 2. which day of the week ──
+        out["weeks"] = ("Each bar is one week of school. The teal part is the sessions the student attended; the coloured parts are sessions "
+                        "planned but not attended, by reason (amber, blue and purple are the three kinds of day end). The red line is incidents for every 10 sessions "
+                        "attended, so a short week isn't mistaken for improvement. Look for weeks where coloured blocks grow and the line "
+                        "rises or falls with them. "
+                        + (f"The highest rate was the week starting {busiest['week'].strftime('%-d %b')} ({busiest['incidents']} incident(s) in "
+                           f"{busiest['attended']} sessions)." if busiest else ""))
     dow = an["by_dow"]
     if any(v["attended"] or v["dayends"] or v["absent"] for v in dow.values()):
-        fig2 = go.Figure()
-        fig2.add_bar(x=ATT_DAYS, y=[dow[x]["dayends"] for x in ATT_DAYS], name="Day ends / early finishes", marker_color="#d97706")
-        fig2.add_bar(x=ATT_DAYS, y=[dow[x]["absent"] for x in ATT_DAYS], name="Absent days", marker_color="#cbd5e1")
-        fig2.add_scatter(x=ATT_DAYS, y=[(dow[x]["inc"] / dow[x]["attended"] * 10) if dow[x]["attended"] else None for x in ATT_DAYS],
-                         name="Incidents per 10 sessions attended", mode="lines+markers", line=dict(color="#be123c", width=3), yaxis="y2")
-        fig2.update_layout(barmode="group", height=320, margin=dict(t=30, b=40, l=50, r=50), legend=dict(orientation="h", y=1.18),
-                           yaxis=dict(title="Number of days"), yaxis2=dict(title="Incidents per 10 sessions", overlaying="y", side="right", rangemode="tozero"))
-        st.plotly_chart(fig2, use_container_width=True)
         top_de = max(ATT_DAYS, key=lambda x: dow[x]["dayends"])
-        _att_insight("Which weekdays carry the day ends, absences and incidents. A weekday where all three rise together points to something about "
-                     "that day (the timetable, the staffing, what came before it) rather than the student alone."
-                     + (f" Day ends are most frequent on {ATT_DAYS_FULL[ATT_DAYS.index(top_de)]}s ({dow[top_de]['dayends']})." if dow[top_de]["dayends"] else ""))
-
-    # ── 3. when the day ends ──
+        out["dow"] = ("Which weekdays carry the day ends, absences and incidents. A weekday where all three rise together points to something about "
+                      "that day (the timetable, the staffing, what came before it) rather than the student alone."
+                      + (f" Day ends are most frequent on {ATT_DAYS_FULL[ATT_DAYS.index(top_de)]}s ({dow[top_de]['dayends']})." if dow[top_de]["dayends"] else ""))
     if an["dayend_dates"]:
-        fig3 = go.Figure()
-        for cat in ("Day end: avoid potential escalation", "Day end: needs reset", "Day end: negotiated", "C.I. (critical incident)", "Left early (other reason)"):
-            vals = [an["ended"][x][cat] for x in ATT_SESSIONS]
-            if any(vals):
-                fig3.add_bar(x=[f"After {x}" for x in ATT_SESSIONS], y=vals, name=cat, marker_color=ATT_CAT_COLORS[cat])
-        fig3.update_layout(barmode="stack", height=300, margin=dict(t=30, b=40, l=50, r=30), legend=dict(orientation="h", y=1.2),
-                           yaxis=dict(title="Number of day ends", dtick=1))
-        st.plotly_chart(fig3, use_container_width=True)
         tot = {x: sum(an["ended"][x].values()) for x in ATT_SESSIONS}
         topk = max(tot, key=tot.get)
-        _att_insight("The last session the student attended on days that finished early. Day ends bunched after one session show where "
-                     "the day starts to become too much, which is the place to try a planned break, lower demand or a negotiated "
-                     f"alternative earlier. Most often the day ended after {topk} ({tot[topk]} of {len(an['dayend_dates'])}).")
-
-        # ── 4. what the data suggests ──
-        st.markdown("**What the day ends suggest**")
-        pts = []
+        out["ended"] = ("The last session the student attended on days that finished early. Day ends bunched after one session show where "
+                        "the day starts to become too much, which is the place to try a planned break, lower demand or a negotiated "
+                        f"alternative earlier. Most often the day ended after {topk} ({tot[topk]} of {len(an['dayend_dates'])}).")
+        pts = out["points"]
         f = an["follow"]
         if f["n"] >= 3 and f["att"] and f["other_att"]:
             r1, r2 = f["inc"] / f["att"] * 10, f["other_inc"] / f["other_att"] * 10
@@ -3486,6 +3450,167 @@ def render_attendance_context(student, full_df):
         neg = sum(1 for dd in an["dayend_dates"] if next((e for e in state["exceptions"] if e["date"] == dd.isoformat()), {}).get("reason") == ATT_NEGOTIATED_REASON)
         if neg:
             pts.append(f"{neg} day end(s) were negotiated with the student, which builds their say in the plan. Note whether these become earlier, later or shorter over time.")
+    return out
+
+
+def attendance_report_figures(student_id, full_df):
+    """Matplotlib versions of the attendance charts for Word. Returns (figures, points) or None.
+    figures = [(fig, caption)]; points = the 'what the day ends suggest' lines."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        state = attendance_state(student_id)
+        if not state["schedule"] and not state["exceptions"]:
+            return None
+        if full_df is None or full_df.empty or "date_parsed" not in full_df.columns:
+            return None
+        start, end = full_df["date_parsed"].min().date(), full_df["date_parsed"].max().date()
+        sm = attendance_summary(state, start, end)
+        if not sm["expected"]:
+            return None
+        an = attendance_analysis(state, full_df, start, end)
+        ins = attendance_insights(an, state, full_df, start, end)
+        figs = []
+
+        def style(ax):
+            ax.spines["top"].set_visible(False)
+            ax.grid(axis="y", color="#e2e8f0", linewidth=0.6)
+            ax.set_axisbelow(True)
+
+        weeks = an["weeks"]
+        if ins["weeks"]:
+            fig, ax = plt.subplots(figsize=(9, 3.9), dpi=150)
+            xs = list(range(len(weeks)))
+            bottom = [0] * len(weeks)
+            layers = [("Attended", [w["attended"] for w in weeks])] + [
+                (c, [w["lost"].get(c, 0) for w in weeks]) for c in ATT_CAT_COLORS if c != "Attended"]
+            for name, vals in layers:
+                if any(vals):
+                    ax.bar(xs, vals, bottom=bottom, color=ATT_CAT_COLORS[name], label=name, width=0.65, edgecolor="white", linewidth=0.5)
+                    bottom = [b + v for b, v in zip(bottom, vals)]
+            ax.set_xticks(xs); ax.set_xticklabels([w["week"].strftime("%-d %b") for w in weeks], fontsize=8, rotation=30, ha="right")
+            ax.set_ylabel("Sessions", fontsize=9, fontweight="bold"); ax.set_xlabel("Week starting", fontsize=8)
+            ax2 = ax.twinx()
+            rate = [(w["incidents"] / w["attended"] * 10) if w["attended"] else None for w in weeks]
+            ax2.plot([x for x, r in zip(xs, rate) if r is not None], [r for r in rate if r is not None], color="#be123c", marker="o", linewidth=2.2,
+                     label="Incidents per 10 sessions attended")
+            ax2.set_ylim(bottom=0); ax2.set_ylabel("Incidents per 10 sessions", fontsize=9, color="#be123c")
+            ax2.spines["top"].set_visible(False)
+            h1, l1 = ax.get_legend_handles_labels(); h2, l2 = ax2.get_legend_handles_labels()
+            ax.legend(h1 + h2, l1 + l2, fontsize=7, loc="upper center", bbox_to_anchor=(0.5, 1.22), ncol=3, frameon=False)
+            style(ax); plt.tight_layout(pad=0.4)
+            figs.append((fig, "Attendance by week, with incidents per 10 sessions attended. " + ins["weeks"]))
+        dow = an["by_dow"]
+        if ins["dow"]:
+            fig, ax = plt.subplots(figsize=(9, 3.3), dpi=150)
+            xs = list(range(5)); w = 0.36
+            ax.bar([x - w / 2 for x in xs], [dow[d]["dayends"] for d in ATT_DAYS], w, color="#d97706", label="Day ends / early finishes")
+            ax.bar([x + w / 2 for x in xs], [dow[d]["absent"] for d in ATT_DAYS], w, color="#cbd5e1", label="Absent days")
+            ax.set_xticks(xs); ax.set_xticklabels(ATT_DAYS_FULL, fontsize=9)
+            ax.set_ylabel("Number of days", fontsize=9, fontweight="bold")
+            ax.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(integer=True))
+            ax2 = ax.twinx()
+            pts = [(x, dow[d]["inc"] / dow[d]["attended"] * 10) for x, d in enumerate(ATT_DAYS) if dow[d]["attended"]]
+            if pts:
+                ax2.plot([a for a, _ in pts], [b for _, b in pts], color="#be123c", marker="o", linewidth=2.2, label="Incidents per 10 sessions attended")
+            ax2.set_ylim(bottom=0); ax2.set_ylabel("Incidents per 10 sessions", fontsize=9, color="#be123c"); ax2.spines["top"].set_visible(False)
+            h1, l1 = ax.get_legend_handles_labels(); h2, l2 = ax2.get_legend_handles_labels()
+            ax.legend(h1 + h2, l1 + l2, fontsize=7, loc="upper center", bbox_to_anchor=(0.5, 1.2), ncol=3, frameon=False)
+            style(ax); plt.tight_layout(pad=0.4)
+            figs.append((fig, "Day ends, absences and incident rate by day of the week. " + ins["dow"]))
+        if ins["ended"]:
+            fig, ax = plt.subplots(figsize=(9, 3.1), dpi=150)
+            xs = list(range(3)); bottom = [0, 0, 0]
+            for cat in ("Day end: avoid potential escalation", "Day end: needs reset", "Day end: negotiated", "C.I. (critical incident)", "Left early (other reason)"):
+                vals = [an["ended"][x].get(cat, 0) for x in ATT_SESSIONS]
+                if any(vals):
+                    ax.bar(xs, vals, bottom=bottom, color=ATT_CAT_COLORS[cat], label=cat, width=0.55, edgecolor="white", linewidth=0.5)
+                    bottom = [b + v for b, v in zip(bottom, vals)]
+            ax.set_xticks(xs); ax.set_xticklabels([f"After {x}" for x in ATT_SESSIONS], fontsize=9)
+            ax.set_ylabel("Number of day ends", fontsize=9, fontweight="bold")
+            ax.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(integer=True))
+            ax.legend(fontsize=7, loc="upper center", bbox_to_anchor=(0.5, 1.25), ncol=3, frameon=False)
+            style(ax); plt.tight_layout(pad=0.4)
+            figs.append((fig, "When the day ended (the last session attended). " + ins["ended"]))
+        if not figs:
+            return None
+        return figs, ins["points"]
+    except Exception:
+        return None
+
+
+def render_attendance_context(student, full_df):
+    """Attendance in the analysis: how much school the student actually attended, incidents
+    relative to that, and what early finishes and day ends show about what helps."""
+    sid = student["id"]
+    state = attendance_state(sid)
+    if not state["schedule"] and not state["exceptions"]:
+        return
+    if full_df is None or full_df.empty or "date_parsed" not in full_df.columns:
+        return
+    start, end = full_df["date_parsed"].min().date(), full_df["date_parsed"].max().date()
+    sm = attendance_summary(state, start, end)
+    if sm["expected"] == 0:
+        return
+    an = attendance_analysis(state, full_df, start, end)
+    n = len(full_df)
+    st.markdown("### 🗓️ Attendance Context")
+    st.caption("Incident counts mean more when set against how much school the student actually attended, and day ends show "
+               "where the day becomes too much and whether the reset works.")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Sessions expected", sm["expected"])
+    c2.metric("Sessions attended", sm["attended"], f"{sm['attended'] / sm['expected'] * 100:.0f}% of expected")
+    c3.metric("Incidents per 10 sessions", f"{(n / sm['attended'] * 10) if sm['attended'] else 0:.1f}")
+    c4.metric("Day ends / early finishes", sm["early_days"], f"{sm['escalation_day_ends']} day ends" if sm["escalation_day_ends"] else None)
+
+    ins = attendance_insights(an, state, full_df, start, end)
+    # ── 1. weekly picture ──
+    weeks = an["weeks"]
+    if len(weeks) >= 2:
+        xs = [w["week"].strftime("%-d %b") for w in weeks]
+        fig = go.Figure()
+        fig.add_bar(x=xs, y=[w["attended"] for w in weeks], name="Attended", marker_color=ATT_CAT_COLORS["Attended"], yaxis="y")
+        for cat in [c for c in ATT_CAT_COLORS if c != "Attended"]:
+            vals = [w["lost"].get(cat, 0) for w in weeks]
+            if any(vals):
+                fig.add_bar(x=xs, y=vals, name=cat, marker_color=ATT_CAT_COLORS[cat], yaxis="y")
+        fig.add_scatter(x=xs, y=[(w["incidents"] / w["attended"] * 10) if w["attended"] else None for w in weeks],
+                        name="Incidents per 10 sessions attended", mode="lines+markers", line=dict(color="#be123c", width=3), yaxis="y2")
+        fig.update_layout(barmode="stack", height=380, margin=dict(t=30, b=40, l=50, r=50), legend=dict(orientation="h", y=1.18),
+                          yaxis=dict(title="Sessions"), yaxis2=dict(title="Incidents per 10 sessions", overlaying="y", side="right", rangemode="tozero"),
+                          xaxis=dict(title="Week starting"))
+        st.plotly_chart(fig, use_container_width=True)
+        _att_insight(ins['weeks'])
+
+    # ── 2. which day of the week ──
+    dow = an["by_dow"]
+    if any(v["attended"] or v["dayends"] or v["absent"] for v in dow.values()):
+        fig2 = go.Figure()
+        fig2.add_bar(x=ATT_DAYS, y=[dow[x]["dayends"] for x in ATT_DAYS], name="Day ends / early finishes", marker_color="#d97706")
+        fig2.add_bar(x=ATT_DAYS, y=[dow[x]["absent"] for x in ATT_DAYS], name="Absent days", marker_color="#cbd5e1")
+        fig2.add_scatter(x=ATT_DAYS, y=[(dow[x]["inc"] / dow[x]["attended"] * 10) if dow[x]["attended"] else None for x in ATT_DAYS],
+                         name="Incidents per 10 sessions attended", mode="lines+markers", line=dict(color="#be123c", width=3), yaxis="y2")
+        fig2.update_layout(barmode="group", height=320, margin=dict(t=30, b=40, l=50, r=50), legend=dict(orientation="h", y=1.18),
+                           yaxis=dict(title="Number of days"), yaxis2=dict(title="Incidents per 10 sessions", overlaying="y", side="right", rangemode="tozero"))
+        st.plotly_chart(fig2, use_container_width=True)
+        _att_insight(ins['dow'])
+
+    # ── 3. when the day ends ──
+    if an["dayend_dates"]:
+        fig3 = go.Figure()
+        for cat in ("Day end: avoid potential escalation", "Day end: needs reset", "Day end: negotiated", "C.I. (critical incident)", "Left early (other reason)"):
+            vals = [an["ended"][x][cat] for x in ATT_SESSIONS]
+            if any(vals):
+                fig3.add_bar(x=[f"After {x}" for x in ATT_SESSIONS], y=vals, name=cat, marker_color=ATT_CAT_COLORS[cat])
+        fig3.update_layout(barmode="stack", height=300, margin=dict(t=30, b=40, l=50, r=30), legend=dict(orientation="h", y=1.2),
+                           yaxis=dict(title="Number of day ends", dtick=1))
+        st.plotly_chart(fig3, use_container_width=True)
+        _att_insight(ins['ended'])
+
+        # ── 4. what the data suggests ──
+        st.markdown("**What the day ends suggest**")
+        pts = ins['points']
         for ptxt in pts:
             st.markdown(f"- {ptxt}")
         st.caption("Early patterns with few days are signals to discuss, not conclusions. Absences are not counted as day ends.")
