@@ -1,276 +1,618 @@
 """
-67_Allocation_List_Updater.py  —  CLC-LBU portal
-Adds newly allocated students (saved by the Allocation Meetings Tool) into the
-weekly CLC Allocation List spreadsheet.
+allocation_list_utils.py
+Writes newly allocated students into the CLC Allocation List workbook
+(e.g. CLC_Allocation_List_Week_2.xlsx) without breaking its layout.
 
-Flow
- 1. Admin uploads this week's list (e.g. CLC_Allocation_List_Week_2.xlsx)
- 2. Tool reads allocated students from Supabase and shows which ones are NOT
-    on the list yet (matched by name — the Allocation tool has no EDID)
- 3. Admin ticks who to add, checks/edits details, picks the new week
- 4. Downloads next week's list (…_Week_3.xlsx) with students in the right
-    JP / Primary / Seniors block, numbering + total + page header updated
+Layout it expects (sheet "Student Information"):
+  Row 2            column headings
+  "JUNIOR PRIMARY" section header row  -> student rows -> spare blank rows
+  "PRIMARY"        section header row  -> student rows
+  "SENIORS"        section header row  -> student rows
+  "TOTAL STUDENT ALLOCATED" row (count in column E)
 
-Nothing is written back to Supabase; the uploaded file is never changed.
+Sections are found by scanning column A, so the tool keeps working if rows
+are added or removed by hand.
 """
 
+from __future__ import annotations
+
+import copy
 import io
-import os
-from datetime import date, timedelta
+import re
+from dataclasses import dataclass
+from datetime import date, datetime
 
 import openpyxl
-import pandas as pd
-import streamlit as st
+from openpyxl.formatting.formatting import ConditionalFormattingList
+from openpyxl.utils import get_column_letter, range_boundaries
 
-from allocation_list_utils import (
-    FLAG_LABELS, NewStudent, add_students, current_term_week,
-    existing_edids, existing_names, norm_edid, norm_name, norm_program,
-    next_week_filename, to_date,
-)
+SHEET_NAME = "Student Information"
 
-st.set_page_config(page_title="Allocation List Updater", page_icon="📋", layout="wide")
+# Section header text in column A  ->  program code
+SECTION_HEADERS = {
+    "JUNIOR PRIMARY": "JP",
+    "PRIMARY": "PY",
+    "SENIORS": "SY",
+}
+TOTAL_LABEL = "TOTAL STUDENT ALLOCATED"
+
+# Program aliases accepted from the allocation data
+PROGRAM_ALIASES = {
+    "JP": "JP", "JUNIOR PRIMARY": "JP", "JUNIOR": "JP",
+    "PY": "PY", "PRIMARY": "PY", "PRIMARY YEARS": "PY",
+    "SY": "SY", "SENIOR": "SY", "SENIORS": "SY", "SENIOR YEARS": "SY",
+}
+
+# Column letters in the allocation list
+COL = {
+    "num": "A", "name": "B", "edid": "C", "dob": "D", "school": "E",
+    "year": "F", "male": "G", "female": "H",
+    "start_term": "I", "start_week": "J", "start_date": "K",
+    "review": "L",
+    "exit_term": "M", "exit_week": "N", "exit_date": "O",
+    "ext_term_week": "P", "ext_end_date": "Q",
+    "prev": "R",
+    "ealD": "S", "atsi": "T", "dcp": "U", "sic": "V", "iesp": "W",
+    "swd": "X", "speech_language": "Y", "asd": "Z", "adhd": "AA",
+    "intellectual": "AB", "language_difficulty": "AC",
+    "sensory_processing": "AD", "sc": "AE", "medication": "AF",
+    "focus_teacher": "AG", "bsc": "AH",
+}
+FLAG_FIELDS = [
+    "ealD", "atsi", "dcp", "sic", "swd", "speech_language", "asd", "adhd",
+    "intellectual", "language_difficulty", "sensory_processing", "sc",
+    "medication",
+]
+FLAG_LABELS = {
+    "ealD": "EALD", "atsi": "ATSI", "dcp": "DCP Involve", "sic": "SIC",
+    "swd": "SWD", "speech_language": "Speech and Language", "asd": "ASD",
+    "adhd": "ADHD", "intellectual": "Intellectual",
+    "language_difficulty": "LNG Diff", "sensory_processing": "Sensory Proces",
+    "sc": "SC", "medication": "Medication",
+}
+LAST_COL = "AH"
 
 # ---------------------------------------------------------------------------
-# Access: admin / leadership only (student names and DOBs)
-# Uses the portal's shared confidential password gate.
+# SA Department for Education term dates.  UPDATE EACH YEAR.
+# (start = first day of Week 1, end = last day of term)
 # ---------------------------------------------------------------------------
-import confidential_auth  # noqa: E402
-
-_gate = next(
-    (getattr(confidential_auth, n) for n in (
-        "require_confidential_password", "require_confidential_auth", "check_confidential_password",
-        "confidential_gate", "require_password", "check_password",
-    ) if callable(getattr(confidential_auth, n, None))),
-    None,
-)
-if _gate is None:
-    st.error("Couldn't find the password check in confidential_auth.py — page locked.")
-    st.stop()
-if _gate() is False:
-    st.stop()
-
-# ---------------------------------------------------------------------------
-# Source: the Allocation Meetings Tool's table (33_Allocation_Meetings_Tool.py)
-# ---------------------------------------------------------------------------
-ALLOCATION_TABLE = "allocation_students"
-
-# Allocation tool flag column  ->  allocation list column (see allocation_list_utils.COL)
-FLAG_MAP = {
-    "flag_eald": "ealD",
-    "flag_atsi": "atsi",
-    "flag_dcp_involvement": "dcp",
-    "flag_child_in_care": "sic",
-    "flag_swd": "swd",
-    "flag_speech_and_lang": "speech_language",
-    "flag_asd": "asd",
-    "flag_adhd": "adhd",
-    "flag_intellectual": "intellectual",
-    "flag_learning_difficulty": "language_difficulty",
-    "flag_sensory_processing": "sensory_processing",
-    "flag_medication": "medication",
+SA_TERMS = {
+    2026: [
+        (date(2026, 1, 27), date(2026, 4, 10)),
+        (date(2026, 4, 27), date(2026, 7, 3)),
+        (date(2026, 7, 20), date(2026, 9, 25)),
+        (date(2026, 10, 12), date(2026, 12, 11)),
+    ],
+    2027: [
+        (date(2027, 1, 27), date(2027, 4, 9)),
+        (date(2027, 4, 26), date(2027, 7, 2)),
+        (date(2027, 7, 19), date(2027, 9, 24)),
+        (date(2027, 10, 11), date(2027, 12, 10)),
+    ],
 }
 
 
-@st.cache_resource
-def _supabase():
-    from supabase import create_client
-    return create_client(os.environ.get("SUPABASE_URL"), os.environ.get("SUPABASE_KEY"))
+def term_and_week(d: date | None) -> tuple[str, str]:
+    """Return ("T4", "Wk 1") for a date, or ("", "") if outside a known term."""
+    if not d:
+        return "", ""
+    for terms in SA_TERMS.values():
+        for i, (start, end) in enumerate(terms, start=1):
+            if start <= d <= end:
+                # Week 1 starts on the Monday of the term's first week
+                monday = start.toordinal() - start.weekday()
+                week = (d.toordinal() - monday) // 7 + 1
+                return f"T{i}", f"Wk {week}"
+    return "", ""
 
 
-def _yes(v) -> bool:
-    return str(v or "").strip().lower() in {"yes", "y", "true", "1"}
-
-
-def _iesp_category(r: dict):
-    """Highest funding category ticked (9+ RAAP counts as 9), else blank."""
-    if _yes(r.get("flag_9plusraap")):
-        return 9
-    for i in range(9, 0, -1):
-        if _yes(r.get(f"flag_category_{i}")):
-            return i
-    return None
-
-
-def _first_name(full) -> str:
-    return str(full or "").strip().split(" ")[0] if full else ""
-
-
-@st.cache_data(ttl=60)
-def load_allocated() -> list[dict]:
-    rows = (
-        _supabase().table(ALLOCATION_TABLE).select("*")
-        .eq("outcome", "Allocated").execute().data or []
-    )
-    out = []
-    for r in rows:
-        out.append({
-            "Add": True,
-            "Program": norm_program(r.get("program")),
-            "Student": str(r.get("student_name") or "").strip(),
-            "EDID": "",
-            "DOB": to_date(r.get("date_of_birth")),
-            "School": str(r.get("school") or ""),
-            "Year": str(r.get("year_level") or ""),
-            "Gender": str(r.get("gender") or "")[:1].upper() if str(r.get("gender") or "")[:1].upper() in ("M", "F") else "",
-            "Start date": to_date(r.get("start_after")),
-            "Exit date": to_date(r.get("finishing_date")),
-            "Review": "",
-            "Focus teacher": _first_name(r.get("actioned_by") or r.get("case_worker")),
-            "BSC": str(r.get("bse") or ""),
-            "IESP": _iesp_category(r),
-            "Flags": [FLAG_LABELS[col] for db, col in FLAG_MAP.items() if _yes(r.get(db))],
-            "_finished": to_date(r.get("actual_finish_date")),
-            "_meeting": to_date(r.get("meeting_date")),
-        })
-    return out
+def current_term_week(today: date | None = None) -> tuple[str, str]:
+    return term_and_week(today or date.today())
 
 
 # ---------------------------------------------------------------------------
-# Page
+# Value helpers
 # ---------------------------------------------------------------------------
-st.title("📋 Allocation List Updater")
-st.caption("Adds students allocated in the Allocation Meetings Tool to the weekly CLC Allocation List.")
-
-up = st.file_uploader("1. Upload this week's allocation list", type=["xlsx"])
-if not up:
-    st.info("Upload the current list (e.g. CLC_Allocation_List_Week_2.xlsx) to begin.")
-    st.stop()
-
-xlsx_bytes = up.getvalue()
-try:
-    _ws = openpyxl.load_workbook(io.BytesIO(xlsx_bytes)).worksheets[0]
-    on_list = existing_edids(_ws)
-    names_on_list = existing_names(_ws)
-except Exception as e:  # wrong file / layout changed
-    st.error(f"Couldn't read that file: {e}")
-    st.stop()
-
-counts = {p: sum(1 for v in on_list.values() if v == p) for p in ("JP", "PY", "SY")}
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("On list", len(on_list))
-c2.metric("JP", counts["JP"])
-c3.metric("Primary", counts["PY"])
-c4.metric("Seniors", counts["SY"])
-
-try:
-    allocated = load_allocated()
-except Exception as e:
-    st.error(f"Couldn't load allocations from Supabase: {e}")
-    allocated = []
-
-# Only students who still have a placement ahead of them and aren't on the list yet
-today = date.today()
-show_all = st.toggle(
-    "Include older allocations",
-    help="Off: hides students whose placement has finished, whose end date is more than a week "
-         "ago, or who were allocated more than a term ago.",
-)
+def to_date(value) -> date | None:
+    """Accept date/datetime/ISO string/'d/m/yyyy' and return a date."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    s = str(value).strip()
+    for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%d/%m/%Y", "%d/%m/%y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(s[:19] if "T" in s else s, fmt).date()
+        except ValueError:
+            continue
+    m = re.fullmatch(r"(\d{1,2})[/.-](\d{1,2})", s)  # '20/11' -> this year
+    if m:
+        try:
+            return date(date.today().year, int(m.group(2)), int(m.group(1)))
+        except ValueError:
+            return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
 
 
-def _current(a) -> bool:
-    if a["_finished"] and a["_finished"] < today:
-        return False
-    if a["Exit date"] and a["Exit date"] < today - timedelta(days=7):
-        return False
-    if not a["Exit date"] and a["_meeting"] and a["_meeting"] < today - timedelta(weeks=11):
-        return False
-    return True
+def is_yes(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"y", "yes", "true", "1", "x", "✓"}
 
 
-new = [
-    a for a in allocated
-    if norm_name(a["Student"]) not in names_on_list and (show_all or _current(a))
-]
+def norm_edid(value) -> str:
+    return re.sub(r"\s+", "", str(value or "")).upper()
 
-st.subheader("2. New students to add")
-if not new:
-    st.success("Everyone currently allocated in the Allocation Meetings Tool is already on this list.")
-    st.stop()
 
-st.caption(
-    f"{len(new)} allocated student(s) aren't on this list yet (matched by name). Untick anyone who "
-    "shouldn't be added. **Type in each EDID** — the Allocation tool doesn't record it. Add the review "
-    "date and fix anything else here; Program decides the block (JP / PY / SY)."
-)
-df = pd.DataFrame(new).drop(columns=["_finished", "_meeting"])
-df["Flags"] = df["Flags"].apply(lambda x: ", ".join(x))
-edited = st.data_editor(
-    df,
-    hide_index=True,
-    use_container_width=True,
-    column_config={
-        "Add": st.column_config.CheckboxColumn(width="small"),
-        "Program": st.column_config.SelectboxColumn(options=["JP", "PY", "SY"], required=True, width="small"),
-        "EDID": st.column_config.TextColumn(help="Type the student's EDID, e.g. 110182084P"),
-        "DOB": st.column_config.DateColumn(format="D/MM/YYYY"),
-        "Start date": st.column_config.DateColumn(format="D/MM/YYYY"),
-        "Exit date": st.column_config.DateColumn(format="D/MM/YYYY"),
-        "Gender": st.column_config.SelectboxColumn(options=["M", "F", ""], width="small"),
-        "Review": st.column_config.TextColumn(help="e.g. 22 Oct @ 1pm"),
-        "IESP": st.column_config.NumberColumn(help="Funding category (1–9)", width="small"),
-        "Flags": st.column_config.TextColumn(help="Comma-separated, e.g. ASD, ADHD"),
-    },
-    key="new_students",
-)
+def norm_program(value) -> str:
+    """Accepts JP / 'Junior Primary' / 'Junior Primary (JP)' etc."""
+    v = str(value or "").strip().upper()
+    m = re.search(r"\((JP|PY|SY)\)", v)
+    if m:
+        return m.group(1)
+    return PROGRAM_ALIASES.get(v, "")
 
-missing_edid = edited[edited["Add"] & (edited["EDID"].fillna("").str.strip() == "")]
-if len(missing_edid):
-    st.warning(
-        f"{len(missing_edid)} ticked student(s) have no EDID yet — they'll still be added, "
-        "with the EDID cell left blank."
-    )
-for e in edited["EDID"].fillna(""):
-    if norm_edid(e) and norm_edid(e) in on_list:
-        st.warning(f"EDID {norm_edid(e)} is already on the list — that student will be skipped.")
 
-st.subheader("3. Week for the new list")
-# Default: the week after the uploaded list (from its page header), else this week
-import re  # noqa: E402
+def year_cell(value):
+    """Keep 'Rec' as text, year numbers as numbers (matches the existing list)."""
+    s = str(value or "").strip()
+    if not s:
+        return None
+    if s.lower() in {"r", "rec", "reception", "0"}:
+        return "Rec"
+    s = re.sub(r"(?i)^(yr|year)\s*", "", s)
+    return int(s) if s.isdigit() else s
 
-_hdr = " ".join(filter(None, [_ws.oddHeader.center.text, _ws.oddHeader.left.text, _ws.oddHeader.right.text]))
-_m = re.search(r"(?i)TERM\s*(\d)\s*WEEK\s*(\d+)", _hdr)
-if _m:
-    t_default, w_default = int(_m.group(1)), int(_m.group(2)) + 1
-    if w_default > 11:
-        t_default, w_default = min(t_default + 1, 4), 1
-else:
-    term_now, week_now = current_term_week()
-    t_default = int(term_now[1:]) if term_now else 4
-    w_default = int(week_now.split()[-1]) if week_now else 1
-a, b = st.columns(2)
-term = a.selectbox("Term", [1, 2, 3, 4], index=t_default - 1)
-week = b.number_input("Week", min_value=1, max_value=11, value=w_default)
 
-label_to_flag = {v.lower(): k for k, v in FLAG_LABELS.items()}
-students = []
-for _, r in edited[edited["Add"]].iterrows():
-    flags = {}
-    for part in str(r["Flags"] or "").split(","):
-        k = label_to_flag.get(part.strip().lower())
-        if k:
-            flags[k] = True
-    students.append(NewStudent(
-        name=r["Student"], edid=r["EDID"] or "", program=r["Program"] or "",
-        dob=to_date(r["DOB"]), school=r["School"] or "", year=r["Year"] or "", gender=r["Gender"] or "",
-        start_date=to_date(r["Start date"]), exit_date=to_date(r["Exit date"]),
-        review=r["Review"] or "", flags=flags,
-        iesp=int(r["IESP"]) if pd.notna(r["IESP"]) else None,
-        focus_teacher=r["Focus teacher"] or "", bsc=r["BSC"] or "",
-    ))
+# ---------------------------------------------------------------------------
+# Student record
+# ---------------------------------------------------------------------------
+@dataclass
+class NewStudent:
+    name: str
+    edid: str
+    program: str                 # JP / PY / SY
+    dob: date | None = None
+    school: str = ""
+    year: str = ""
+    gender: str = ""             # "M" / "F" / ""
+    start_date: date | None = None
+    exit_date: date | None = None
+    review: str = ""             # free text, e.g. "22 Oct @ 1pm"
+    prev: str | int | None = None
+    iesp: str | int | None = None
+    flags: dict | None = None    # {"asd": True, ...}
+    focus_teacher: str = ""
+    bsc: str = ""
+    ext_end_date: date | None = None   # approved extension: new end date
 
-if st.button(f"Build list with {len(students)} new student(s)", type="primary", disabled=not students):
-    result = add_students(xlsx_bytes, students, header_term=f"T{term}", header_week=int(week))
-    if result.added:
-        st.success(
-            f"Added {len(result.added)}: "
-            + ", ".join(f"{n} ({p})" for n, p in result.added)
-            + f". Total allocated is now {result.total}."
+    def problems(self) -> list[str]:
+        out = []
+        if not self.name.strip():
+            out.append("no student name")
+        if self.program not in ("JP", "PY", "SY"):
+            out.append("program not JP / PY / SY")
+        return out
+
+
+# ---------------------------------------------------------------------------
+# Workbook structure
+# ---------------------------------------------------------------------------
+@dataclass
+class Section:
+    program: str
+    header_row: int
+    first_row: int
+    last_row: int  # last row belonging to this section (before next header)
+
+
+def _cell_text(ws, row, col="A") -> str:
+    v = ws[f"{col}{row}"].value
+    return str(v).strip().upper() if v is not None else ""
+
+
+def find_layout(ws) -> tuple[list[Section], int]:
+    """Return the three sections and the TOTAL row number."""
+    headers = []
+    total_row = None
+    for r in range(1, ws.max_row + 1):
+        t = _cell_text(ws, r)
+        if t in SECTION_HEADERS:
+            headers.append((r, SECTION_HEADERS[t]))
+        elif t.startswith("TOTAL"):
+            total_row = r
+            break
+    if total_row is None or len(headers) != 3:
+        raise ValueError(
+            "Couldn't find the JUNIOR PRIMARY / PRIMARY / SENIORS headings and the "
+            "TOTAL row in column A. Is this the CLC Allocation List?"
         )
-    for n, why in result.skipped:
-        st.warning(f"Skipped {n}: {why}")
-    fname = next_week_filename(up.name)
-    st.download_button(
-        f"⬇️ Download {fname}", result.workbook_bytes, file_name=fname,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    sections = []
+    for i, (r, prog) in enumerate(headers):
+        nxt = headers[i + 1][0] if i + 1 < len(headers) else total_row
+        sections.append(Section(prog, r, r + 1, nxt - 1))
+    return sections, total_row
+
+
+def norm_name(value) -> str:
+    """'PAYTON  HARVEY ' -> 'payton harvey' (the list mixes upper and title case)."""
+    return re.sub(r"[^a-z' -]", "", re.sub(r"\s+", " ", str(value or "").strip().lower()))
+
+
+def existing_names(ws) -> dict[str, str]:
+    """normalised student name -> program for every student already on the list."""
+    sections, _ = find_layout(ws)
+    found = {}
+    for s in sections:
+        for r in range(s.first_row, s.last_row + 1):
+            n = norm_name(ws[f"{COL['name']}{r}"].value)
+            if n:
+                found[n] = s.program
+    return found
+
+
+def existing_edids(ws) -> dict[str, str]:
+    """EDID -> program for every student already on the list."""
+    sections, _ = find_layout(ws)
+    found = {}
+    for s in sections:
+        for r in range(s.first_row, s.last_row + 1):
+            e = norm_edid(ws[f"{COL['edid']}{r}"].value)
+            if e:
+                found[e] = s.program
+    return found
+
+
+def _row_is_empty(ws, r) -> bool:
+    return not str(ws[f"{COL['name']}{r}"].value or "").strip() and not norm_edid(
+        ws[f"{COL['edid']}{r}"].value
     )
-    st.caption("Remember to also add new students to the Student Register and create their OneDrive folder.")
+
+
+# ---------------------------------------------------------------------------
+# Row insertion that keeps merges, heights and conditional formatting intact
+# (openpyxl's insert_rows doesn't move any of these on its own)
+# ---------------------------------------------------------------------------
+def _shift_range(ref: str, at: int, n: int, extend_end_at: int | None) -> str:
+    min_col, min_row, max_col, max_row = range_boundaries(ref)
+    if min_row >= at:
+        min_row += n
+        max_row += n
+    elif max_row >= at:
+        max_row += n
+    elif extend_end_at is not None and max_row == extend_end_at:
+        max_row += n  # range ended on the section's last row: grow it
+    a = f"{get_column_letter(min_col)}{min_row}"
+    b = f"{get_column_letter(max_col)}{max_row}"
+    return a if a == b else f"{a}:{b}"
+
+
+_REF = re.compile(r"(?<![A-Za-z$])(\$?)([A-Z]{1,3})(\$?)(\d+)(?![\d(])")
+
+
+def _shift_formula(f: str, at: int, n: int) -> str:
+    """Move row numbers >= at down by n in a conditional-format formula."""
+    if f.startswith('"'):
+        return f
+
+    def rep(m):
+        row = int(m.group(4))
+        if row >= at:
+            row += n
+        return f"{m.group(1)}{m.group(2)}{m.group(3)}{row}"
+
+    return _REF.sub(rep, f)
+
+
+def insert_rows_keep_format(ws, at: int, n: int, template_row: int):
+    """Insert n rows before `at`, styled like template_row."""
+    # merges
+    merges = [str(m) for m in ws.merged_cells.ranges]
+    for m in merges:
+        ws.unmerge_cells(m)
+    # row heights
+    heights = {r: d.height for r, d in ws.row_dimensions.items() if d.height}
+    # conditional formatting
+    old_cf = ws.conditional_formatting
+    cf_rules = []
+    for cf in old_cf:
+        refs = str(cf.sqref).split()
+        cf_rules.append((refs, cf.rules))
+
+    ws.insert_rows(at, n)
+    tmpl = template_row + n if template_row >= at else template_row
+
+    for m in merges:
+        ws.merge_cells(_shift_range(m, at, n, None))
+
+    for r in sorted(heights, reverse=True):
+        if r >= at:
+            ws.row_dimensions[r + n].height = heights[r]
+    tmpl_h = heights.get(template_row)
+    for i in range(n):
+        ws.row_dimensions[at + i].height = tmpl_h
+
+    new_cf = ConditionalFormattingList()
+    for refs, rules in cf_rules:
+        shifted = " ".join(_shift_range(x, at, n, at - 1) for x in refs)
+        # rule formulas are relative to the first range's top-left cell
+        moved = range_boundaries(refs[0])[1] >= at
+        for rule in rules:
+            if moved and rule.formula:
+                rule.formula = [_shift_formula(f, at, n) for f in rule.formula]
+            new_cf.add(shifted, rule)
+    ws.conditional_formatting = new_cf
+
+    max_col = openpyxl.utils.column_index_from_string(LAST_COL)
+    for i in range(n):
+        for c in range(1, max_col + 1):
+            src = ws.cell(tmpl, c)
+            dst = ws.cell(at + i, c)
+            if src.has_style:
+                dst._style = copy.copy(src._style)
+
+
+# ---------------------------------------------------------------------------
+# Writing a student
+# ---------------------------------------------------------------------------
+def _write_student(ws, r: int, s: NewStudent):
+    def put(key, value):
+        ws[f"{COL[key]}{r}"] = value if value not in ("", None) else None
+
+    put("name", s.name.strip())
+    put("edid", norm_edid(s.edid))
+    put("dob", s.dob)
+    put("school", s.school.strip())
+    put("year", year_cell(s.year))
+    g = s.gender.strip().upper()[:1]
+    put("male", "y" if g == "M" else None)
+    put("female", "y" if g == "F" else None)
+    st, sw = term_and_week(s.start_date)
+    put("start_term", st)
+    put("start_week", sw)
+    put("start_date", s.start_date)
+    put("review", s.review.strip())
+    et, ew = term_and_week(s.exit_date)
+    put("exit_term", et)
+    put("exit_week", ew)
+    put("exit_date", s.exit_date)
+    if s.ext_end_date:
+        xt, xw = term_and_week(s.ext_end_date)
+        put("ext_term_week", f"{xt} {xw.lower()}".strip() if xt else None)
+        put("ext_end_date", s.ext_end_date)
+        cell = ws[f"{COL['ext_end_date']}{r}"]
+        if cell.number_format == "General":
+            cell.number_format = "d-mmm"
+    else:
+        put("ext_term_week", None)
+        put("ext_end_date", None)
+    put("prev", s.prev)
+    put("iesp", s.iesp)
+    for f in FLAG_FIELDS:
+        put(f, "y" if (s.flags or {}).get(f) else None)
+    put("focus_teacher", s.focus_teacher.strip())
+    put("bsc", s.bsc.strip())
+    for key in ("dob", "start_date", "exit_date"):
+        cell = ws[f"{COL[key]}{r}"]
+        if cell.number_format == "General":  # keep each column's own date style
+            cell.number_format = "d-mmm" if key == "exit_date" else "d/mm/yyyy"
+
+
+def set_header_week(ws, term: str, week: int) -> bool:
+    """Update the printed page header, e.g. 'TERM 4  WEEK 2' -> 'TERM 4  WEEK 3'."""
+    changed = False
+    for hdr in (ws.oddHeader, ws.evenHeader, ws.firstHeader):
+        for part in (hdr.left, hdr.center, hdr.right):
+            if part.text and re.search(r"(?i)TERM\s*\d+\s*WEEK\s*\d+", part.text):
+                part.text = re.sub(
+                    r"(?i)TERM\s*\d+(\s*)WEEK\s*\d+",
+                    lambda m: f"TERM {term.lstrip('Tt')}{m.group(1)}WEEK {week}",
+                    part.text,
+                )
+                changed = True
+    return changed
+
+
+def _renumber_and_total(ws):
+    sections, total_row = find_layout(ws)
+    total = 0
+    for s in sections:
+        n = 0
+        for r in range(s.first_row, s.last_row + 1):
+            if _row_is_empty(ws, r):
+                ws[f"{COL['num']}{r}"] = None
+            else:
+                n += 1
+                ws[f"{COL['num']}{r}"] = n
+        total += n
+    ws[f"E{total_row}"] = total
+    return total
+
+
+@dataclass
+class AddResult:
+    added: list[tuple[str, str]]      # (name, program)
+    skipped: list[tuple[str, str]]    # (name, reason)
+    total: int
+    workbook_bytes: bytes
+
+
+def add_students(
+    xlsx_bytes: bytes,
+    students: list[NewStudent],
+    header_term: str | None = None,
+    header_week: int | None = None,
+) -> AddResult:
+    wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes))
+    ws = wb[SHEET_NAME] if SHEET_NAME in wb.sheetnames else wb.worksheets[0]
+
+    on_list = existing_edids(ws)
+    names_on_list = existing_names(ws)
+    added, skipped = [], []
+    seen, seen_names = set(), set()
+
+    for s in students:
+        label = s.name.strip() or "(no name)"
+        issues = s.problems()
+        if issues:
+            skipped.append((label, ", ".join(issues)))
+            continue
+        e = norm_edid(s.edid)
+        nm = norm_name(s.name)
+        if (e and (e in on_list or e in seen)) or nm in names_on_list or nm in seen_names:
+            skipped.append((label, "already on the list"))
+            continue
+
+        sections, _ = find_layout(ws)
+        sec = next(x for x in sections if x.program == s.program)
+        target = next(
+            (r for r in range(sec.first_row, sec.last_row + 1) if _row_is_empty(ws, r)),
+            None,
+        )
+        if target is None:
+            # section full: add a row at the bottom of it, styled like the last row
+            target = sec.last_row + 1
+            insert_rows_keep_format(ws, target, 1, template_row=sec.last_row)
+        _write_student(ws, target, s)
+        h = ws.row_dimensions[target].height
+        if not h or h < 28:
+            ws.row_dimensions[target].height = 30  # spare rows are short
+        if e:
+            seen.add(e)
+        seen_names.add(nm)
+        added.append((label, s.program))
+
+    total = _renumber_and_total(ws)
+    if header_term and header_week:
+        set_header_week(ws, header_term, header_week)
+    out = io.BytesIO()
+    wb.save(out)
+    return AddResult(added, skipped, total, out.getvalue())
+
+
+def next_week_filename(current_name: str) -> str:
+    """CLC_Allocation_List_Week_2.xlsx -> CLC_Allocation_List_Week_3.xlsx"""
+    m = re.search(r"(?i)(week[_\s-]*)(\d+)", current_name)
+    if m:
+        return current_name[: m.start(2)] + str(int(m.group(2)) + 1) + current_name[m.end(2):]
+    stem = current_name.rsplit(".", 1)[0]
+    return f"{stem}_updated.xlsx"
+
+
+# ---------------------------------------------------------------------------
+# Whole-list build (live list -> Head Office spreadsheet)
+# ---------------------------------------------------------------------------
+def clear_students(ws):
+    """Blank every student row (values only) — keeps headings, styles, rules."""
+    sections, _ = find_layout(ws)
+    last = openpyxl.utils.column_index_from_string(LAST_COL)
+    for sec in sections:
+        for r in range(sec.first_row, sec.last_row + 1):
+            for c in range(1, last + 1):
+                cell = ws.cell(r, c)
+                if not isinstance(cell, openpyxl.cell.cell.MergedCell):
+                    cell.value = None
+
+
+def build_list(
+    template_bytes: bytes,
+    students: list[NewStudent],
+    term: str,
+    week: int,
+) -> AddResult:
+    """Fresh list from the template: clear it, then add every active student,
+    each program block ordered by start date."""
+    wb = openpyxl.load_workbook(io.BytesIO(template_bytes))
+    ws = wb[SHEET_NAME] if SHEET_NAME in wb.sheetnames else wb.worksheets[0]
+    clear_students(ws)
+    buf = io.BytesIO()
+    wb.save(buf)
+    ordered = sorted(
+        students,
+        key=lambda s: ({"JP": 0, "PY": 1, "SY": 2}.get(s.program, 9),
+                       s.start_date or date.max, s.name.lower()),
+    )
+    return add_students(buf.getvalue(), ordered, header_term=term, header_week=week)
+
+
+def _tw_key(term, week) -> str:
+    t = re.sub(r"\D", "", str(term or ""))
+    w = re.sub(r"\D", "", str(week or ""))
+    return f"{t}-{w}" if t and w else ""
+
+
+def fix_date(d: date | None, term, week) -> tuple[date | None, bool]:
+    """If a date disagrees with the Term/Week typed beside it but its day/month
+    swapped agrees, return the swapped date. Returns (date, was_fixed)."""
+    want = _tw_key(term, week)
+    if not d or not want:
+        return d, False
+    if _tw_key(*term_and_week(d)) == want:
+        return d, False
+    try:
+        swapped = date(d.year, d.day, d.month)
+    except ValueError:
+        return d, False
+    if _tw_key(*term_and_week(swapped)) == want:
+        return swapped, True
+    return d, False
+
+
+def read_list(xlsx_bytes: bytes) -> list[dict]:
+    """Read every student row of an existing allocation list (for the one-off import)."""
+    wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes))
+    ws = wb[SHEET_NAME] if SHEET_NAME in wb.sheetnames else wb.worksheets[0]
+    sections, _ = find_layout(ws)
+    rows = []
+    for sec in sections:
+        for r in range(sec.first_row, sec.last_row + 1):
+            if _row_is_empty(ws, r):
+                continue
+            v = {k: ws[f"{c}{r}"].value for k, c in COL.items()}
+            g = "M" if is_yes(v["male"]) else "F" if is_yes(v["female"]) else ""
+            start, f1 = fix_date(to_date(v["start_date"]), v["start_term"], v["start_week"])
+            exit_, f2 = fix_date(to_date(v["exit_date"]), v["exit_term"], v["exit_week"])
+            ext_tw = re.match(r"(?i)\s*T\s*(\d)\s*w(?:ee)?k\s*(\d+)", str(v["ext_term_week"] or ""))
+            ext, f3 = fix_date(to_date(v["ext_end_date"]), *(ext_tw.groups() if ext_tw else ("", "")))
+            if not exit_ and v["exit_term"] and v["exit_week"]:
+                exit_ = None  # unreadable (e.g. a typo) — flagged in the import report
+            rows.append({
+                "program": sec.program,
+                "student_name": str(v["name"] or "").strip(),
+                "edid": norm_edid(v["edid"]),
+                "dob": to_date(v["dob"]),
+                "school": str(v["school"] or "").strip(),
+                "year_level": str(v["year"] or "").strip(),
+                "gender": g,
+                "start_date": start,
+                "exit_date": exit_,
+                "ext_end_date": ext,
+                "_fixed": [n for n, f in (("start", f1), ("exit", f2), ("extension", f3)) if f],
+                "_exit_tw": f"{v['exit_term'] or ''} {v['exit_week'] or ''}".strip(),
+                "review": str(v["review"] or "").strip(),
+                "prev": str(v["prev"]).strip() if v["prev"] not in (None, "") else "",
+                "iesp": str(v["iesp"]).strip() if v["iesp"] not in (None, "") else "",
+                "flags": [f for f in FLAG_FIELDS if is_yes(v[f])],
+                "focus_teacher": str(v["focus_teacher"] or "").strip(),
+                "bsc": str(v["bsc"] or "").strip(),
+                "_raw_exit": v["exit_date"],
+                "_raw_ext": v["ext_end_date"],
+                "_raw_start": v["start_date"],
+            })
+    return rows
+
+
+def make_template(xlsx_bytes: bytes) -> bytes:
+    """Blank copy of a list (no student data) to keep in the repo as the template."""
+    wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes))
+    ws = wb[SHEET_NAME] if SHEET_NAME in wb.sheetnames else wb.worksheets[0]
+    clear_students(ws)
+    _renumber_and_total(ws)
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
