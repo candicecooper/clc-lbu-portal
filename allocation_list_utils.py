@@ -898,27 +898,8 @@ def build_report(students: list[NewStudent], term: str, week: int,
     ws.row_dimensions[1].height = 26
     ws.row_dimensions[2].height = 18
 
-    # ---- capacity summary --------------------------------------------------
-    counts = {p: sum(1 for s in students if s.program == p) for p in CAPACITY}
-    r = 4
-    blocks = [(p, _PROG_STYLE[p][2].title(), counts[p], CAPACITY[p]) for p in ("JP", "PY", "SY")]
-    blocks.append(("ALL", "Total", sum(counts.values()), sum(CAPACITY.values())))
-    c = 2
-    for p, label, n, cap in blocks:
-        fill, txt = (_PROG_STYLE[p][0], _PROG_STYLE[p][1]) if p in _PROG_STYLE else ("1F3A5F", "FFFFFF")
-        free = cap - n
-        ws.merge_cells(start_row=r, start_column=c, end_row=r, end_column=c + 2)
-        cell(r, c, label, bold=True, size=10, color=txt, fill=fill, border=None)
-        ws.merge_cells(start_row=r + 1, start_column=c, end_row=r + 1, end_column=c + 2)
-        status = ("full" if free == 0 else f"{free} free" if free > 0 else f"{-free} over")
-        cell(r + 1, c, f"{n} / {cap}   ·   {status}", bold=True, size=12,
-             color=("C0392B" if free < 0 else txt), fill=fill, border=None)
-        c += 4
-    ws.row_dimensions[r].height = 16
-    ws.row_dimensions[r + 1].height = 22
-
     # ---- group header + column header -------------------------------------
-    gr, hr = 7, 8
+    gr, hr = 4, 5
     start = 1
     for i in range(1, ncol + 2):
         g = cols[i - 1][2] if i <= ncol else None
@@ -949,11 +930,9 @@ def build_report(students: list[NewStudent], term: str, week: int,
         kids, cap = ordered[p], CAPACITY[p]
         free = cap - len(kids)
         ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=ncol)
-        status = "full" if free == 0 else (f"{free} spot{'s' if free != 1 else ''} free" if free > 0
-                                           else f"{-free} over capacity")
         for cc in range(1, ncol + 1):
             cell(r, cc, None, fill=fill, border=Border(top=edge))
-        hdr = ws.cell(r, 1, f"   {label}     {len(kids)} / {cap}  ·  {status}")
+        hdr = ws.cell(r, 1, f"   {label}")
         hdr.font = Font(name=f_base, size=11, bold=True, color=txt)
         hdr.alignment = Alignment(horizontal="left", vertical="center")
         ws.row_dimensions[r].height = 20
