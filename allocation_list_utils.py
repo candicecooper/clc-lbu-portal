@@ -127,6 +127,12 @@ def to_date(value) -> date | None:
             return datetime.strptime(s[:19] if "T" in s else s, fmt).date()
         except ValueError:
             continue
+    m = re.fullmatch(r"(\d{1,2})[/.-](\d{1,2})", s)  # '20/11' -> this year
+    if m:
+        try:
+            return date(date.today().year, int(m.group(2)), int(m.group(1)))
+        except ValueError:
+            return None
     try:
         return datetime.fromisoformat(s.replace("Z", "+00:00")).date()
     except ValueError:
@@ -183,6 +189,7 @@ class NewStudent:
     flags: dict | None = None    # {"asd": True, ...}
     focus_teacher: str = ""
     bsc: str = ""
+    ext_end_date: date | None = None   # approved extension: new end date
 
     def problems(self) -> list[str]:
         out = []
@@ -374,6 +381,16 @@ def _write_student(ws, r: int, s: NewStudent):
     put("exit_term", et)
     put("exit_week", ew)
     put("exit_date", s.exit_date)
+    if s.ext_end_date:
+        xt, xw = term_and_week(s.ext_end_date)
+        put("ext_term_week", f"{xt} {xw.lower()}".strip() if xt else None)
+        put("ext_end_date", s.ext_end_date)
+        cell = ws[f"{COL['ext_end_date']}{r}"]
+        if cell.number_format == "General":
+            cell.number_format = "d-mmm"
+    else:
+        put("ext_term_week", None)
+        put("ext_end_date", None)
     put("prev", s.prev)
     put("iesp", s.iesp)
     for f in FLAG_FIELDS:
@@ -485,3 +502,117 @@ def next_week_filename(current_name: str) -> str:
         return current_name[: m.start(2)] + str(int(m.group(2)) + 1) + current_name[m.end(2):]
     stem = current_name.rsplit(".", 1)[0]
     return f"{stem}_updated.xlsx"
+
+
+# ---------------------------------------------------------------------------
+# Whole-list build (live list -> Head Office spreadsheet)
+# ---------------------------------------------------------------------------
+def clear_students(ws):
+    """Blank every student row (values only) — keeps headings, styles, rules."""
+    sections, _ = find_layout(ws)
+    last = openpyxl.utils.column_index_from_string(LAST_COL)
+    for sec in sections:
+        for r in range(sec.first_row, sec.last_row + 1):
+            for c in range(1, last + 1):
+                cell = ws.cell(r, c)
+                if not isinstance(cell, openpyxl.cell.cell.MergedCell):
+                    cell.value = None
+
+
+def build_list(
+    template_bytes: bytes,
+    students: list[NewStudent],
+    term: str,
+    week: int,
+) -> AddResult:
+    """Fresh list from the template: clear it, then add every active student,
+    each program block ordered by start date."""
+    wb = openpyxl.load_workbook(io.BytesIO(template_bytes))
+    ws = wb[SHEET_NAME] if SHEET_NAME in wb.sheetnames else wb.worksheets[0]
+    clear_students(ws)
+    buf = io.BytesIO()
+    wb.save(buf)
+    ordered = sorted(
+        students,
+        key=lambda s: ({"JP": 0, "PY": 1, "SY": 2}.get(s.program, 9),
+                       s.start_date or date.max, s.name.lower()),
+    )
+    return add_students(buf.getvalue(), ordered, header_term=term, header_week=week)
+
+
+def _tw_key(term, week) -> str:
+    t = re.sub(r"\D", "", str(term or ""))
+    w = re.sub(r"\D", "", str(week or ""))
+    return f"{t}-{w}" if t and w else ""
+
+
+def fix_date(d: date | None, term, week) -> tuple[date | None, bool]:
+    """If a date disagrees with the Term/Week typed beside it but its day/month
+    swapped agrees, return the swapped date. Returns (date, was_fixed)."""
+    want = _tw_key(term, week)
+    if not d or not want:
+        return d, False
+    if _tw_key(*term_and_week(d)) == want:
+        return d, False
+    try:
+        swapped = date(d.year, d.day, d.month)
+    except ValueError:
+        return d, False
+    if _tw_key(*term_and_week(swapped)) == want:
+        return swapped, True
+    return d, False
+
+
+def read_list(xlsx_bytes: bytes) -> list[dict]:
+    """Read every student row of an existing allocation list (for the one-off import)."""
+    wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes))
+    ws = wb[SHEET_NAME] if SHEET_NAME in wb.sheetnames else wb.worksheets[0]
+    sections, _ = find_layout(ws)
+    rows = []
+    for sec in sections:
+        for r in range(sec.first_row, sec.last_row + 1):
+            if _row_is_empty(ws, r):
+                continue
+            v = {k: ws[f"{c}{r}"].value for k, c in COL.items()}
+            g = "M" if is_yes(v["male"]) else "F" if is_yes(v["female"]) else ""
+            start, f1 = fix_date(to_date(v["start_date"]), v["start_term"], v["start_week"])
+            exit_, f2 = fix_date(to_date(v["exit_date"]), v["exit_term"], v["exit_week"])
+            ext_tw = re.match(r"(?i)\s*T\s*(\d)\s*w(?:ee)?k\s*(\d+)", str(v["ext_term_week"] or ""))
+            ext, f3 = fix_date(to_date(v["ext_end_date"]), *(ext_tw.groups() if ext_tw else ("", "")))
+            if not exit_ and v["exit_term"] and v["exit_week"]:
+                exit_ = None  # unreadable (e.g. a typo) — flagged in the import report
+            rows.append({
+                "program": sec.program,
+                "student_name": str(v["name"] or "").strip(),
+                "edid": norm_edid(v["edid"]),
+                "dob": to_date(v["dob"]),
+                "school": str(v["school"] or "").strip(),
+                "year_level": str(v["year"] or "").strip(),
+                "gender": g,
+                "start_date": start,
+                "exit_date": exit_,
+                "ext_end_date": ext,
+                "_fixed": [n for n, f in (("start", f1), ("exit", f2), ("extension", f3)) if f],
+                "_exit_tw": f"{v['exit_term'] or ''} {v['exit_week'] or ''}".strip(),
+                "review": str(v["review"] or "").strip(),
+                "prev": str(v["prev"]).strip() if v["prev"] not in (None, "") else "",
+                "iesp": str(v["iesp"]).strip() if v["iesp"] not in (None, "") else "",
+                "flags": [f for f in FLAG_FIELDS if is_yes(v[f])],
+                "focus_teacher": str(v["focus_teacher"] or "").strip(),
+                "bsc": str(v["bsc"] or "").strip(),
+                "_raw_exit": v["exit_date"],
+                "_raw_ext": v["ext_end_date"],
+                "_raw_start": v["start_date"],
+            })
+    return rows
+
+
+def make_template(xlsx_bytes: bytes) -> bytes:
+    """Blank copy of a list (no student data) to keep in the repo as the template."""
+    wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes))
+    ws = wb[SHEET_NAME] if SHEET_NAME in wb.sheetnames else wb.worksheets[0]
+    clear_students(ws)
+    _renumber_and_total(ws)
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
