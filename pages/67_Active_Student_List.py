@@ -14,9 +14,9 @@ Where the data comes from
 A student is on the list when they're Allocated, not marked inactive, and their end
 date (extended end date if an extension was approved) hasn't passed.
 
-Needs: allocation_list_utils.py (repo root),
-       data/allocation_list/allocation_list_template.xlsx,
+Needs: allocation_list_utils.py (repo root, includes the blank spreadsheet template),
        supabase_schema_active_student_list.sql run once in Supabase.
+Optional: data/allocation_list/allocation_list_template.xlsx overrides the built-in template.
 """
 
 import io
@@ -28,7 +28,7 @@ import pandas as pd
 import streamlit as st
 
 from allocation_list_utils import (
-    FLAG_FIELDS, FLAG_LABELS, NewStudent, build_list, norm_edid, norm_name,
+    FLAG_FIELDS, FLAG_LABELS, NewStudent, build_list, builtin_template, norm_edid, norm_name,
     norm_program, read_list, term_and_week, to_date,
 )
 
@@ -58,12 +58,21 @@ if _gate() is False:
 ALLOC_TABLE = "allocation_students"
 LIST_TABLE = "active_student_list"
 SETTINGS_TABLE = "active_student_list_settings"
-TEMPLATE_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "data", "allocation_list",
-    "allocation_list_template.xlsx",
-)
-if not os.path.exists(TEMPLATE_PATH):  # page may sit at repo root in some setups
-    TEMPLATE_PATH = os.path.join("data", "allocation_list", "allocation_list_template.xlsx")
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_TEMPLATE_CANDIDATES = [
+    os.path.join(_HERE, "..", "data", "allocation_list", "allocation_list_template.xlsx"),
+    os.path.join(_HERE, "data", "allocation_list", "allocation_list_template.xlsx"),
+    os.path.join("data", "allocation_list", "allocation_list_template.xlsx"),
+]
+
+
+def template_bytes() -> bytes:
+    """A template file in the repo wins (so the layout can be updated without code);
+    otherwise use the copy built into allocation_list_utils.py."""
+    for path in _TEMPLATE_CANDIDATES:
+        if os.path.exists(path):
+            return open(path, "rb").read()
+    return builtin_template()
 
 # Allocation tool flag column -> list flag key
 FLAG_MAP = {
@@ -419,10 +428,8 @@ with tab_list:
         missing = [m["student_name"] for m in active if not m.get("edid")]
         if missing:
             st.warning(f"No EDID yet for: {', '.join(missing)} (they'll be listed with the EDID blank).")
-        if not os.path.exists(TEMPLATE_PATH):
-            st.error("Template missing: data/allocation_list/allocation_list_template.xlsx")
-        else:
-            result = build_list(open(TEMPLATE_PATH, "rb").read(),
+        if True:
+            result = build_list(template_bytes(),
                                 [to_student(m) for m in active], f"T{term}", int(week))
             for n, why in result.skipped:
                 st.warning(f"Not in download — {n}: {why}")
