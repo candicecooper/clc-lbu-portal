@@ -438,6 +438,8 @@ def parse_docx_to_sections(file_bytes: bytes, split_level: str):
         if isinstance(block, DocxTable):
             md = _table_block_to_md(block)
             if md:
+                if target and target[-1].strip() and not md.startswith("> "):
+                    target.append("")
                 target.append(md)
             continue
         fill = para_fill(block)
@@ -462,6 +464,12 @@ def parse_docx_to_sections(file_bytes: bytes, split_level: str):
         else:
             line = text
         if line:
+            # Keep a blank line where a list/note/table meets ordinary text,
+            # otherwise Markdown would run the text into the bullet above it.
+            kind = lambda l: "-" if l.startswith("- ") else (">" if l.startswith("> ") else ("|" if l.startswith("|") else "p"))
+            prev = next((l for l in reversed(target) if l.strip()), None)
+            if prev is not None and target[-1].strip() and kind(prev) != kind(line) and "p" in (kind(prev), kind(line)):
+                target.append("")
             target.append(line)
 
     flush()
@@ -1118,6 +1126,8 @@ def admin_view():
         return
 
     st.success("Admin unlocked — changes save straight to the portal for all staff.")
+    if st.session_state.get("ref_flash"):
+        st.success(st.session_state.pop("ref_flash"))
 
     docs = fetch_documents(include_unpublished=True)
     existing_cats = sorted({d.get("category") or "Policies & Expectations" for d in docs}) or ["Policies & Expectations"]
@@ -1274,7 +1284,7 @@ def admin_view():
                 sb.table("reference_documents").update(upd).eq("id", doc["id"]).execute()
                 st.session_state.pop(f"up_rep_{doc['id']}_parsed", None)
                 clear_caches()
-                st.success(f"Replaced — '{doc['title']}' now has {len(rows)} section(s). Staff see the new version straight away.")
+                st.session_state["ref_flash"] = f"Replaced — '{doc['title']}' now has {len(rows)} section(s). Staff see the new version straight away."
                 st.rerun()
 
     with st.expander("📤 Add sections from a Word upload"):
