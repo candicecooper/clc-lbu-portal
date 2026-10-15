@@ -198,6 +198,7 @@ def fetch_sections(document_id: int):
 def clear_caches():
     fetch_documents.clear()
     fetch_sections.clear()
+    _docx_bytes.clear()
 
 
 def _now():
@@ -296,8 +297,11 @@ def build_docx(doc_row, sections) -> bytes:
         d.add_paragraph()
 
     for sec in sections:
-        h = d.add_paragraph()
+        # Real Word "Heading 2" so a downloaded copy can be edited in Word
+        # and uploaded back as a new version (Admin → Upload a new version).
+        h = d.add_paragraph(style="Heading 2")
         r = h.add_run(sec["title"])
+        r.font.name = "Calibri"
         r.font.size = Pt(13); r.font.bold = True; r.font.color.rgb = TEAL_DARK_RGB
         h.paragraph_format.space_before = Pt(10)
         h.paragraph_format.space_after = Pt(4)
@@ -425,12 +429,23 @@ def parse_docx_to_sections(file_bytes: bytes, split_level: str):
             sections.append((current_title, "\n".join(current_lines).strip()))
         current_title, current_lines = None, []
 
+    def para_fill(p):
+        fills = p._p.xpath("./w:pPr/w:shd/@w:fill")
+        return (fills[-1] if fills else "").upper()
+
     for block in iter_block_items(doc):
         target = current_lines if current_title else intro_lines
         if isinstance(block, DocxTable):
             md = _table_block_to_md(block)
             if md:
                 target.append(md)
+            continue
+        fill = para_fill(block)
+        # Skip the portal's own export chrome (teal title banner + download footer)
+        # so a downloaded-then-edited copy re-uploads cleanly.
+        if fill == "00695C":
+            continue
+        if block.text.strip().startswith("CLC-LBU  |  Downloaded from the Staff Portal"):
             continue
         if _is_split_heading(block, split_level):
             flush()
@@ -442,6 +457,8 @@ def parse_docx_to_sections(file_bytes: bytes, split_level: str):
             line = f"**{text}**"
         elif _is_bullet_para(block):
             line = f"- {text}" if text else ""
+        elif fill == "E0F2F1" and text and current_title:
+            line = f"> {text}"  # highlighted note
         else:
             line = text
         if line:
@@ -673,9 +690,76 @@ This runs for both the **Review Meeting** and the **Exit Meeting**."""),
 | Notice of Exclusion | The formal exclusion document setting the placement dates. |"""),
 ]
 
+SEED_DOC_TT = {
+    "slug": "teacher-tracking-checklist",
+    "doc_code": "",
+    "title": "Teacher Tracking Checklist",
+    "subtitle": "What gets recorded, where, and when — daily, weekly, each placement and each term",
+    "intro": "This checklist pulls every student-tracking and record-keeping expectation from **CLC 2026.8 Daily Work Expectations** and the **Teacher Case Management Process** into one place, sorted by how often it happens. It applies to **every teacher in every program**. **If it isn't recorded, it didn't happen.**",
+    "category": "Policies & Expectations",
+    "sort_order": 3,
+    "is_published": True,
+}
+
+SEED_SECTIONS_TT = [
+    ("Every day — start of day", """- ☐ **By 8:30am:** Staff Bulletin checked on the staff portal, emails checked, phone calls made or returned.
+- ☐ **By 9:30am:** for every absent student, ring the caregiver and **record the reason on EMS**. All absences must be investigated and explained.
+- ☐ Late arrivals and early finishes noted so attendance in the **Behaviour Support tool** matches what happened."""),
+    ("Every day — as it happens", """Record at the time, not at the end of the week.
+- ☐ **Minor incident** → **Quick Incident Log** on the staff portal. It enters the Behaviour Support tool automatically — no second step.
+- ☐ **ABCH / Critical Incident** → **C.I. Bot** (preferred) or the Word template → **ABCH Report Formatter** → post to the **Teams ABCH channel** and tag **@Manager and @TC**. Same day.
+- ☐ **Any contact** with families, schools, SSS or agencies — call, email, text or conversation, however brief → **Communication Log** on the staff portal (date, who, method, summary).
+- ☐ **Any meeting** — TAC, Transition, Review — face-to-face, phone or email → documented and **uploaded to the student file**.
+- ☐ **Medication** given → medication log completed at the correct time. If given at a different time to the plan → medication error log, and inform the Site Manager and parent.
+- ☐ **Behaviour data tools** in use for a student (e.g. **Scatter Plot Tracker**, **Interval Support Tracker**) → filled in each session they apply to.
+- ☐ Stakeholder emails answered within **24–48 hours**."""),
+    ("Every day — end of day", """- ☐ Any incidents, contacts or meetings from today that weren't logged at the time → logged **before you leave**.
+- ☐ Emails checked before leaving from 3:30pm.
+- ☐ Student laptops/iPads locked away; program phone stored in the agreed location."""),
+    ("Every week", """- ☐ **Team meeting** held and **minuted in the Team Meetings tool** — agreements recorded with who is actioning them. Last week's actions reviewed before new business.
+- ☐ **Week A (student lens):** each student's goals, data and interventions discussed — bring the Behaviour Support, SMARTAR and attendance data to the meeting.
+- ☐ **Week B (system lens):** curriculum and program improvement.
+- ☐ Missed a meeting? Read the minutes and **action anything assigned to you**.
+- ☐ **OneNote student file — Checklist tab** updated for every student: tick off what's been completed so anyone can see where the placement is up to.
+- ☐ **SMARTAR / GAS progress** recorded for each student in **SGoal Quick Track**.
+- ☐ **Wednesday:** read newly referred student information (expected by 3:30pm) and the **Staff Bulletin** (sent COB Tuesday) before the 3:10pm staff meeting. Come ready to share data and strategies.
+- ☐ Offsite and student meetings for the coming week entered in the **CLC Calendar**; any Booking time entered in **NIT Bookings**."""),
+    ("Each student placement — milestones", """Full detail is in the **Teacher Case Management Process** document. The tracking points are:
+| When | What is recorded | Where |
+| --- | --- | --- |
+| Before arrival | Student Information and Original SMARTAR Goals read; Review Meeting confirmed with TAC | OneNote student file |
+| First weeks | Baseline assessments: Sounds-Write, Word Aware, Big Ideas in Number | Assessment Data / student file |
+| First weeks | SMARTAR Goals amended with Leadership, converted to GAS | SMARTAR Goal Builder → copied to student file |
+| Review meeting | Review Report (draft to Leadership → print); Exit meeting scheduled; transition timetable shared | Reporting, Scheduled Meetings, Transition Plan tabs |
+| Transition | Transition timetable emailed to TAC, Leadership and Admin | Email + Transition Plan tab |
+| Exit meeting | Transition Report (with attendance data attached); exit confirmed by all TAC | Reporting tab; report to student file |
+| Conclusion | Transition Report sent to clc.admin281@schools.sa.edu.au for EMS upload | Email |
+| Archiving | All documents compiled and handed to Admin | Checklist tab |
+| Extension (only if needed) | Extension paperwork completed before the original dates lapse | Extension Requested tab |"""),
+    ("Each term", """- ☐ **Term assessment data** entered for every student.
+- ☐ Attendance concerns raised with leadership (see the Student Attendance Improvement Plan for ongoing non-attendance).
+- ☐ **End of Term Checklist** completed and signed off on the staff portal."""),
+    ("Quick reference — what goes where", """| What | Where | When |
+| --- | --- | --- |
+| Student absence reason | EMS | By 9:30am |
+| Minor incident | Quick Incident Log | At the time |
+| ABCH / Critical Incident | C.I. Bot → ABCH Report Formatter → Teams ABCH (@Manager @TC) | Same day |
+| Contact with families, schools, agencies | Communication Log | At the time |
+| Meetings (TAC, Review, Transition, Exit) | Student file | Same day |
+| Medication given | Medication log | At the time |
+| Scatter Plot / Interval data | Scatter Plot Tracker / Interval Support Tracker | Each session it applies |
+| Team meeting minutes and actions | Team Meetings tool | Weekly |
+| Case management progress | OneNote Checklist tab | Weekly, and as milestones happen |
+| Goal progress | SGoal Quick Track | Weekly |
+| Offsite meetings | CLC Calendar | Before the week |
+| Term assessments | Assessment Data | Each term |
+| End of term sign-off | End of Term Checklist | End of term |"""),
+]
+
 SEED_PACKS = [
     (SEED_DOC, SEED_SECTIONS),
     (SEED_DOC_CM, SEED_SECTIONS_CM),
+    (SEED_DOC_TT, SEED_SECTIONS_TT),
 ]
 
 
@@ -986,8 +1070,33 @@ def _doc_card(doc):
         st.markdown(f"<div class='doc-card-title'>{doc['title']}</div>", unsafe_allow_html=True)
         st.markdown(f"<div class='doc-card-sub'>{doc.get('subtitle') or ''}</div>", unsafe_allow_html=True)
         st.markdown(f"<div class='doc-card-meta'>{' · '.join(meta_bits)}</div>", unsafe_allow_html=True)
-        if st.button("Open →", key=f"open_{doc['id']}", use_container_width=True):
-            _open_document(doc["id"])
+        b1, b2 = st.columns(2)
+        with b1:
+            if st.button("Open →", key=f"open_{doc['id']}", use_container_width=True):
+                _open_document(doc["id"])
+        with b2:
+            if section_count:
+                st.download_button(
+                    "⬇️ Word",
+                    data=_docx_bytes(doc["id"], doc.get("updated_at") or ""),
+                    file_name=_docx_filename(doc),
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True,
+                    key=f"carddl_{doc['id']}",
+                )
+
+
+def _docx_filename(doc):
+    return f"{(doc.get('doc_code','') + '_' + doc['title']).strip('_').replace(' ', '_')}.docx"
+
+
+@st.cache_data(ttl=60)
+def _docx_bytes(doc_id, updated_at):
+    """Word file for one document, cached per version (updated_at)."""
+    doc = next((d for d in fetch_documents(include_unpublished=True) if d["id"] == doc_id), None)
+    if not doc:
+        return b""
+    return build_docx(doc, fetch_sections(doc_id))
 
 
 # ------------------------------------------------------------------
@@ -1037,7 +1146,8 @@ def admin_view():
                     st.error("Title and category are required.")
         with c2:
             st.markdown("**Starter content**")
-            if st.button("Seed: Daily Work Expectations + Case Management Process"):
+            st.caption("Adds any starter document that isn't already in the portal. Existing documents are never touched.")
+            if st.button("Seed: Daily Work Expectations + Case Management Process + Teacher Tracking Checklist"):
                 ok, msg = seed_starter_content()
                 (st.success if ok else st.info)(msg)
                 if ok:
@@ -1116,6 +1226,56 @@ def admin_view():
 
     st.markdown("### Sections")
     sections = fetch_sections(doc["id"])
+
+    with st.expander("🔁 Upload a new version (replaces this document's content)"):
+        st.markdown(
+            "Use this when the document has been updated in Word. The easiest way: **download the current "
+            "version below, edit it in Word, then upload it here**. Each section title in the download is a "
+            "Word *Heading 2* — keep new section titles in that style so they're picked up."
+        )
+        st.download_button(
+            f"⬇️ Download current version ({len(sections)} sections) — keep as a backup",
+            data=build_docx(doc, sections) if sections else b"",
+            file_name=_docx_filename(doc).replace(".docx", "_backup.docx"),
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            disabled=not sections,
+            key=f"rep_backup_{doc['id']}",
+        )
+        rp = _upload_parse_widget(f"up_rep_{doc['id']}")
+        if rp:
+            new_intro = rp["intro"]
+            if new_intro:
+                new_intro = "\n".join(l[2:] if l.startswith("> ") else l for l in new_intro.splitlines())
+            replace_intro = st.checkbox(
+                "Also replace the intro / highlighted note with the text found before the first section",
+                value=bool(new_intro), key=f"rep_intro_{doc['id']}",
+            )
+            if replace_intro:
+                new_intro = st.text_area("New intro", value=new_intro, key=f"rep_intro_txt_{doc['id']}", height=100)
+            confirm = st.checkbox(
+                f"I understand this replaces all {len(sections)} current section(s) with the "
+                f"{len(rp['sections'])} section(s) from {rp['filename']}.",
+                key=f"rep_confirm_{doc['id']}",
+            )
+            if st.button("✅ Replace with new version", key=f"rep_go_{doc['id']}", disabled=not confirm, type="primary"):
+                rows = [
+                    {"document_id": doc["id"], "title": t, "content": c, "sort_order": i + 1}
+                    for i, (t, c) in enumerate(rp["sections"])
+                ]
+                # Insert the new sections first, then remove the old ones, so a
+                # failed insert never leaves the document empty.
+                old_ids = [s["id"] for s in sections]
+                sb.table("reference_sections").insert(rows).execute()
+                for sid in old_ids:
+                    sb.table("reference_sections").delete().eq("id", sid).execute()
+                upd = {"updated_at": _now()}
+                if replace_intro:
+                    upd["intro"] = new_intro
+                sb.table("reference_documents").update(upd).eq("id", doc["id"]).execute()
+                st.session_state.pop(f"up_rep_{doc['id']}_parsed", None)
+                clear_caches()
+                st.success(f"Replaced — '{doc['title']}' now has {len(rows)} section(s). Staff see the new version straight away.")
+                st.rerun()
 
     with st.expander("📤 Add sections from a Word upload"):
         st.caption("Parses a Word document and appends the detected sections to the end of this document.")
