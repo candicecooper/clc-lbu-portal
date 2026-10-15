@@ -28,7 +28,7 @@ import pandas as pd
 import streamlit as st
 
 from allocation_list_utils import (
-    FLAG_FIELDS, FLAG_LABELS, NewStudent, build_list, builtin_template, norm_edid, norm_name,
+    CAPACITY, FLAG_FIELDS, FLAG_LABELS, NewStudent, build_list, build_report, builtin_template, norm_edid, norm_name,
     norm_program, read_list, term_and_week, to_date,
 )
 
@@ -272,6 +272,72 @@ def to_student(m: dict) -> NewStudent:
 
 
 # ---------------------------------------------------------------------------
+# Seat chart: filled vs empty spots per program
+# ---------------------------------------------------------------------------
+_SEAT_CSS = """
+<style>
+.seats{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin:6px 0 18px}
+.seats .prog{border:1px solid rgba(128,128,128,.35);border-radius:10px;padding:12px 14px}
+.seats .head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
+.seats .name{font-weight:600}
+.seats .count{font-size:.85rem;opacity:.8}
+.seats .count b{font-size:1rem}
+.seats .full{color:#b45309;font-weight:600}
+.seats .over{color:#c0392b;font-weight:600}
+.seats .row{display:flex;flex-wrap:wrap;gap:6px}
+.seats .seat{width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  font-size:.7rem;font-weight:600;box-sizing:border-box}
+.seats .taken{background:#1A7A6E;color:#fff}
+.seats .ending{background:#1A7A6E;color:#fff;box-shadow:0 0 0 3px #f0a020}
+.seats .extra{background:#c0392b;color:#fff}
+.seats .empty{border:2px dashed rgba(128,128,128,.6)}
+.seats-key{font-size:.78rem;opacity:.75;margin-top:-10px;margin-bottom:14px}
+.seats-key span{display:inline-block;width:11px;height:11px;border-radius:50%;vertical-align:-1px;margin:0 4px 0 10px}
+</style>
+"""
+
+
+def _initials(name: str) -> str:
+    parts = [p for p in re.split(r"[\s-]+", str(name or "")) if p]
+    return (parts[0][0] + (parts[-1][0] if len(parts) > 1 else "")).upper() if parts else "?"
+
+
+def seat_chart(active: list[dict], as_of: date) -> str:
+    import html
+    cards = []
+    for prog, label in (("JP", "Junior Primary"), ("PY", "Primary Years"), ("SY", "Senior Years")):
+        cap = CAPACITY[prog]
+        kids = sorted([m for m in active if m["program"] == prog],
+                      key=lambda m: (end_of(m) or date.max))
+        n = len(kids)
+        seats = []
+        for i, m in enumerate(kids):
+            end = end_of(m)
+            ending = end and end <= as_of + timedelta(days=14)
+            cls = "extra" if i >= cap else ("ending" if ending else "taken")
+            tip = m["student_name"] + (f" — ends {end.strftime('%d %b')}" if end else "")
+            seats.append(f'<div class="seat {cls}" title="{html.escape(tip)}">{_initials(m["student_name"])}</div>')
+        seats += ['<div class="seat empty" title="Empty spot"></div>'] * max(0, cap - n)
+        free = cap - n
+        if free > 0:
+            status = f"<b>{free}</b> spot{'s' if free != 1 else ''} free"
+        elif free == 0:
+            status = '<span class="full">Full</span>'
+        else:
+            status = f'<span class="over">{-free} over capacity</span>'
+        cards.append(
+            f'<div class="prog"><div class="head"><span class="name">{label}</span>'
+            f'<span class="count"><b>{n}</b> / {cap} &nbsp;·&nbsp; {status}</span></div>'
+            f'<div class="row">{"".join(seats)}</div></div>'
+        )
+    key = ('<div class="seats-key"><span style="background:#1A7A6E"></span>Student'
+           '<span style="background:#1A7A6E;box-shadow:0 0 0 2px #f0a020"></span>Finishing within 2 weeks'
+           '<span style="border:2px dashed rgba(128,128,128,.6)"></span>Empty spot'
+           ' &nbsp;·&nbsp; hover a circle for the name</div>')
+    return _SEAT_CSS + f'<div class="seats">{"".join(cards)}</div>' + key
+
+
+# ---------------------------------------------------------------------------
 # Page
 # ---------------------------------------------------------------------------
 st.title("📋 Active Student List")
@@ -331,11 +397,12 @@ with tab_list:
             and as_of - timedelta(days=21) <= end_of(m) < as_of
         ]
 
-        k = st.columns(5)
-        k[0].metric("Active", len(active))
-        for i, (p, lbl) in enumerate([("JP", "Junior Primary"), ("PY", "Primary"), ("SY", "Seniors")], 1):
-            k[i].metric(lbl, sum(1 for m in active if m["program"] == p))
-        k[4].metric("Missing EDID", sum(1 for m in active if not m.get("edid")))
+        k = st.columns(3)
+        k[0].metric("Active students", len(active))
+        k[1].metric("Empty spots", sum(max(0, CAPACITY[p] - sum(1 for m in active if m["program"] == p))
+                                       for p in CAPACITY))
+        k[2].metric("Missing EDID", sum(1 for m in active if not m.get("edid")))
+        st.markdown(seat_chart(active, as_of), unsafe_allow_html=True)
 
         no_prog = [m for m in active if m["program"] not in ("JP", "PY", "SY")]
         if no_prog:
@@ -428,16 +495,23 @@ with tab_list:
         missing = [m["student_name"] for m in active if not m.get("edid")]
         if missing:
             st.warning(f"No EDID yet for: {', '.join(missing)} (they'll be listed with the EDID blank).")
-        if True:
-            result = build_list(template_bytes(),
-                                [to_student(m) for m in active], f"T{term}", int(week))
-            for n, why in result.skipped:
-                st.warning(f"Not in download — {n}: {why}")
-            fname = f"CLC_Allocation_List_T{term}_Week_{int(week)}.xlsx"
-            st.download_button(
-                f"⬇️ Download {fname}  ({result.total} students)", result.workbook_bytes, file_name=fname,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary",
-            )
+        students_out = [to_student(m) for m in active]
+        fname = f"CLC_Allocation_List_T{term}_Week_{int(week)}.xlsx"
+        xlsx_mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        report = build_report(students_out, f"T{term}", int(week), as_of=as_of)
+        for n, why in report.skipped:
+            st.warning(f"Not in download — {n}: {why}")
+        d1, d2 = st.columns([2, 1])
+        d1.download_button(
+            f"⬇️ Download {fname}  ({report.total} students)", report.workbook_bytes,
+            file_name=fname, mime=xlsx_mime, type="primary", use_container_width=True,
+        )
+        classic = build_list(template_bytes(), students_out, f"T{term}", int(week))
+        d2.download_button(
+            "Classic layout", classic.workbook_bytes,
+            file_name=fname.replace(".xlsx", "_classic.xlsx"), mime=xlsx_mime,
+            use_container_width=True, help="The original spreadsheet layout, if Head Office needs it unchanged.",
+        )
 
 # ============================================================================
 # ADD / REMOVE
