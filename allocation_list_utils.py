@@ -72,6 +72,9 @@ FLAG_LABELS = {
 }
 LAST_COL = "AH"
 
+# Places available in each program (empty spots are shown up to these numbers)
+CAPACITY = {"JP": 10, "PY": 10, "SY": 5}
+
 # ---------------------------------------------------------------------------
 # SA Department for Education term dates.  UPDATE EACH YEAR.
 # (start = first day of Week 1, end = last day of term)
@@ -418,14 +421,18 @@ def set_header_week(ws, term: str, week: int) -> bool:
     return changed
 
 
-def _renumber_and_total(ws):
+def _renumber_and_total(ws, capacity: dict | None = None):
+    """Number students 1..n per block. With capacity, empty rows carry on the
+    numbering up to the block's capacity so vacant spots are visible."""
     sections, total_row = find_layout(ws)
     total = 0
     for s in sections:
         n = 0
+        cap = (capacity or {}).get(s.program, 0)
         for r in range(s.first_row, s.last_row + 1):
             if _row_is_empty(ws, r):
-                ws[f"{COL['num']}{r}"] = None
+                slot = n + sum(1 for rr in range(s.first_row, r) if _row_is_empty(ws, rr)) + 1
+                ws[f"{COL['num']}{r}"] = slot if slot <= cap else None
             else:
                 n += 1
                 ws[f"{COL['num']}{r}"] = n
@@ -447,6 +454,7 @@ def add_students(
     students: list[NewStudent],
     header_term: str | None = None,
     header_week: int | None = None,
+    capacity: dict | None = None,
 ) -> AddResult:
     wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes))
     ws = wb[SHEET_NAME] if SHEET_NAME in wb.sheetnames else wb.worksheets[0]
@@ -487,7 +495,7 @@ def add_students(
         seen_names.add(nm)
         added.append((label, s.program))
 
-    total = _renumber_and_total(ws)
+    total = _renumber_and_total(ws, capacity)
     if header_term and header_week:
         set_header_week(ws, header_term, header_week)
     out = io.BytesIO()
@@ -508,15 +516,29 @@ def next_week_filename(current_name: str) -> str:
 # Whole-list build (live list -> Head Office spreadsheet)
 # ---------------------------------------------------------------------------
 def clear_students(ws):
-    """Blank every student row (values only) — keeps headings, styles, rules."""
+    """Blank every student row — keeps headings, borders and highlight rules.
+    Hand-applied cell shading left over from previous students is removed;
+    shading that runs down a whole column (e.g. the Extension columns) is kept."""
+    from collections import Counter
+    from openpyxl.styles import PatternFill
+
     sections, _ = find_layout(ws)
     last = openpyxl.utils.column_index_from_string(LAST_COL)
-    for sec in sections:
-        for r in range(sec.first_row, sec.last_row + 1):
-            for c in range(1, last + 1):
-                cell = ws.cell(r, c)
-                if not isinstance(cell, openpyxl.cell.cell.MergedCell):
-                    cell.value = None
+    rows = [r for sec in sections for r in range(sec.first_row, sec.last_row + 1)]
+    for c in range(1, last + 1):
+        fills = Counter(
+            repr(ws.cell(r, c).fill) if ws.cell(r, c).fill.fill_type else None for r in rows
+        )
+        common, n = fills.most_common(1)[0]
+        keep = common is not None and n >= 0.8 * len(rows)
+        keep_fill = next((copy.copy(ws.cell(r, c).fill) for r in rows
+                          if repr(ws.cell(r, c).fill) == common), None) if keep else None
+        for r in rows:
+            cell = ws.cell(r, c)
+            if isinstance(cell, openpyxl.cell.cell.MergedCell):
+                continue
+            cell.value = None
+            cell.fill = keep_fill if keep_fill else PatternFill(fill_type=None)
 
 
 def build_list(
@@ -530,6 +552,25 @@ def build_list(
     wb = openpyxl.load_workbook(io.BytesIO(template_bytes))
     ws = wb[SHEET_NAME] if SHEET_NAME in wb.sheetnames else wb.worksheets[0]
     clear_students(ws)
+    # make each block exactly as tall as its capacity (or its student count, if over)
+    want = {p: max(cap, sum(1 for s in students if s.program == p)) for p, cap in CAPACITY.items()}
+    for prog in ("JP", "PY", "SY"):
+        sec = next(x for x in find_layout(ws)[0] if x.program == prog)
+        have = sec.last_row - sec.first_row + 1
+        if have < want[prog]:
+            # style new rows like a plain middle row (the last row can carry a heavier border)
+            tmpl = sec.first_row + 1 if have > 2 else sec.first_row
+            insert_rows_keep_format(ws, sec.last_row + 1, want[prog] - have, template_row=tmpl)
+        sec = next(x for x in find_layout(ws)[0] if x.program == prog)
+        for r in range(sec.first_row, sec.last_row + 1):
+            h = ws.row_dimensions[r].height
+            if not h or h < 28:
+                ws.row_dimensions[r].height = 28
+    # print on one landscape page, however many rows
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 1
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
     buf = io.BytesIO()
     wb.save(buf)
     ordered = sorted(
@@ -537,7 +578,7 @@ def build_list(
         key=lambda s: ({"JP": 0, "PY": 1, "SY": 2}.get(s.program, 9),
                        s.start_date or date.max, s.name.lower()),
     )
-    return add_students(buf.getvalue(), ordered, header_term=term, header_week=week)
+    return add_students(buf.getvalue(), ordered, header_term=term, header_week=week, capacity=CAPACITY)
 
 
 def _tw_key(term, week) -> str:
@@ -781,3 +822,210 @@ _TEMPLATE_B64 = (
 def builtin_template() -> bytes:
     import base64
     return base64.b64decode(_TEMPLATE_B64)
+
+
+# ===========================================================================
+# Professional report layout (built from scratch — no template needed)
+# ===========================================================================
+_PROG_STYLE = {  # band fill, band text, label
+    "JP": ("DCEBF7", "1F3A5F", "JUNIOR PRIMARY"),
+    "PY": ("E2F0D9", "2E5E1E", "PRIMARY YEARS"),
+    "SY": ("EDE3F5", "4B2C6B", "SENIOR YEARS"),
+}
+_NAVY, _TEAL = "1F3A5F", "1A7A6E"
+_REPORT_FLAGS = [  # (key, short heading)
+    ("ealD", "EALD"), ("atsi", "ATSI"), ("dcp", "DCP"), ("sic", "SIC"), ("swd", "SWD"),
+    ("speech_language", "Speech & Lang"), ("asd", "ASD"), ("adhd", "ADHD"),
+    ("intellectual", "Intellectual"), ("language_difficulty", "Lang Diff"),
+    ("sensory_processing", "Sensory"), ("sc", "SC"), ("medication", "Medication"),
+]
+
+
+def build_report(students: list[NewStudent], term: str, week: int,
+                 as_of: date | None = None, centre: str = "Cowandilla Learning Centre") -> AddResult:
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.worksheet.page import PageMargins
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Student Information"
+    ws.sheet_view.showGridLines = False
+
+    # ---- columns -----------------------------------------------------------
+    cols = [  # (heading, width, group)
+        ("#", 4, "STUDENT"), ("Student", 22, "STUDENT"), ("EDID", 12.5, "STUDENT"),
+        ("DOB", 10.5, "STUDENT"), ("School", 19, "STUDENT"), ("Yr", 5, "STUDENT"),
+        ("Gender", 7, "STUDENT"),
+        ("Start", 8.5, "PLACEMENT"), ("Start date", 10, "PLACEMENT"), ("Review", 17, "PLACEMENT"),
+        ("Exit", 8.5, "PLACEMENT"), ("Exit date", 10, "PLACEMENT"),
+        ("Ext to", 8.5, "EXTENSION"), ("Ext end", 10, "EXTENSION"),
+        ("PREV", 5.5, "SUPPORT NEEDS"), ("IESP", 5.5, "SUPPORT NEEDS"),
+    ] + [(h, 4.6, "SUPPORT NEEDS") for _, h in _REPORT_FLAGS] + [
+        ("Focus teacher", 11, "STAFF"), ("BSC", 12, "STAFF"),
+    ]
+    ncol = len(cols)
+    flag_col0 = 17  # first flag column (1-based)
+    L = get_column_letter
+    for i, (_, w, _) in enumerate(cols, 1):
+        ws.column_dimensions[L(i)].width = w
+
+    thin = Side(style="thin", color="D0D5DD")
+    edge = Side(style="medium", color=_NAVY)
+    grid = Border(left=thin, right=thin, top=thin, bottom=thin)
+    f_base = "Calibri"
+
+    def cell(r, c, v=None, *, bold=False, size=10, color="222222", fill=None, h="center",
+             v_="center", wrap=False, italic=False, fmt=None, border=grid, rot=0):
+        x = ws.cell(r, c, v)
+        x.font = Font(name=f_base, size=size, bold=bold, color=color, italic=italic)
+        x.alignment = Alignment(horizontal=h, vertical=v_, wrap_text=wrap, text_rotation=rot)
+        if fill:
+            x.fill = PatternFill("solid", fgColor=fill)
+        if border is not None:
+            x.border = border
+        if fmt:
+            x.number_format = fmt
+        return x
+
+    # ---- title block -------------------------------------------------------
+    as_of = as_of or date.today()
+    t_num = term.lstrip("Tt")
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncol)
+    cell(1, 1, f"{centre} — Student Information", bold=True, size=16, color=_NAVY, h="left", border=None)
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncol)
+    cell(2, 1, f"Term {t_num}, Week {week}  ·  as at {as_of.strftime('%A %-d %B %Y')}",
+         size=11, color="555555", h="left", border=None)
+    ws.row_dimensions[1].height = 26
+    ws.row_dimensions[2].height = 18
+
+    # ---- capacity summary --------------------------------------------------
+    counts = {p: sum(1 for s in students if s.program == p) for p in CAPACITY}
+    r = 4
+    blocks = [(p, _PROG_STYLE[p][2].title(), counts[p], CAPACITY[p]) for p in ("JP", "PY", "SY")]
+    blocks.append(("ALL", "Total", sum(counts.values()), sum(CAPACITY.values())))
+    c = 2
+    for p, label, n, cap in blocks:
+        fill, txt = (_PROG_STYLE[p][0], _PROG_STYLE[p][1]) if p in _PROG_STYLE else ("1F3A5F", "FFFFFF")
+        free = cap - n
+        ws.merge_cells(start_row=r, start_column=c, end_row=r, end_column=c + 2)
+        cell(r, c, label, bold=True, size=10, color=txt, fill=fill, border=None)
+        ws.merge_cells(start_row=r + 1, start_column=c, end_row=r + 1, end_column=c + 2)
+        status = ("full" if free == 0 else f"{free} free" if free > 0 else f"{-free} over")
+        cell(r + 1, c, f"{n} / {cap}   ·   {status}", bold=True, size=12,
+             color=("C0392B" if free < 0 else txt), fill=fill, border=None)
+        c += 4
+    ws.row_dimensions[r].height = 16
+    ws.row_dimensions[r + 1].height = 22
+
+    # ---- group header + column header -------------------------------------
+    gr, hr = 7, 8
+    start = 1
+    for i in range(1, ncol + 2):
+        g = cols[i - 1][2] if i <= ncol else None
+        if i == ncol + 1 or g != cols[start - 1][2]:
+            ws.merge_cells(start_row=gr, start_column=start, end_row=gr, end_column=i - 1)
+            for cc in range(start, i):
+                cell(gr, cc, None, fill="2E5C8A", border=Border(left=Side(style="thin", color="FFFFFF"),
+                                                                 right=Side(style="thin", color="FFFFFF")))
+            ws.cell(gr, start).value = cols[start - 1][2]
+            ws.cell(gr, start).font = Font(name=f_base, size=9, bold=True, color="FFFFFF")
+            start = i
+    for i, (hd, _, _) in enumerate(cols, 1):
+        rot = 90 if i >= flag_col0 and i < flag_col0 + len(_REPORT_FLAGS) else 0
+        cell(hr, i, hd, bold=True, size=9, color="FFFFFF", fill=_NAVY, wrap=True, rot=rot,
+             border=Border(left=Side(style="thin", color="FFFFFF"), right=Side(style="thin", color="FFFFFF")))
+    ws.row_dimensions[gr].height = 16
+    ws.row_dimensions[hr].height = 62
+
+    # ---- program sections --------------------------------------------------
+    r = hr + 1
+    total = 0
+    ordered = {p: sorted([s for s in students if s.program == p],
+                         key=lambda s: (s.start_date or date.max, s.name.lower())) for p in CAPACITY}
+    skipped = [(s.name or "(no name)", "program not JP / PY / SY")
+               for s in students if s.program not in CAPACITY]
+    for p in ("JP", "PY", "SY"):
+        fill, txt, label = _PROG_STYLE[p]
+        kids, cap = ordered[p], CAPACITY[p]
+        free = cap - len(kids)
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=ncol)
+        status = "full" if free == 0 else (f"{free} spot{'s' if free != 1 else ''} free" if free > 0
+                                           else f"{-free} over capacity")
+        for cc in range(1, ncol + 1):
+            cell(r, cc, None, fill=fill, border=Border(top=edge))
+        hdr = ws.cell(r, 1, f"   {label}     {len(kids)} / {cap}  ·  {status}")
+        hdr.font = Font(name=f_base, size=11, bold=True, color=txt)
+        hdr.alignment = Alignment(horizontal="left", vertical="center")
+        ws.row_dimensions[r].height = 20
+        r += 1
+        for i in range(max(cap, len(kids))):
+            band = "F7F9FC" if i % 2 else None
+            ws.row_dimensions[r].height = 19
+            if i < len(kids):
+                s = kids[i]
+                total += 1
+                stt, stw = term_and_week(s.start_date)
+                ext, exw = term_and_week(s.exit_date)
+                xt, xw = term_and_week(s.ext_end_date)
+                g = (s.gender or "").strip().upper()[:1]
+                vals = [
+                    i + 1, s.name.strip(), norm_edid(s.edid) or None, s.dob, s.school or None,
+                    year_cell(s.year), g or None,
+                    f"{stt} {stw}".strip() or None, s.start_date, s.review or None,
+                    f"{ext} {exw}".strip() or None, s.exit_date,
+                    f"{xt} {xw}".strip() if s.ext_end_date and xt else None, s.ext_end_date,
+                    s.prev if s.prev not in ("", None) else None,
+                    s.iesp if s.iesp not in ("", None) else None,
+                ]
+                for ci, v in enumerate(vals, 1):
+                    h = "left" if ci in (2, 5, 10) else "center"
+                    fmt = "dd/mm/yyyy" if ci == 4 else ("d mmm yy" if ci in (9, 12, 14) else None)
+                    fl = "FFF2CC" if ci in (13, 14) and s.ext_end_date else band
+                    cell(r, ci, v, bold=(ci == 2), fill=fl, h=h, fmt=fmt, wrap=ci in (5, 10),
+                         color=("9C5700" if ci in (13, 14) else "222222"))
+                for k, (key, _) in enumerate(_REPORT_FLAGS):
+                    on = bool((s.flags or {}).get(key))
+                    cell(r, flag_col0 + k, "✓" if on else None, bold=True, size=11,
+                         color=_TEAL, fill=("D9EAE7" if on else band))
+                cell(r, flag_col0 + len(_REPORT_FLAGS), s.focus_teacher or None, fill=band)
+                cell(r, flag_col0 + len(_REPORT_FLAGS) + 1, s.bsc or None, fill=band)
+            else:
+                for cc in range(1, ncol + 1):
+                    cell(r, cc, None, fill=band)
+                cell(r, 1, i + 1, color="9AA3AF", fill=band)
+                cell(r, 2, "Vacant", italic=True, color="9AA3AF", h="left", fill=band)
+            r += 1
+
+    # ---- footer ------------------------------------------------------------
+    for cc in range(1, ncol + 1):
+        ws.cell(r, cc).border = Border(top=edge)
+    r += 1
+    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=4)
+    cell(r, 1, "TOTAL STUDENTS", bold=True, size=11, color="FFFFFF", fill=_NAVY, h="left")
+    cell(r, 5, f"{total} / {sum(CAPACITY.values())}", bold=True, size=11, color="FFFFFF", fill=_NAVY)
+    ws.row_dimensions[r].height = 22
+    r += 2
+    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=ncol)
+    cell(r, 1, "✓ = applies   ·   Shaded Ext cells = approved extension   ·   "
+               "Vacant = place available in that program",
+         size=8, color="6B7280", h="left", border=None, italic=True)
+
+    # ---- sheet setup -------------------------------------------------------
+    ws.freeze_panes = f"C{hr + 1}"
+    ws.print_title_rows = f"{gr}:{hr}"
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.paperSize = ws.PAPERSIZE_A4
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 1
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_margins = PageMargins(left=0.3, right=0.3, top=0.4, bottom=0.5, header=0.2, footer=0.25)
+    ws.print_options.horizontalCentered = True
+    ws.oddFooter.left.text = "Confidential — contains student information"
+    ws.oddFooter.left.size = 8
+    ws.oddFooter.right.text = f"Generated {date.today().strftime('%d/%m/%Y')}"
+    ws.oddFooter.right.size = 8
+
+    out = io.BytesIO()
+    wb.save(out)
+    added = [(s.name, s.program) for s in students if s.program in CAPACITY]
+    return AddResult(added, skipped, total, out.getvalue())
