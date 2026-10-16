@@ -42,11 +42,14 @@ EVENT_TYPES = {
     "Transition Meeting":    {"color": "#7c3aed", "bg": "#ede9fe", "emoji": "🔄"},
     "TAC Meeting":           {"color": "#b45309", "bg": "#fef3c7", "emoji": "📎"},
     "Student Placement":     {"color": "#374151", "bg": "#f3f4f6", "emoji": "📋"},
+    "Observation":           {"color": "#0f766e", "bg": "#ccfbf1", "emoji": "👁️"},
+    "Meeting Room Booking":  {"color": "#1a2e44", "bg": "#eef2f7", "emoji": "🗓️"},
+    "Trade / Contractor":    {"color": "#475569", "bg": "#e2e8f0", "emoji": "🔧"},
     "Other":                 {"color": "#374151", "bg": "#f3f4f6", "emoji": "📌"},
 }
 
 # Student meeting types — appear in BOTH normal calendar AND student placement view
-STUDENT_MEETING_TYPES = ["Entry Meeting", "Review Meeting", "Transition Meeting", "TAC Meeting"]
+STUDENT_MEETING_TYPES = ["Entry Meeting", "Review Meeting", "Transition Meeting", "TAC Meeting", "Observation"]
 # All student-related types
 STUDENT_EVENT_TYPES   = STUDENT_MEETING_TYPES + ["Student Placement"]
 
@@ -157,6 +160,305 @@ def schedule_events(d_from=None, d_to=None):
                 })
         cur += timedelta(days=1)
     return out
+
+# ─── LIVE FEEDS: DAILY BULLETIN MEETINGS + TRADE BOOKINGS ─────────────────────
+# Both are read live from their source every time the calendar loads — nothing
+# is copied into clc_events — so an edit or deletion in the bulletin or in
+# Trade Bookings shows up here automatically, and there's no duplicate to keep
+# in sync. These events are read-only on the calendar (see is_readonly below);
+# staff change them where they were entered.
+import re as _re
+import json as _json
+
+_READONLY_ID_PREFIXES = ("pac_", "sched_", "bul_", "trade_", "room_")
+
+def is_readonly(ev):
+    """Events generated from another tool can't be edited/deleted from here."""
+    return str(ev.get("id", "")).startswith(_READONLY_ID_PREFIXES) or bool(ev.get("_from_schedule"))
+
+def _to_initials(name):
+    """'Jack Smith' -> 'J.S.' — keeps full student names off the calendar.
+    Anything that already looks like initials (e.g. 'J.S.', 'JS') is kept."""
+    name = (name or "").strip()
+    if not name:
+        return ""
+    if _re.fullmatch(r"(?:[A-Za-z]\.?\s*){1,4}", name):
+        letters = _re.findall(r"[A-Za-z]", name)
+        return ".".join(l.upper() for l in letters) + "."
+    parts = [p for p in _re.split(r"[\s\-]+", name) if p and p[0].isalpha()]
+    return ".".join(p[0].upper() for p in parts) + "." if parts else ""
+
+def _student_list_initials(raw):
+    """A Student cell may hold several names ('Jack Smith, Amy Lee')."""
+    names = [n for n in _re.split(r"[,/&;]|\band\b", raw or "") if n.strip()]
+    return ", ".join(i for i in (_to_initials(n) for n in names) if i)
+
+_TIME_RE = _re.compile(r"(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?", _re.I)
+
+def _parse_bulletin_time(raw):
+    """Free-text bulletin times ('9:30', '1:45pm', '10.15', '9:30-10:30') ->
+    ('HH:MM:SS' or None, 'HH:MM:SS' or None). Times with no am/pm between
+    1 and 6 are read as afternoon, matching school hours."""
+    found = []
+    for m in _TIME_RE.finditer(raw or ""):
+        h = int(m.group(1)); mins = int(m.group(2) or 0)
+        ap = (m.group(3) or "").lower().replace(".", "")
+        if ap == "pm" and h < 12: h += 12
+        elif ap == "am" and h == 12: h = 0
+        elif not ap and 1 <= h <= 6: h += 12
+        if 0 <= h <= 23 and 0 <= mins <= 59:
+            found.append(f"{h:02d}:{mins:02d}:00")
+        if len(found) == 2:
+            break
+    return (found[0] if found else None, found[1] if len(found) > 1 else None)
+
+def _bulletin_meeting_type(type_text):
+    t = (type_text or "").lower()
+    if "tac" in t:        return "TAC Meeting"
+    if "review" in t:     return "Review Meeting"
+    if "transition" in t: return "Transition Meeting"
+    if "entry" in t:      return "Entry Meeting"
+    if "pac" in t:        return "PAC Meeting"
+    if "pd" in t or "professional" in t or "training" in t: return "PD / Professional Dev"
+    if "team" in t:       return "Team Meeting"
+    return "Staff Meeting"
+
+def _rows(value):
+    """Bulletin row lists can arrive as a JSON string, None, or contain junk."""
+    if isinstance(value, str):
+        try: value = _json.loads(value) if value.strip() else []
+        except Exception: return []
+    if not isinstance(value, list):
+        return []
+    out = []
+    for r in value:
+        if isinstance(r, dict):
+            out.append({k: ("" if v is None or (isinstance(v, float) and v != v) else str(v)).strip()
+                        for k, v in r.items()})
+    return out
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _fetch_bulletins(d_from_s, d_to_s):
+    """Bulletins are read through database.py — the same module the Daily
+    Bulletin page saves with — so both pages always point at the same table."""
+    try:
+        import database as _bdb
+        rows = _bdb.get_bulletins_range(
+            datetime.strptime(d_from_s, "%Y-%m-%d").date(),
+            datetime.strptime(d_to_s, "%Y-%m-%d").date()) or []
+        st.session_state["_cal_bulletin_err"] = None
+        return rows
+    except Exception as e:
+        st.session_state["_cal_bulletin_err"] = str(e)
+        return []
+
+def bulletin_meeting_events(d_from=None, d_to=None):
+    """Staff Meetings + Entry Meetings typed into each day's Daily Bulletin."""
+    if not d_from or not d_to:
+        return []
+    out = []
+    for b in _fetch_bulletins(str(d_from), str(d_to)):
+        if isinstance(b.get("data"), dict):          # tolerate a nested-JSON layout
+            b = {**b["data"], "date": b.get("date") or b["data"].get("date")}
+        bdate = str(b.get("date") or b.get("bulletin_date") or "")[:10]
+        if not bdate:
+            continue
+
+        for i, r in enumerate(_rows(b.get("staff_meetings"))):
+            if not any(r.values()):
+                continue
+            mtype = r.get("Type", ""); staff = r.get("Staff Member", "")
+            start, _ = _parse_bulletin_time(r.get("Time Departing", ""))
+            end, _   = _parse_bulletin_time(r.get("Time Returning", ""))
+            note_bits = []
+            if r.get("Time Departing") and not start: note_bits.append(f"Departing: {r['Time Departing']}")
+            if r.get("Time Returning") and not end:   note_bits.append(f"Returning: {r['Time Returning']}")
+            note_bits.append("From the Daily Bulletin — edit it there.")
+            out.append({
+                "id": f"bul_sm_{bdate}_{i}",
+                "title": " — ".join(x for x in (mtype or "Meeting", staff) if x),
+                "event_type": _bulletin_meeting_type(mtype),
+                "event_date": bdate, "end_date": None,
+                "start_time": start, "end_time": end,
+                "location": r.get("Location", ""),
+                "added_by": staff,
+                "notes": " · ".join(note_bits),
+                "program": "",
+                "student_initials": _student_list_initials(r.get("Student", "")),
+                "_source_label": "Daily Bulletin",
+            })
+
+        for i, r in enumerate(_rows(b.get("entry_meetings"))):
+            if not any(r.values()):
+                continue
+            start, end = _parse_bulletin_time(r.get("Time", ""))
+            prog = (r.get("Program", "") or "").upper()[:2]
+            prog = prog if prog in PROGRAM_COLORS else ""
+            out.append({
+                "id": f"bul_em_{bdate}_{i}",
+                "title": "Entry Meeting",
+                "event_type": "Entry Meeting",
+                "event_date": bdate, "end_date": None,
+                "start_time": start, "end_time": end,
+                "location": "",
+                "added_by": "Annette",
+                "notes": ((f"Time: {r['Time']} · " if r.get("Time") and not start else "")
+                          + "From the Daily Bulletin — edit it there."),
+                "program": prog,
+                "student_initials": _student_list_initials(r.get("Student", "")),
+                "_source_label": "Daily Bulletin",
+            })
+
+        # Visitors on Site rows with an observation reason -> "X onsite to observe in PY"
+        for i, r in enumerate(_rows(b.get("visitors_on_site"))):
+            if "observ" not in (r.get("Reason", "") or "").lower():
+                continue
+            visitor = r.get("Visitor Name", "")
+            if not visitor:
+                continue
+            prog = (r.get("Program", "") or "").upper()[:2]
+            if prog not in PROGRAM_COLORS:            # older rows: look in Location
+                m = _re.search(r"\b(JP|PY|SY)\b", (r.get("Location", "") or "").upper())
+                prog = m.group(1) if m else ""
+            start, _ = _parse_bulletin_time(r.get("Arriving", ""))
+            end, _   = _parse_bulletin_time(r.get("Departing", ""))
+            where = PROGRAM_COLORS[prog]["label"] if prog else "a program (not specified)"
+            note_bits = [f"Onsite to observe in {where}."]
+            if r.get("Staff Responsible"):           note_bits.append(f"Staff responsible: {r['Staff Responsible']}")
+            if r.get("Arriving") and not start:      note_bits.append(f"Arriving: {r['Arriving']}")
+            if r.get("Departing") and not end:       note_bits.append(f"Departing: {r['Departing']}")
+            note_bits.append("From the Daily Bulletin — edit it there.")
+            out.append({
+                "id": f"bul_obs_{bdate}_{i}",
+                "title": f"Observation — {visitor}" + (f" ({prog})" if prog else ""),
+                "event_type": "Observation",
+                "event_date": bdate, "end_date": None,
+                "start_time": start, "end_time": end,
+                "location": r.get("Location", ""),
+                "added_by": r.get("Staff Responsible", ""),
+                "notes": " · ".join(note_bits),
+                "program": prog,
+                "student_initials": "",
+                "_source_label": "Daily Bulletin",
+            })
+    return out
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _fetch_trade_bookings(d_from_s, d_to_s):
+    """Public-safe columns only — company, contact, phone and internal notes
+    stay inside 56_Trade_Bookings.py and are never requested here."""
+    try:
+        res = (supabase.table("trade_bookings")
+               .select("id,booking_date,start_time,end_time,display_category,work_summary,status")
+               .gte("booking_date", d_from_s).lte("booking_date", d_to_s)
+               .neq("status", "Cancelled").execute())
+        st.session_state["_cal_trade_err"] = None
+        return res.data or []
+    except Exception as e:
+        st.session_state["_cal_trade_err"] = str(e)
+        return []
+
+def trade_booking_events(d_from=None, d_to=None):
+    if not d_from or not d_to:
+        return []
+    out = []
+    for b in _fetch_trade_bookings(str(d_from), str(d_to)):
+        category = b.get("display_category") or "Onsite Works"
+        summary  = b.get("work_summary") or ""
+        out.append({
+            "id": f"trade_{b.get('id')}",
+            "title": f"{category} - {summary}" if summary else category,
+            "event_type": "Trade / Contractor",
+            "event_date": str(b.get("booking_date", ""))[:10], "end_date": None,
+            "start_time": b.get("start_time") or None,
+            "end_time": b.get("end_time") or None,
+            "location": "", "added_by": "",
+            "notes": "From Trade Bookings — manage it there.",
+            "program": "", "student_initials": "",
+            "_source_label": "Trade Bookings",
+        })
+    return out
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _fetch_room_bookings(d_from_s, d_to_s):
+    """Read through database.py's client — the same one the Meeting Room tool
+    and the Daily Bulletin use — falling back to the calendar's own client."""
+    try:
+        try:
+            import database as _bdb
+            client = _bdb.get_supabase()
+        except Exception:
+            client = supabase
+        res = (client.table("meeting_room_bookings")
+               .select("id,booking_date,time_slot,staff_name,purpose,status")
+               .eq("status", "booked")
+               .gte("booking_date", d_from_s).lte("booking_date", d_to_s).execute())
+        st.session_state["_cal_room_err"] = None
+        return res.data or []
+    except Exception as e:
+        st.session_state["_cal_room_err"] = str(e)
+        return []
+
+def _mins(t):
+    try:
+        h, m = str(t)[:5].split(":"); return int(h) * 60 + int(m)
+    except Exception:
+        return None
+
+def _is_meeting(ev):
+    et = ev.get("event_type", "")
+    return ("Meeting" in et and et != "Meeting Room Booking") or et == "PD / Professional Dev"
+
+def _room_booking_covered(bdate, b_start, b_end, booker, meetings):
+    """True if a meeting on the same day already accounts for this booking:
+    its time overlaps the booked hour, or (when the meeting has no time)
+    it's run by the same person."""
+    bs, be = _mins(b_start), _mins(b_end)
+    first = (booker or "").strip().lower().split(" ")[0]
+    for m in meetings:
+        if str(m.get("event_date", ""))[:10] != bdate:
+            continue
+        ms = _mins(m.get("start_time"))
+        if ms is not None and bs is not None:
+            me = _mins(m.get("end_time")) or ms + 60
+            if ms < (be or bs + 60) and bs < me:
+                return True
+        elif first and first in f"{m.get('added_by','')} {m.get('title','')}".lower():
+            return True
+    return False
+
+def room_booking_events(d_from, d_to, meetings):
+    out = []
+    for b in _fetch_room_bookings(str(d_from), str(d_to)):
+        bdate = str(b.get("booking_date", ""))[:10]
+        start, end = _parse_bulletin_time(b.get("time_slot", ""))
+        booker = b.get("staff_name", "") or ""
+        if _room_booking_covered(bdate, start, end, booker, meetings):
+            continue
+        out.append({
+            "id": f"room_{b.get('id')}",
+            "title": f"Meeting Room — {booker}" if booker else "Meeting Room booked",
+            "event_type": "Meeting Room Booking",
+            "event_date": bdate, "end_date": None,
+            "start_time": start, "end_time": end,
+            "location": "Meeting Room", "added_by": booker,
+            "notes": " · ".join(x for x in (b.get("purpose") or "",
+                                            "From Meeting Room Bookings — manage it there.") if x),
+            "program": "", "student_initials": "",
+            "_source_label": "Meeting Room Bookings",
+        })
+    return out
+
+def external_events(d_from=None, d_to=None):
+    if not d_from or not d_to:
+        return []
+    bulletin = bulletin_meeting_events(d_from, d_to)
+    try:
+        own = db_events(d_from, d_to)
+    except Exception:
+        own = []
+    meetings = [e for e in bulletin + own + schedule_events(d_from, d_to) if _is_meeting(e)]
+    return bulletin + trade_booking_events(d_from, d_to) + room_booking_events(d_from, d_to, meetings)
 
 def ev_index(events):
     idx = {}
@@ -332,6 +634,11 @@ with ph_col4:
         st.session_state.cal_year=today.year; st.session_state.cal_month=today.month
         select_day(today); st.rerun()
 
+external_events(today, today)  # primes the error flags below
+for _k, _lbl in (("_cal_bulletin_err", "Daily Bulletin meetings"), ("_cal_trade_err", "Trade Bookings"), ("_cal_room_err", "Meeting Room bookings")):
+    if st.session_state.get(_k):
+        st.warning(f"⚠️ Couldn't load {_lbl} into the calendar: {st.session_state[_k]}")
+
 tab_month, tab_week, tab_list, tab_students = st.tabs(["📅 Month", "📆 Week", "📋 List", "👤 Students"])
 
 with tab_month:
@@ -339,7 +646,7 @@ with tab_month:
     ss = str(st.session_state.selected_date)
     _mo_start = date(yr, mo, 1)
     _mo_end = date(yr, mo, 28) + timedelta(days=4)
-    idx = ev_index(db_events(_mo_start, _mo_end) + schedule_events(_mo_start, _mo_end))
+    idx = ev_index(db_events(_mo_start, _mo_end) + schedule_events(_mo_start, _mo_end) + external_events(_mo_start, _mo_end))
     day_headers = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
     hcols = st.columns(7)
     for i, dn in enumerate(day_headers):
@@ -412,7 +719,7 @@ with tab_month:
 
     # ── Day panel ──
     sel = st.session_state.selected_date
-    d_evs = db_events(sel, sel) + schedule_events(sel, sel) + pac_events(db_pac(), sel, sel)
+    d_evs = db_events(sel, sel) + schedule_events(sel, sel) + external_events(sel, sel) + pac_events(db_pac(), sel, sel)
     d_evs.sort(key=lambda x: str(x.get("start_time","")))
     st.markdown(f"### {'📍 ' if sel==today else ''}📅 {sel.strftime('%A %-d %B %Y')}")
 
@@ -430,7 +737,7 @@ with tab_month:
                   if prog and ev.get("event_type") in STUDENT_EVENT_TYPES else cfg_ev["bg"])
         tr_ev  = fmt_time(ev.get("start_time",""))
         if ev.get("end_time"): tr_ev += f" – {fmt_time(ev['end_time'])}"
-        can_edit = (st.session_state.is_admin or ev.get("event_type") in STUDENT_EVENT_TYPES) and not pac and not ev.get("_from_schedule")
+        can_edit = (st.session_state.is_admin or ev.get("event_type") in STUDENT_EVENT_TYPES) and not is_readonly(ev)
         is_expanded = st.session_state.selected_event_id == eid
 
         # Event row
@@ -444,6 +751,7 @@ with tab_month:
                 f'{(" ⏰ "+tr_ev) if tr_ev else ""}'
                 f'{(" 📍 "+ev.get("location","")) if ev.get("location") else ""}'
                 f'{(" 👤 "+ev.get("added_by","")) if ev.get("added_by") else ""}'
+                f'{(" 🔗 "+ev.get("_source_label","")) if ev.get("_source_label") else ""}'
                 f'</div></div>', unsafe_allow_html=True)
         with ev_cols[1]:
             st.write("")
@@ -458,7 +766,7 @@ with tab_month:
                     st.session_state.edit_event_id = eid if st.session_state.edit_event_id != eid else None
                     st.rerun()
         with ev_cols[3]:
-            if st.session_state.is_admin and not pac:
+            if st.session_state.is_admin and not is_readonly(ev):
                 st.write("")
                 confirm_key = f"confirm_del_{eid}"
                 if st.session_state.get(confirm_key):
@@ -534,7 +842,7 @@ with tab_week:
         if st.button("Today", use_container_width=True, key="w_today"):
             st.session_state.cal_week_start = today-timedelta(days=today.weekday()); select_day(today); st.rerun()
 
-    wevs  = db_events(ws, we) + schedule_events(ws, we) + pac_events(db_pac(), ws, we)
+    wevs  = db_events(ws, we) + schedule_events(ws, we) + external_events(ws, we) + pac_events(db_pac(), ws, we)
     widx  = ev_index(wevs)
     ts    = str(today)
     ss    = str(st.session_state.selected_date)
@@ -616,7 +924,7 @@ with tab_week:
 
     # ── Day panel — same inline detail expansion as month view ──
     sel   = st.session_state.selected_date
-    d_evs = db_events(sel, sel) + schedule_events(sel, sel) + pac_events(db_pac(), sel, sel)
+    d_evs = db_events(sel, sel) + schedule_events(sel, sel) + external_events(sel, sel) + pac_events(db_pac(), sel, sel)
     d_evs.sort(key=lambda x: str(x.get("start_time","")))
     st.markdown(f"### {'📍 ' if sel==today else ''}📅 {sel.strftime('%A %-d %B %Y')}")
 
@@ -635,7 +943,7 @@ with tab_week:
                   if prog and ev.get("event_type") in STUDENT_EVENT_TYPES else cfg_ev["bg"])
         tr_ev  = fmt_time(ev.get("start_time",""))
         if ev.get("end_time"): tr_ev += f" – {fmt_time(ev['end_time'])}"
-        can_edit  = (st.session_state.is_admin or ev.get("event_type") in STUDENT_EVENT_TYPES) and not pac
+        can_edit  = (st.session_state.is_admin or ev.get("event_type") in STUDENT_EVENT_TYPES) and not is_readonly(ev)
         is_expanded = st.session_state.selected_event_id == eid
 
         ev_cols = st.columns([7, 1, 1, 1])
@@ -648,6 +956,7 @@ with tab_week:
                 f'{(" ⏰ "+tr_ev) if tr_ev else ""}'
                 f'{(" 📍 "+ev.get("location","")) if ev.get("location") else ""}'
                 f'{(" 👤 "+ev.get("added_by","")) if ev.get("added_by") else ""}'
+                f'{(" 🔗 "+ev.get("_source_label","")) if ev.get("_source_label") else ""}'
                 f'</div></div>', unsafe_allow_html=True)
         with ev_cols[1]:
             st.write("")
@@ -662,7 +971,7 @@ with tab_week:
                     st.session_state.edit_event_id = eid if st.session_state.edit_event_id != eid else None
                     st.rerun()
         with ev_cols[3]:
-            if st.session_state.is_admin and not pac:
+            if st.session_state.is_admin and not is_readonly(ev):
                 st.write("")
                 confirm_key = f"confirm_del_{eid}"
                 if st.session_state.get(confirm_key):
@@ -725,7 +1034,7 @@ def render_event_card(ev, key_prefix="e"):
               if prog and ev.get("event_type") in STUDENT_EVENT_TYPES else cfg_ev["bg"])
     tr_ev  = fmt_time(ev.get("start_time",""))
     if ev.get("end_time"): tr_ev += f" – {fmt_time(ev['end_time'])}"
-    can_edit = st.session_state.is_admin and not pac and not sched
+    can_edit = st.session_state.is_admin and not is_readonly(ev)
 
     edate_str = ""
     if ev.get("end_date") and ev["end_date"] != ev.get("event_date"):
@@ -736,6 +1045,9 @@ def render_event_card(ev, key_prefix="e"):
                   if ev.get("notes") else "")
     sched_badge = (' <span style="font-size:0.65rem;background:#e8f0fe;color:#1a4d8c;'
                    'border-radius:8px;padding:1px 6px;">🔁 Recurring</span>' if sched else "")
+    if ev.get("_source_label"):
+        sched_badge += (' <span style="font-size:0.65rem;background:#eef2f7;color:#1a2e44;'
+                        f'border-radius:8px;padding:1px 6px;">🔗 {ev["_source_label"]}</span>')
 
     st.markdown(
         f'<div style="background:{ebg};border-left:4px solid {ecol};border-radius:8px;'
@@ -780,7 +1092,7 @@ with tab_list:
         if ok: save_event(data); st.success(f"✅ '{data['title']}' added!"); st.rerun()
 
     st.markdown("---")
-    levs  = db_events(ls, le) + schedule_events(ls, le) + pac_events(db_pac(), ls, le)
+    levs  = db_events(ls, le) + schedule_events(ls, le) + external_events(ls, le) + pac_events(db_pac(), ls, le)
     levs  = [e for e in levs if e.get("event_type") in tf]
     levs.sort(key=lambda x: (str(x.get("event_date","")), str(x.get("start_time",""))))
 
