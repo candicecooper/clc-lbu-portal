@@ -21,16 +21,46 @@ Steps:
 import streamlit as st
 
 # ── Document Archive integration (fails silently if unavailable) ──────────
+ARCHIVE_IMPORT_ERROR = ""
 try:
-    from archive_utils import archive_once, initials_from_name, fetch_register
-except Exception:
-    def archive_once(*_a, **_k):
-        pass
+    from archive_utils import (archive_document, fetch_archive,
+                               initials_from_name, fetch_register)
+    ARCHIVE_AVAILABLE = True
+except Exception as _arch_err:
+    ARCHIVE_AVAILABLE = False
+    ARCHIVE_IMPORT_ERROR = str(_arch_err)
+    def archive_document(*_a, **_k):
+        return None
+    def fetch_archive(*_a, **_k):
+        return []
     def initials_from_name(name):
         parts = [p for p in str(name or "").replace("_", " ").split() if p]
         return "".join(p[0].upper() for p in parts[:2]) or None
     def fetch_register(status="active"):
         return []
+
+ARCHIVE_DOC_TYPE = "Safety & Risk Plan"
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _register_students():
+    """Active students from the Student Register -> list of dicts
+    {initials, program, label}. Cached briefly so reruns stay fast."""
+    try:
+        rows = fetch_register("active") or []
+    except Exception:
+        rows = []
+    out, seen = [], set()
+    for r in rows:
+        ini = (r.get("initials") or "").strip().upper()
+        if not ini or ini in seen:
+            continue
+        seen.add(ini)
+        prog = (r.get("program") or "").strip()
+        yr = str(r.get("year_level") or r.get("year") or "").strip()
+        label = " · ".join(x for x in [ini, prog, (f"Yr {yr}" if yr else "")] if x)
+        out.append({"initials": ini, "program": prog, "label": label})
+    return sorted(out, key=lambda d: d["initials"])
 
 import json, os, io, time
 from datetime import date, datetime
@@ -136,45 +166,139 @@ def groq_ai_call(prompt, max_tokens=1500, temperature=0.1, api_key=None, system=
 GROQ_KEY = st.secrets.get("GROQ_API_KEY", os.environ.get("GROQ_API_KEY", ""))
 
 
-def archive_prompt(*, guard_key, doc_bytes, filename, title, initials, plan_date):
-    """After a plan is generated, nag the staff member to file it to the
-    student's Document Archive. Shows Confirm / Not yet. 'Not yet' leaves it
-    unfiled so the prompt returns next time. Stops once filed this session."""
-    filed = st.session_state.setdefault("_srp_filed", set())
-    if guard_key in filed:
-        st.success("✅ This plan has been saved to the student's archive.")
-        return
-    if not initials:
-        st.warning("📁 This plan isn't linked to a registered student, so it can't be "
-                   "filed to a student folder. Pick a registered student in Step 1 to enable "
-                   "archiving.")
-        return
+def _plan_fingerprint(student: dict) -> str:
+    """Stable hash of the plan content, so an edited plan can be filed again
+    but the same plan isn't filed twice by accident."""
+    import hashlib
+    blob = json.dumps({
+        "s": {k: student.get(k, "") for k in ("initials", "name", "plan_date")},
+        "r": st.session_state.get("risks", []),
+        "p": st.session_state.get("priority_actions", ""),
+        "d": st.session_state.get("review_date", ""),
+    }, sort_keys=True, default=str)
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:10]
+
+
+def archive_panel(student: dict, doc_bytes: bytes):
+    """'Save to Document Archive' panel shown under the download button.
+    - Connects to the archive and confirms which registered student folder
+      the plan will go to (pre-filled from Step 1, changeable here).
+    - Never files to an initials folder that isn't on the register.
+    - If a Safety & Risk Plan is already in that folder, asks:
+      replace previous version (old one -> restorable Deleted) or keep both.
+    - Nothing is filed until staff click Save."""
     st.markdown("---")
-    st.warning(f"📁 **Save this Safety & Risk Plan to {initials}'s archive?** "
-               "It won't be filed until you confirm.")
-    a1, a2 = st.columns(2)
-    with a1:
-        if st.button(f"✅ Save to {initials}'s archive", type="primary",
-                     use_container_width=True, key=f"arch_yes_{guard_key}"):
+    st.markdown("### 🗄️ Save to Document Archive")
+
+    if not ARCHIVE_AVAILABLE:
+        st.error("The Document Archive isn't connected on this page "
+                 f"(archive_utils could not load: {ARCHIVE_IMPORT_ERROR or 'unknown error'}). "
+                 "Download the plan and upload it to the student's folder via "
+                 "Document Archive → Manual Upload.")
+        return
+
+    students = _register_students()
+    if not students:
+        st.warning("No active students found on the Student Register, so there's no "
+                   "folder to save to. Register the student first, then come back — "
+                   "your plan stays here while this page is open.")
+        if st.button("🔄 Re-check the register", key="srp_reg_refresh"):
+            _register_students.clear(); st.rerun()
+        return
+
+    labels = [d["label"] for d in students]
+    by_label = {d["label"]: d for d in students}
+    step1_ini = (student.get("initials") or "").strip().upper()
+    default_ix = next((i for i, d in enumerate(students)
+                       if d["initials"] == step1_ini), None)
+
+    if default_ix is None:
+        st.warning("This plan isn't linked to a registered student yet. "
+                   "Choose the student's folder below.")
+    pick = st.selectbox(
+        "Save to which student's archive folder? *",
+        labels, index=default_ix if default_ix is not None else None,
+        placeholder="Choose a registered student…",
+        key="srp_arch_student",
+        help="Folders are keyed by register initials. Check this is the right "
+             "student before saving.")
+    if not pick:
+        return
+    target = by_label[pick]
+    ini = target["initials"]
+
+    # Sanity checks so it lands in the RIGHT folder
+    derived = (initials_from_name(student.get("name", "")) or "").upper()
+    if derived and derived != ini:
+        st.warning(f"⚠️ The name on this plan (**{student.get('name','')}**) gives initials "
+                   f"**{derived}**, but you're saving to **{ini}**'s folder. "
+                   "Double-check this is the correct student.")
+    if target["program"] in ("JP", "PY", "SY") and student.get("program") \
+            and target["program"] != student.get("program"):
+        st.caption(f"Note: register lists {ini} in {target['program']}; "
+                   f"this plan says {student.get('program')}.")
+
+    fp = _plan_fingerprint(student)
+    guard = f"srp_{ini}_{fp}"
+    filed = st.session_state.setdefault("_srp_filed", set())
+    if guard in filed:
+        st.success(f"✅ This version of the plan is saved in **{ini}**'s Document Archive. "
+                   "Edit the plan and regenerate if you need to file an updated version.")
+        return
+
+    # Existing versions in that folder?
+    try:
+        prev = fetch_archive(student_initials=ini, doc_type=ARCHIVE_DOC_TYPE,
+                             include_confidential=True) or []
+    except Exception:
+        prev = []
+    supersede = False
+    if prev:
+        latest = prev[0] if isinstance(prev[0], dict) else {}
+        when = str(latest.get("created_at") or latest.get("uploaded_at") or "")[:10]
+        st.info(f"{ini}'s folder already has **{len(prev)}** Safety & Risk Plan"
+                f"{'s' if len(prev) != 1 else ''}"
+                + (f" (latest saved {when})." if when else "."))
+        mode = st.radio("What should happen to the previous version?",
+                        ["Replace previous version", "Keep both (add as separate file)"],
+                        horizontal=True, key=f"srp_mode_{guard}",
+                        help="Replace moves the old plan to the archive's restorable "
+                             "Deleted list. Keep both is useful when you want the history "
+                             "for reviews.")
+        supersede = (mode == "Replace previous version")
+
+    plan_date = str(student.get("plan_date", ""))
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button(f"✅ Save to {ini}'s archive", type="primary",
+                     use_container_width=True, key=f"srp_save_{guard}"):
             try:
-                archive_once(
-                    guard_key,
+                saved = archive_document(
                     source_tool="Safety & Risk Plan Builder",
-                    doc_type="Safety & Risk Plan",
-                    title=title,
+                    doc_type=ARCHIVE_DOC_TYPE,
+                    title=f"Safety & Risk Plan — {ini} — {plan_date}",
                     file_bytes=doc_bytes,
-                    filename=filename,
-                    student_initials=initials,
+                    filename=f"Safety_Risk_Plan_{ini}_CLC_{plan_date.replace('/','')}.docx",
+                    student_initials=ini,
                     created_by=st.session_state.get("user_email", "unknown"),
+                    supersede=supersede,
                 )
-                filed.add(guard_key)
-                st.success(f"✅ Saved to {initials}'s Document Archive.")
-                st.rerun()
+                if saved:
+                    filed.add(guard)
+                    student["initials"] = ini   # keep plan linked for Excel saves
+                    st.success(f"✅ Saved to {ini}'s Document Archive"
+                               + (" — previous version moved to restorable Deleted."
+                                  if supersede else "."))
+                    st.rerun()
+                else:
+                    st.error("The archive didn't confirm the save. Nothing was filed — "
+                             "try again, or download and use Manual Upload.")
             except Exception as e:
                 st.error(f"Could not save to the archive: {e}")
-    with a2:
-        if st.button("Not yet", use_container_width=True, key=f"arch_no_{guard_key}"):
-            st.caption("Not filed — you'll be asked again next time you generate the plan.")
+    with c2:
+        if st.button("Not yet", use_container_width=True, key=f"srp_no_{guard}"):
+            st.caption("Not filed — you'll be asked again next time you generate this plan.")
+
 
 # ── CLC standard risk categories (from revised plan) ──────────────────────────
 CLC_RISK_TEMPLATES = [
@@ -1174,7 +1298,7 @@ st.markdown('</div>', unsafe_allow_html=True)
 st.markdown("""
 <div style="background:#fef3c7;border-left:4px solid #f59e0b;padding:12px;margin:12px 0;border-radius:6px;">
 ⚠️ <strong>Save Regularly:</strong> Click "Download Save File" every 10-15 minutes. 
-This app does NOT auto-save. Save the Excel file to your computer or network drive (e.g., S:\CLC_LBU\Safety_Plans_DRAFTS\).
+This app does NOT auto-save. Save the Excel file to your computer or network drive (e.g., S:\\CLC_LBU\\Safety_Plans_DRAFTS\\).
 <br><br>
 🔒 <strong>Privacy:</strong> Your save files stay on YOUR computer/network. No sensitive student data is stored in cloud databases.
 </div>
@@ -1246,6 +1370,12 @@ if st.session_state.step == 1:
     _picklist = _reg_opts + [_OTHER]
     _prev = s.get("initials", "")
     _default_ix = _picklist.index(_prev) if _prev in _reg_opts else 0
+    if ARCHIVE_AVAILABLE:
+        st.caption("🗄️ Connected to the Document Archive — picking a registered student "
+                   "means the finished plan can be saved straight to their folder.")
+    else:
+        st.caption("⚠️ Document Archive not connected on this page — plans can still be "
+                   "downloaded, then uploaded manually.")
     _pick = st.selectbox(
         "Registered student *", _picklist, index=_default_ix,
         help="Students are added in the Student Register. Pick one here to tie this "
@@ -1455,7 +1585,7 @@ elif st.session_state.step == 3:
                 st.session_state.step = 2; st.rerun()
         with col_b:
             if st.button("Continue to Risk Builder →", type="primary"):
-                st.session_state.step = 6; st.rerun()
+                st.session_state.step = 4; st.rerun()
     else:
         has_school = bool(st.session_state.school_plan_text)
         has_docs   = bool(st.session_state.support_docs)
@@ -1546,7 +1676,7 @@ elif st.session_state.step == 4:
             if all(r["issue_title"].strip() == "" for r in risks):
                 st.error("Please complete at least one risk.")
             else:
-                st.session_state.step = 6; st.rerun()
+                st.session_state.step = 5; st.rerun()
 
     with right:
         if not risks:
@@ -1709,7 +1839,7 @@ elif st.session_state.step == 5:
     col_a, col_b, col_c = st.columns([1,1,2])
     with col_a:
         if st.button("← Back to risks"):
-            st.session_state.step = 6; st.rerun()
+            st.session_state.step = 4; st.rerun()
     with col_c:
         if st.button("✅ Generate Safety Plan (.docx)", type="primary", use_container_width=True):
             if not risks or all(r["issue_title"].strip() == "" for r in risks):
@@ -2235,21 +2365,12 @@ elif st.session_state.step == 7:
 
     safe = student['name'].replace(" ","_").replace("/","")
     fname = f"Safety_Risk_Plan_{safe}_CLC_{student['plan_date'].replace('/','')}.docx"
-    # student initials come from the register pick (Step 1); fall back to derived
-    _ini = (student.get("initials") or "").strip().upper() or initials_from_name(student['name'])
     _doc_bytes = buf.getvalue() if hasattr(buf, "getvalue") else buf
     st.download_button("⬇️  Download Safety & Risk Plan (.docx)",
-                       data=buf, file_name=fname,
+                       data=_doc_bytes, file_name=fname,
                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                        type="primary", use_container_width=True)
-    archive_prompt(
-        guard_key=f"srp_{_ini}_{student['plan_date']}",
-        doc_bytes=_doc_bytes,
-        filename=f"Safety_Risk_Plan_{_ini}_CLC_{student['plan_date'].replace('/','')}.docx",
-        title=f"Safety & Risk Plan — {_ini} — {student['plan_date']}",
-        initials=_ini,
-        plan_date=student['plan_date'],
-    )
+    archive_panel(student, _doc_bytes)
 
     st.markdown("<br>", unsafe_allow_html=True)
     col_a, col_b = st.columns(2)
@@ -2257,538 +2378,6 @@ elif st.session_state.step == 7:
         if st.button("← Back to Review"):
             st.session_state.step = 6; st.rerun()
     with col_b:
-        if st.button("🔄 Start a new plan"):
-            for k in list(st.session_state.keys()): del st.session_state[k]
-            st.rerun()
-
-# ══════════════════════════════════════════════════════════════════════════════
-# STEP 7 — Express: Upload & Generate directly
-# ══════════════════════════════════════════════════════════════════════════════
-elif st.session_state.step == 5:
-    student = st.session_state.student
-
-    st.markdown(f"""<div class="card-amber">
-    ⚡ <strong>Express mode</strong> — Upload documents for <strong>{student['name']}</strong> and
-    the AI will write the complete, formatted Safety &amp; Risk Management Plan in one step.
-    No step-by-step review needed.
-    </div>""", unsafe_allow_html=True)
-
-    # ── Document uploads ──────────────────────────────────────────────────────
-    st.markdown('<div class="sec-head">School Safety Plan (optional)</div>', unsafe_allow_html=True)
-    school_upload = st.file_uploader("Upload existing school safety plan (.docx or .pdf)",
-                                     type=["docx","pdf"], key="express_school")
-    if school_upload:
-        text = extract_docx_text(school_upload)
-        st.session_state.school_plan_text = text
-        st.markdown(f'<div class="card-teal">✅ <strong>{school_upload.name}</strong> ready.</div>',
-                    unsafe_allow_html=True)
-
-    st.markdown('<div class="sec-head">Supporting Documents</div>', unsafe_allow_html=True)
-    st.caption("BAPs, incident reports, psych reports, OT reports, SSS/BSE notes, paediatrician letters, school reports, TAC notes — upload as many as you have.")
-
-    doc_type_options = [
-        "Behaviour Summary",
-        "ABCH / Incident Report",
-        "Psychological Report",
-        "OT / Sensory Report",
-        "SSS / BSE Notes",
-        "Paediatrician / Medical Report",
-        "School Report / Academic Summary",
-        "LC Referral",
-        "Exclusion Documentation",
-        "Exclusion Paperwork",
-        "Entry Meeting Notes",
-        "Entry Meeting Minutes",
-        "Team Meeting Notes",
-        "TAC Meeting Notes",
-        "Other",
-    ]
-
-    uploaded_docs = st.file_uploader("Upload supporting documents (.docx or .pdf)",
-                                     type=["docx","pdf"], accept_multiple_files=True,
-                                     key="express_docs")
-    if uploaded_docs:
-        new_docs = []
-        for fi, f in enumerate(uploaded_docs):
-            col_n, col_t = st.columns([2,2])
-            with col_n:
-                st.markdown(f"📄 `{f.name}`")
-            with col_t:
-                dtype = st.selectbox("Type", doc_type_options, key=f"etype_{fi}_{f.name[:20]}")
-            new_docs.append({"name": f.name, "text": extract_docx_text(f), "doc_type": dtype})
-        st.session_state.support_docs = new_docs
-
-    # ── Summary of what's loaded ──────────────────────────────────────────────
-    has_school = bool(st.session_state.school_plan_text)
-    has_docs   = bool(st.session_state.support_docs)
-
-    if not has_school and not has_docs:
-        st.markdown('<div class="card-red">⚠️ Please upload at least one document before generating.</div>',
-                    unsafe_allow_html=True)
-
-    # ── Additional context ────────────────────────────────────────────────────
-    st.markdown('<div class="sec-head">Any additional context for the AI?</div>', unsafe_allow_html=True)
-    extra_context = st.text_area(
-        "Anything not in the documents that the AI should know about",
-        height=80,
-        placeholder="e.g. Xavier absconded from CLC grounds on 19/03/2026 — SAPOL ref 0732. Fence climb confirmed. Medication transition in progress from same date.",
-        key="express_extra")
-
-    if extra_context.strip():
-        student = {**st.session_state.student, "clc_context":
-                   st.session_state.student.get("clc_context","") + "\n" + extra_context}
-    else:
-        student = st.session_state.student
-
-    st.markdown('<div class="sec-head">Review date</div>', unsafe_allow_html=True)
-    st.session_state.review_date = st.text_input("Review date",
-        value=st.session_state.review_date, placeholder="e.g. 19/05/2026",
-        key="express_review_date")
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    col_a, col_b = st.columns([1,2])
-    with col_a:
-        if st.button("← Back"):
-            st.session_state.step = 1; st.rerun()
-    with col_b:
-        ready = has_school or has_docs
-        if st.button("⚡ Generate complete plan now", type="primary",
-                     use_container_width=True, disabled=not ready):
-            st.session_state.step = 6; st.rerun()
-
-# ══════════════════════════════════════════════════════════════════════════════
-# STEP 8 — Express: AI generation + docx build + download
-# ══════════════════════════════════════════════════════════════════════════════
-elif st.session_state.step == 7:
-    student = st.session_state.student
-
-    st.markdown('<div class="sec-head">⚡ Generating your plan…</div>', unsafe_allow_html=True)
-
-    # Only run generation once — cache result in session state
-    if "express_result" not in st.session_state:
-        prog = st.progress(0)
-        status = st.empty()
-
-        status.info("📄 Reading all documents and planning risk rows…")
-        prog.progress(20)
-
-        result = ai_generate_full_plan(
-            student,
-            st.session_state.school_plan_text,
-            st.session_state.support_docs,
-        )
-        prog.progress(70)
-
-        if result.get("error"):
-            st.error(f"AI generation failed: {result['error']}")
-            if st.button("← Try again"):
-                st.session_state.step = 5; st.rerun()
-            st.stop()
-
-        st.session_state.risks            = result.get("risks", [])
-        st.session_state.priority_actions = result.get("priority_actions", "")
-        if not st.session_state.review_date:
-            st.session_state.review_date  = result.get("review_date", "")
-        st.session_state.express_result   = True
-
-        status.info("🏗️ Building formatted document…")
-        prog.progress(85)
-
-    risks            = st.session_state.risks
-    priority_actions = st.session_state.priority_actions
-    review_date      = st.session_state.review_date
-
-    # ── Show what was generated ───────────────────────────────────────────────
-    n_risks = len([r for r in risks if r.get("issue_title","").strip()])
-    st.markdown(f"""<div class="card-teal">
-    ✅ <strong>AI generated {n_risks} risk rows</strong> from your documents.
-    The complete plan is ready to download below.<br>
-    <span style="font-size:0.85rem;color:#1A3530;">
-    If anything looks off, switch to <em>Build step-by-step</em> mode to review and edit each risk.
-    </span>
-    </div>""", unsafe_allow_html=True)
-
-    # Quick summary of risks
-    with st.expander(f"Preview: {n_risks} risks identified"):
-        for i, r in enumerate(risks):
-            if not r.get("issue_title","").strip(): continue
-            level = compute_risk_level(r.get("likelihood","D – Likely/frequently"),
-                                       r.get("consequence","3 – Moderate"))
-            col = risk_colour(level)
-            st.markdown(
-                f"**{i+1}. {r['issue_title']}** "
-                f"<span style='color:{col};font-weight:700;font-size:0.85rem;'>[{level}]</span>",
-                unsafe_allow_html=True)
-            if r.get("issue_detail"):
-                st.caption(r["issue_detail"][:120] + "…")
-
-    # Quality warning — if risks seem generic/template-derived
-    all_risk_text = " ".join(r.get("issue_detail","") + r.get("proactive","") for r in risks)
-    if "Xavier" in all_risk_text or (n_risks >= 6 and all(
-        any(t in r.get("issue_title","").lower() for t in ["abscond","fence","road","verbal","peer","staff safety","handover"])
-        for r in risks if r.get("issue_title")
-    )):
-        st.markdown(f"""<div class="card-red">
-        ⚠️ <strong>Quality check:</strong> The generated risks may be based on a template rather than
-        {student['name']}'s specific documents. Before downloading, review each risk in the preview above
-        and confirm it matches the documents you uploaded. If the content looks generic,
-        click <em>Switch to step-by-step</em> below to review and correct individual risks.
-        </div>""", unsafe_allow_html=True)
-
-    # ── Build docx (reuse Step 6 helpers inline) ──────────────────────────────
-    with st.spinner("Building document…"):
-
-        def rgb(h):
-            h = h.lstrip("#")
-            return RGBColor(int(h[0:2],16), int(h[2:4],16), int(h[4:6],16))
-
-        def set_bg(cell, hex_color):
-            tc = cell._tc; tcPr = tc.get_or_add_tcPr()
-            shd = OxmlElement('w:shd')
-            shd.set(qn('w:val'),'clear'); shd.set(qn('w:color'),'auto')
-            shd.set(qn('w:fill'), hex_color.lstrip("#")); tcPr.append(shd)
-
-        def set_borders(cell, color="1A7A6E", size="4"):
-            tc = cell._tc; tcPr = tc.get_or_add_tcPr()
-            tcB = OxmlElement('w:tcBorders')
-            for side in ['top','left','bottom','right']:
-                b = OxmlElement(f'w:{side}')
-                b.set(qn('w:val'),'single'); b.set(qn('w:sz'),size)
-                b.set(qn('w:space'),'0'); b.set(qn('w:color'), color.lstrip("#"))
-                tcB.append(b)
-            tcPr.append(tcB)
-
-        def arun(para, text, bold=False, italic=False, size=18, color="000000"):
-            run = para.add_run(text)
-            run.bold = bold; run.italic = italic
-            run.font.size = Pt(size/2)
-            run.font.color.rgb = rgb(color)
-            run.font.name = "Arial"
-            return run
-
-        def cpara(cell, text, bold=False, italic=False, size=18, color="000000",
-                   align=WD_ALIGN_PARAGRAPH.LEFT, sb=40, sa=40):
-            p = cell.add_paragraph()
-            p.paragraph_format.space_before = Pt(sb/20)
-            p.paragraph_format.space_after  = Pt(sa/20)
-            p.alignment = align
-            if text: arun(p, text, bold=bold, italic=italic, size=size, color=color)
-            return p
-
-        def cbullet(cell, text, size=17, color="333333"):
-            p = cell.add_paragraph(style='List Bullet')
-            p.paragraph_format.space_before = Pt(1)
-            p.paragraph_format.space_after  = Pt(1)
-            arun(p, text, size=size, color=color)
-
-        def render_content(cell, text):
-            # Handle both string and list formats
-            if isinstance(text, list):
-                text = "\n".join(str(t) for t in text)
-            else:
-                text = str(text) if text else ""
-            
-            if not text.strip():
-                cpara(cell, "(Not completed)", italic=True, color="888888"); return
-            for line in text.splitlines():
-                line = line.strip()
-                if not line: continue
-                if line.startswith("###"):
-                    p = cell.add_paragraph()
-                    p.paragraph_format.space_before = Pt(5)
-                    p.paragraph_format.space_after  = Pt(2)
-                    arun(p, line.lstrip("# "), bold=True, color=TEAL.lstrip("#"), size=16)
-                elif line.startswith("•") or line.startswith("-") or line.startswith("*"):
-                    cbullet(cell, line.lstrip("•-* "))
-                else:
-                    p = cell.add_paragraph()
-                    p.paragraph_format.space_before = Pt(2)
-                    p.paragraph_format.space_after  = Pt(2)
-                    arun(p, line, size=17)
-
-        doc = DocxDocument()
-        sec = doc.sections[0]
-        sec.page_width  = Cm(21); sec.page_height = Cm(29.7)
-        for attr in ('left_margin','right_margin','top_margin','bottom_margin'):
-            setattr(sec, attr, Cm(1.5))
-
-        # Title
-        t = doc.add_table(rows=1, cols=1); t.style='Table Grid'
-        tc = t.rows[0].cells[0]; set_bg(tc, TEAL.lstrip("#")); set_borders(tc, TEAL.lstrip("#"))
-        p1 = tc.paragraphs[0]; p1.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        arun(p1, "SAFETY & RISK MANAGEMENT PLAN", bold=True, size=28, color="FFFFFF")
-        cpara(tc, f"{student['name']}  |  Cowandilla Learning Centre  |  LBU {student['program']} Program",
-              size=18, color="FEF3C7", align=WD_ALIGN_PARAGRAPH.CENTER, sb=20, sa=40)
-        doc.add_paragraph()
-
-        # Student details
-        det = doc.add_table(rows=3, cols=2); det.style='Table Grid'
-        hdr = det.rows[0].cells[0].merge(det.rows[0].cells[1])
-        set_bg(hdr, GREY_DARK.lstrip("#")); set_borders(hdr, TEAL.lstrip("#"))
-        arun(hdr.paragraphs[0], "STUDENT DETAILS", bold=True, size=18, color="FFFFFF")
-        details_l = [("Full Name", student['name']), ("Date of Birth", student['dob'] or "—"),
-                     ("Age", student['age'] or "—"), ("EDSAS ID", student['edsas'] or "—")]
-        details_r = [("Home School", student['home_school'] or "—"),
-                     ("CLC Program", student['program']), ("Plan Date", student['plan_date'])]
-        for ci, items in enumerate([details_l, details_r]):
-            c = det.rows[1].cells[ci]; set_bg(c,"F2F6F6"); set_borders(c, TEAL.lstrip("#"))
-            c.paragraphs[0].clear()
-            for label, val in items:
-                p = c.add_paragraph()
-                arun(p, f"{label}: ", bold=True, size=17, color=GREY_DARK.lstrip("#"))
-                arun(p, val or "—", size=17)
-        status_cell = det.rows[2].cells[0].merge(det.rows[2].cells[1])
-        set_bg(status_cell, AMBER_LIGHT.lstrip("#")); set_borders(status_cell, AMBER.lstrip("#"))
-        p = status_cell.paragraphs[0]
-        arun(p, "Key staff: ", bold=True, size=17, color=AMBER.lstrip("#"))
-        arun(p, student['key_staff'] or "—", size=17)
-        if student.get('medical_notes'):
-            p2 = status_cell.add_paragraph()
-            arun(p2, "Medical/context: ", bold=True, size=16, color="666666")
-            arun(p2, student['medical_notes'], size=16, italic=True)
-        if student.get('clc_context'):
-            p3 = status_cell.add_paragraph()
-            arun(p3, "CLC context: ", bold=True, size=16, color="666666")
-            arun(p3, student['clc_context'], size=16, italic=True)
-        doc.add_paragraph()
-
-        # Risk table
-        h = doc.add_paragraph()
-        arun(h, "IDENTIFIED RISKS AND MANAGEMENT STRATEGIES", bold=True, size=20, color=GREY_DARK.lstrip("#"))
-        n = doc.add_paragraph()
-        arun(n, "* Risk ratings use the Likelihood/Consequence matrix on page 2.",
-             italic=True, size=14, color="666666")
-
-        main = doc.add_table(rows=1, cols=4); main.style='Table Grid'
-        for i, w in enumerate([Cm(5.2), Cm(2.0), Cm(7.2), Cm(8.6)]):
-            for c in main.columns[i].cells: c.width = w
-        for i, h in enumerate(["Concerning Issue","Risk Level *","Proactive Strategies","Procedure to Follow"]):
-            c = main.rows[0].cells[i]; set_bg(c, TEAL.lstrip("#")); set_borders(c, TEAL.lstrip("#"))
-            p = c.paragraphs[0]; p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            arun(p, h, bold=True, size=17, color="FFFFFF")
-
-        for r in risks:
-            if not r.get("issue_title","").strip(): continue
-            lk = r.get("likelihood","D – Likely/frequently")
-            cq = r.get("consequence","3 – Moderate")
-            level  = compute_risk_level(lk, cq)
-            lhex   = RISK_COLOURS.get(level,"#888").lstrip("#")
-            l_code = lk.split("–")[0].strip().split(" ")[0]
-            c_code = cq.split("–")[0].strip().split(" ")[0]
-            row = main.add_row()
-
-            c0 = row.cells[0]; set_bg(c0,"D6EEEB"); set_borders(c0, TEAL.lstrip("#"))
-            c0.paragraphs[0].clear()
-            p = c0.paragraphs[0]; arun(p, r["issue_title"], bold=True, size=17, color=GREY_DARK.lstrip("#"))
-            if r.get("issue_detail"):
-                p2 = c0.add_paragraph(); p2.paragraph_format.space_before = Pt(4)
-                arun(p2, r["issue_detail"], size=16)
-            if r.get("behaviour_descriptors","").strip():
-                ph = c0.add_paragraph(); ph.paragraph_format.space_before = Pt(5)
-                arun(ph, "Characterised by:", bold=True, size=15, color=TEAL.lstrip("#"))
-                
-                # Handle both string (with newlines) and list formats
-                bd_data = r["behaviour_descriptors"]
-                if isinstance(bd_data, list):
-                    bd_lines = bd_data
-                else:
-                    bd_lines = str(bd_data).splitlines()
-                
-                for bd in bd_lines:
-                    bd = str(bd).strip()
-                    if bd:
-                        bp = c0.add_paragraph(style='List Bullet')
-                        bp.paragraph_format.space_before = Pt(1); bp.paragraph_format.space_after = Pt(1)
-                        arun(bp, bd.lstrip("•- "), size=15)
-            if r.get("function","").strip():
-                pf = c0.add_paragraph(); pf.paragraph_format.space_before = Pt(5)
-                arun(pf, "Function: ", bold=True, size=15, color="555555")
-                arun(pf, r["function"], size=15, italic=True)
-            if r.get("clc_notes","").strip():
-                pn = c0.add_paragraph(); pn.paragraph_format.space_before = Pt(5)
-                arun(pn, "CLC: ", bold=True, size=14, color=AMBER.lstrip("#"))
-                arun(pn, r["clc_notes"], size=14, italic=True)
-
-            c1 = row.cells[1]; set_bg(c1, lhex); set_borders(c1, lhex)
-            p1 = c1.paragraphs[0]; p1.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            arun(p1, f"{l_code}{c_code}", bold=True, size=26, color="FFFFFF")
-            p2 = c1.add_paragraph(); p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            arun(p2, level, bold=True, size=14, color="FFFFFF")
-
-            c2 = row.cells[2]; set_borders(c2, TEAL.lstrip("#"))
-            c2.paragraphs[0].clear(); render_content(c2, r.get("proactive",""))
-
-            c3 = row.cells[3]; set_borders(c3, TEAL.lstrip("#"))
-            c3.paragraphs[0].clear(); render_content(c3, r.get("procedure",""))
-
-        fn_row  = main.add_row()
-        fn_cell = fn_row.cells[0].merge(fn_row.cells[1]).merge(fn_row.cells[2]).merge(fn_row.cells[3])
-        set_bg(fn_cell,"F2F6F6"); set_borders(fn_cell, TEAL.lstrip("#"))
-        arun(fn_cell.paragraphs[0], "* Refer to risk matrix on page 2.",
-             italic=True, size=13, color="666666")
-        doc.add_paragraph()
-
-        # Priority actions
-        if priority_actions.strip():
-            pa_tbl = doc.add_table(rows=1, cols=1); pa_tbl.style='Table Grid'
-            pa = pa_tbl.rows[0].cells[0]
-            set_bg(pa, AMBER_LIGHT.lstrip("#")); set_borders(pa, AMBER.lstrip("#"))
-            pa.paragraphs[0].clear()
-            cpara(pa, "PRIORITY ACTIONS", bold=True, size=19, color=AMBER.lstrip("#"), sb=40, sa=60)
-            for line in priority_actions.splitlines():
-                line = line.strip()
-                if not line: continue
-                if line.startswith("•") or line.startswith("-"):
-                    cbullet(pa, line.lstrip("•- "))
-                else:
-                    cpara(pa, line, size=17)
-            doc.add_paragraph()
-
-
-        # ── Staff Acknowledgement sign-off ─────────────────────────────────
-        doc.add_paragraph()
-        sh = doc.add_paragraph()
-        arun(sh, "STAFF ACKNOWLEDGEMENT", bold=True, size=19, color=GREY_DARK.lstrip("#"))
-        sn = doc.add_paragraph()
-        arun(sn, "All staff working with this student must read this plan and sign below to confirm they understand the identified risks and their responsibilities.",
-             size=15, italic=True)
-        doc.add_paragraph()
-
-        # Sign-off table — header + 8 blank rows
-        SIGN_COLS = ["Staff Member Name", "Role", "Signature", "Date"]
-        SIGN_WIDTHS_CM = [5.5, 4.0, 5.5, 2.5]
-        stbl = doc.add_table(rows=9, cols=4); stbl.style='Table Grid'
-        from docx.shared import Cm as _Cm
-        for ci, w in enumerate(SIGN_WIDTHS_CM):
-            for cell in stbl.columns[ci].cells:
-                cell.width = _Cm(w)
-        # Header row
-        for ci, lbl in enumerate(SIGN_COLS):
-            c = stbl.rows[0].cells[ci]
-            set_bg(c, GREY_DARK.lstrip("#")); set_borders(c, TEAL.lstrip("#"))
-            c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-            arun(c.paragraphs[0], lbl, bold=True, size=16, color="FFFFFF")
-        # 8 blank signing rows
-        for ri in range(1, 9):
-            row = stbl.rows[ri]
-            bg = "F2F6F6" if ri % 2 == 0 else "FFFFFF"
-            for ci in range(4):
-                c = row.cells[ci]
-                set_bg(c, bg); set_borders(c, "CCCCCC")
-                cpara(c, "", size=16, sb=60, sa=60)
-        doc.add_paragraph()
-
-        # Endorsement / review
-        eh = doc.add_paragraph()
-        arun(eh, "PLAN ENDORSEMENT", bold=True, size=19, color=GREY_DARK.lstrip("#"))
-        doc.add_paragraph()
-        sign_tbl = doc.add_table(rows=2, cols=3); sign_tbl.style='Table Grid'
-        for ci, lbl in enumerate(["Prepared by (CLC staff)","Endorsed by (Principal/Leader)","Next Review Date"]):
-            c = sign_tbl.rows[0].cells[ci]; set_bg(c, GREY_DARK.lstrip("#"))
-            set_borders(c, TEAL.lstrip("#"))
-            c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-            arun(c.paragraphs[0], lbl, bold=True, size=16, color="FFFFFF")
-        for ci, val in enumerate(["Name: ___________________________\nSignature: ______________________\nDate: _______________",
-                                   "Name: ___________________________\nSignature: ______________________\nDate: _______________",
-                                   review_date or "TBC"]):
-            c = sign_tbl.rows[1].cells[ci]; set_bg(c,"F2F6F6"); set_borders(c, TEAL.lstrip("#"))
-            for line in val.split('\n'):
-                cpara(c, line, size=16, sb=20, sa=20)
-
-
-        doc.add_page_break()
-
-        # Risk matrix
-        mh = doc.add_paragraph()
-        arun(mh, "LEVEL OF RISK — REFERENCE MATRIX", bold=True, size=22, color=GREY_DARK.lstrip("#"))
-        likelihoods = ["E – Almost Certain","D – Likely/Frequently","C – Likely Sometimes","B – Unlikely","A – Rare"]
-        cons_labels = ["1 Insignificant","2 Minor","3 Moderate","4 Major","5 Catastrophic"]
-        matrix_data = [["High","High","Extreme","Extreme","Extreme"],
-                       ["Moderate","High","High","Extreme","Extreme"],
-                       ["Low","Moderate","High","Extreme","Extreme"],
-                       ["Low","Low","Moderate","High","Extreme"],
-                       ["Low","Low","Moderate","High","High"]]
-        fill_m = {"Extreme":"C0392B","High":"E67E22","Moderate":"F1C40F","Low":"27AE60"}
-        text_m = {"Extreme":"FFFFFF","High":"FFFFFF","Moderate":"333333","Low":"FFFFFF"}
-        mx = doc.add_table(rows=6, cols=6); mx.style='Table Grid'
-        set_bg(mx.rows[0].cells[0], GREY_DARK.lstrip("#"))
-        arun(mx.rows[0].cells[0].paragraphs[0], "Likelihood \\ Consequences",
-             bold=True, size=13, color="FFFFFF")
-        for ci, cl in enumerate(cons_labels):
-            c = mx.rows[0].cells[ci+1]; set_bg(c, GREY_DARK.lstrip("#"))
-            c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-            arun(c.paragraphs[0], cl, bold=True, size=13, color="FFFFFF")
-        for ri, (lh, row_data) in enumerate(zip(likelihoods, matrix_data)):
-            row = mx.rows[ri+1]
-            set_bg(row.cells[0],"F2F6F6")
-            arun(row.cells[0].paragraphs[0], lh, bold=True, size=13, color=GREY_DARK.lstrip("#"))
-            for ci, val in enumerate(row_data):
-                c = row.cells[ci+1]; set_bg(c, fill_m.get(val,"888888"))
-                c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-                arun(c.paragraphs[0], val, bold=True, size=13, color=text_m.get(val,"FFFFFF"))
-
-        buf = io.BytesIO()
-        doc.save(buf); buf.seek(0)
-
-    # ── Language objectivity check ────────────────────────────────────────────
-    exp_all_text = " ".join([
-        r.get("issue_title","") + " " + r.get("issue_detail","") + " " +
-        r.get("behaviour_descriptors","") + " " + r.get("proactive","") + " " + r.get("procedure","")
-        for r in risks
-    ])
-    exp_lang_flags = check_language_objectivity(exp_all_text)
-    if exp_lang_flags:
-        st.markdown("""
-        <div style="background:#fff8e6;border:2px solid #e8a125;border-radius:10px;padding:1rem 1.2rem;margin-bottom:1rem;">
-        <div style="font-weight:700;color:#92400e;font-size:.9rem;margin-bottom:.5rem;">
-        ⚠️ Language Review — Possible Subjective Terms Detected
-        </div>
-        <div style="font-size:.8rem;color:#78350f;margin-bottom:.5rem;">
-        The plan may contain language that is open to individual interpretation.
-        Use <strong>Switch to step-by-step to edit risks</strong> below to review and correct flagged items before downloading.
-        </div>
-        </div>""", unsafe_allow_html=True)
-        for flag in exp_lang_flags:
-            st.markdown(f'<div style="background:#fef9ee;border-left:3px solid #e8a125;border-radius:0 6px 6px 0;padding:.4rem .8rem;margin-bottom:.35rem;font-size:.8rem;color:#78350f;">⚠️ {flag}</div>', unsafe_allow_html=True)
-        st.markdown("<br>", unsafe_allow_html=True)
-    else:
-        st.markdown("""
-        <div style="background:#f0faf8;border:1.5px solid #1a7a6e;border-radius:10px;padding:.75rem 1rem;margin-bottom:1rem;font-size:.85rem;color:#1a2e44;">
-        ✅ <strong>Language check passed</strong> — no obvious subjective terms detected.
-        </div>""", unsafe_allow_html=True)
-
-    # ── Download ──────────────────────────────────────────────────────────────
-    safe  = student['name'].replace(" ","_").replace("/","")
-    fname = f"Safety_Risk_Plan_{safe}_CLC_{student['plan_date'].replace('/','')}.docx"
-    # student initials come from the register pick (Step 1); fall back to derived
-    _ini = (student.get("initials") or "").strip().upper() or initials_from_name(student['name'])
-    _doc_bytes = buf.getvalue() if hasattr(buf, "getvalue") else buf
-    st.download_button("⬇️  Download Safety & Risk Plan (.docx)",
-                       data=buf, file_name=fname,
-                       mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                       type="primary", use_container_width=True)
-    archive_prompt(
-        guard_key=f"srp_{_ini}_{student['plan_date']}",
-        doc_bytes=_doc_bytes,
-        filename=f"Safety_Risk_Plan_{_ini}_CLC_{student['plan_date'].replace('/','')}.docx",
-        title=f"Safety & Risk Plan — {_ini} — {student['plan_date']}",
-        initials=_ini,
-        plan_date=student['plan_date'],
-    )
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    col_a, col_b, col_c = st.columns(3)
-    with col_a:
-        if st.button("← Upload different documents"):
-            del st.session_state["express_result"]
-            st.session_state.step = 5; st.rerun()
-    with col_b:
-        if st.button("🧱 Switch to step-by-step to edit risks"):
-            del st.session_state["express_result"]
-            st.session_state.mode = "wizard"
-            st.session_state.synthesis_done = True
-            st.session_state.step = 6; st.rerun()
-    with col_c:
         if st.button("🔄 Start a new plan"):
             for k in list(st.session_state.keys()): del st.session_state[k]
             st.rerun()
