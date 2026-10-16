@@ -368,7 +368,7 @@ def default_bulletin():
         "staff_meetings": [{"Type":"","Staff Member":"","Location":"","Time Departing":"","Time Returning":"","Student":""} for _ in range(4)],
         "entry_meetings": [{"Time":"","Program":"","Student":""} for _ in range(4)],
         "additional_messages": [{"Staff Member":"","Information":""} for _ in range(4)],
-        "visitors_on_site": [{"Visitor Name":"","Reason":"","Staff Responsible":"","Arriving":"","Departing":"","Location":""} for _ in range(4)],
+        "visitors_on_site": [{"Visitor Name":"","Reason":"","Program":"","Staff Responsible":"","Arriving":"","Departing":"","Location":""} for _ in range(4)],
         "travel_jp": [{"Student":"","Arrival Time":"","Departure Time":"","Transport":""} for _ in range(5)],
         "travel_py": [{"Student":"","Arrival Time":"","Departure Time":"","Transport":""} for _ in range(5)],
         "travel_sy": [{"Student":"","Arrival Time":"","Departure Time":"","Transport":""} for _ in range(5)],
@@ -720,6 +720,7 @@ def trade_bookings_as_visitor_rows(for_date):
         out.append({
             "Visitor Name": f"🔧 {label}",
             "Reason": "Trade/Contractor",
+            "Program": "",
             "Staff Responsible": b.get("booked_by") or "",
             "Arriving": start_t,
             "Departing": end_t,
@@ -1066,8 +1067,8 @@ if params.get("display") == "true":
     _cards.append(f'<div class="dp"><div class="dp-header navy">\U0001f91d Staff Meetings</div><div class="dp-body"><table class="dt dt-compact"><tr><th>Type</th><th>Staff</th><th>Location</th><th>Depart</th><th>Return</th><th>Student</th></tr>{tbl_rows(_all_mtgs, ["Type","Staff Member","Location","Time Departing","Time Returning","Student"])}</table></div></div>')
     _cards.append(f'<div class="dp"><div class="dp-header navy">\U0001f4e5 Entry Meetings</div><div class="dp-body"><table class="dt"><tr><th>Time</th><th>Program</th><th>Student</th></tr>{tbl_rows(d_data.get("entry_meetings",[]), ["Time","Program","Student"])}</table></div></div>')
     if _vis_rows:
-        _vis_html = "".join([f'<tr><td><strong style="color:#1a2e44;">{r.get("Visitor Name","")}</strong></td><td style="font-size:.95rem;">{r.get("Reason","")}</td><td style="font-size:.95rem;">{r.get("Staff Responsible","")}</td><td style="font-size:.95rem;">{r.get("Arriving","")}</td><td style="font-size:.95rem;">{r.get("Departing","")}</td><td style="font-size:.95rem;">{r.get("Location","")}</td></tr>' for r in _vis_rows])
-        _cards.append(f'<div class="dp"><div class="dp-header green">\U0001f465 Visitors</div><div class="dp-body"><table class="dt dt-compact"><tr><th>Visitor</th><th>Reason</th><th>Staff</th><th>Arriving</th><th>Departing</th><th>Location</th></tr>{_vis_html}</table></div></div>')
+        _vis_html = "".join([f'<tr><td><strong style="color:#1a2e44;">{r.get("Visitor Name","")}</strong></td><td style="font-size:.95rem;">{r.get("Reason","")}</td><td style="font-size:.95rem;">{r.get("Program","")}</td><td style="font-size:.95rem;">{r.get("Staff Responsible","")}</td><td style="font-size:.95rem;">{r.get("Arriving","")}</td><td style="font-size:.95rem;">{r.get("Departing","")}</td><td style="font-size:.95rem;">{r.get("Location","")}</td></tr>' for r in _vis_rows])
+        _cards.append(f'<div class="dp"><div class="dp-header green">\U0001f465 Visitors</div><div class="dp-body"><table class="dt dt-compact"><tr><th>Visitor</th><th>Reason</th><th>Prog</th><th>Staff</th><th>Arriving</th><th>Departing</th><th>Location</th></tr>{_vis_html}</table></div></div>')
     _cards.append(f'<div class="dp"><div class="dp-header jp">\U0001f7e6 JP \u2013 Travel</div><div class="dp-body"><table class="dt dt-compact"><tr><th>Student</th><th>Arrives</th><th>Departs</th><th>Transport</th></tr>{tbl_rows(d_data.get("travel_jp",[]), ["Student","Arrival Time","Departure Time","Transport"])}</table>{transition_bar_html(_transition_d.get("travel_jp",[]), compact=True)}</div></div>')
     _cards.append(f'<div class="dp"><div class="dp-header py">\U0001f7e3 PY \u2013 Travel</div><div class="dp-body"><table class="dt dt-compact"><tr><th>Student</th><th>Arrives</th><th>Departs</th><th>Transport</th></tr>{tbl_rows(d_data.get("travel_py",[]), ["Student","Arrival Time","Departure Time","Transport"])}</table>{transition_bar_html(_transition_d.get("travel_py",[]), compact=True)}</div></div>')
     _cards.append(f'<div class="dp"><div class="dp-header sy">\U0001f7eb SY \u2013 Travel</div><div class="dp-body"><table class="dt dt-compact"><tr><th>Student</th><th>Arrives</th><th>Departs</th><th>Transport</th></tr>{tbl_rows(d_data.get("travel_sy",[]), ["Student","Arrival Time","Departure Time","Transport"])}</table>{transition_bar_html(_transition_d.get("travel_sy",[]), compact=True)}</div></div>')
@@ -1429,21 +1430,27 @@ with page_tab:
                 if edit:
                     _vis_raw = bulletin_data.get("visitors_on_site") or []
                     if not _vis_raw:
-                        _vis_raw = [{"Visitor Name":"","Reason":"","Staff Responsible":"","Arriving":"","Departing":"","Location":""} for _ in range(4)]
-                    vis_df = pd.DataFrame(_vis_raw)
+                        _vis_raw = [{"Visitor Name":"","Reason":"","Program":"","Staff Responsible":"","Arriving":"","Departing":"","Location":""} for _ in range(4)]
+                    _vis_cols = ["Visitor Name","Reason","Program","Staff Responsible","Arriving","Departing","Location"]
+                    _vis_raw = [{c: (r.get(c, "") or "") for c in _vis_cols} for r in _vis_raw]
+                    vis_df = pd.DataFrame(_vis_raw, columns=_vis_cols)
                     vis_edited = st.data_editor(vis_df, key="vis_editor", hide_index=True, use_container_width=True, num_rows="dynamic",
-                        column_config={"Reason": st.column_config.SelectboxColumn("Reason", options=VISITOR_REASON_OPTIONS, required=False)})
+                        column_config={
+                            "Reason": st.column_config.SelectboxColumn("Reason", options=VISITOR_REASON_OPTIONS, required=False),
+                            "Program": st.column_config.SelectboxColumn("Program", options=["JP","PY","SY"], required=False,
+                                help="Which program they're visiting — Student Observations with a program appear on the CLC Calendar"),
+                        })
                     bulletin_data["visitors_on_site"] = vis_edited.to_dict("records")
                     if _trade_vis_rows:
                         st.caption("🔧 Auto-added from Trade Bookings — edit or cancel these there, not here:")
-                        st.markdown('<table class="data-table"><tr><th>Visitor</th><th>Reason</th><th>Staff Responsible</th><th>Arriving</th><th>Departing</th><th>Location</th></tr>'+"".join([f"<tr><td><strong>{r.get('Visitor Name','')}</strong></td><td>{r.get('Reason','')}</td><td>{r.get('Staff Responsible','')}</td><td>{r.get('Arriving','')}</td><td>{r.get('Departing','')}</td><td>{r.get('Location','')}</td></tr>" for r in _trade_vis_rows])+"</table>", unsafe_allow_html=True)
+                        st.markdown('<table class="data-table"><tr><th>Visitor</th><th>Reason</th><th>Program</th><th>Staff Responsible</th><th>Arriving</th><th>Departing</th><th>Location</th></tr>'+"".join([f"<tr><td><strong>{r.get('Visitor Name','')}</strong></td><td>{r.get('Reason','')}</td><td>{r.get('Program','')}</td><td>{r.get('Staff Responsible','')}</td><td>{r.get('Arriving','')}</td><td>{r.get('Departing','')}</td><td>{r.get('Location','')}</td></tr>" for r in _trade_vis_rows])+"</table>", unsafe_allow_html=True)
                         st.markdown('<div style="margin-top:0.4rem;font-size:0.75rem;color:#6b7280;">📌 <a href="/Trade_Bookings" target="_self" style="color:#1a2e44;text-decoration:none;font-weight:600;">Manage Trade Bookings →</a></div>', unsafe_allow_html=True)
                     elif st.session_state.get("_trade_bookings_last_error"):
                         st.warning(f"⚠️ Couldn't load trade bookings: {st.session_state['_trade_bookings_last_error']}")
                 else:
                     vis_rows = bulletin_data.get("visitors_on_site", []) + _trade_vis_rows
                     has_vis = any(any(v for v in r.values()) for r in vis_rows)
-                    if has_vis: st.markdown('<table class="data-table"><tr><th>Visitor</th><th>Reason</th><th>Staff Responsible</th><th>Arriving</th><th>Departing</th><th>Location</th></tr>'+"".join([f"<tr><td><strong>{r.get('Visitor Name','')}</strong></td><td>{r.get('Reason','')}</td><td>{r.get('Staff Responsible','')}</td><td>{r.get('Arriving','')}</td><td>{r.get('Departing','')}</td><td>{r.get('Location','')}</td></tr>" for r in vis_rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
+                    if has_vis: st.markdown('<table class="data-table"><tr><th>Visitor</th><th>Reason</th><th>Program</th><th>Staff Responsible</th><th>Arriving</th><th>Departing</th><th>Location</th></tr>'+"".join([f"<tr><td><strong>{r.get('Visitor Name','')}</strong></td><td>{r.get('Reason','')}</td><td>{r.get('Program','')}</td><td>{r.get('Staff Responsible','')}</td><td>{r.get('Arriving','')}</td><td>{r.get('Departing','')}</td><td>{r.get('Location','')}</td></tr>" for r in vis_rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
                     else: st.markdown('<div class="empty-state"><div class="icon">\U0001f6b6</div>No visitors today</div>', unsafe_allow_html=True)
                     if not _trade_vis_rows and st.session_state.get("_trade_bookings_last_error"):
                         st.warning(f"⚠️ Couldn't load trade bookings: {st.session_state['_trade_bookings_last_error']}")
