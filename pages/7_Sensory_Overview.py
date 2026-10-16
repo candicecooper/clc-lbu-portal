@@ -1,12 +1,26 @@
 import streamlit as st
+
+# ── Document Archive integration (fails silently if unavailable) ──────────
+try:
+    from archive_utils import archive_document, fetch_archive, initials_from_name, fetch_register
+except Exception:
+    def archive_document(**_k):
+        return None
+    def fetch_archive(**_k):
+        return []
+    def initials_from_name(name):
+        parts = [p for p in str(name or "").replace("_", " ").split() if p]
+        return "".join(p[0].upper() for p in parts[:2]) or None
+    def fetch_register(status="active"):
+        return []
+
 from supabase import create_client
 import json
-import io
 from datetime import date
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Sensory Profiles",
+    page_title="Sensory Overview",
     page_icon="🧠",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -15,684 +29,1171 @@ st.set_page_config(
 TEAL  = "#1A7A7A"
 AMBER = "#C8760A"
 
-# Sensory Overview entry tool inside the portal (pages/ folder)
-SENSORY_OVERVIEW_PAGE = "pages/7_Sensory_Overview.py"
-DOC_TYPE = "Sensory Overview"
-
-# ── Document Archive / Student Register integration ───────────────────────────
-# archive_utils self-locates the students project (SUPABASE_URL_STUDENTS first,
-# verified against document_archive), so the register and archive are read from
-# the right database even though sensory_overviews lives in the default project.
-try:
-    from archive_utils import archive_document, fetch_archive, fetch_register, initials_from_name
-    ARCHIVE_OK = True
-    ARCHIVE_ERR = ""
-except Exception as _imp_err:  # noqa: BLE001
-    ARCHIVE_OK = False
-    ARCHIVE_ERR = str(_imp_err)
-
-    def archive_document(**_k):
-        return None
-
-    def fetch_archive(**_k):
-        return []
-
-    def fetch_register(_status=None):
-        return []
-
-    def initials_from_name(name):
-        parts = [p for p in str(name or "").replace("_", " ").split() if p]
-        return "".join(p[0].upper() for p in parts[:2]) or None
-
 st.markdown(f"""
 <style>
     .stApp {{ background-color: #f5f7f7; }}
-    h1, h2, h3 {{ color: {TEAL}; }}
-
-    .student-card {{
-        background: white;
-        border-radius: 10px;
-        border-left: 6px solid {TEAL};
-        padding: 14px 18px;
-        margin-bottom: 10px;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+    h1 {{ color: {TEAL}; }}
+    .section-header {{
+        background: {TEAL}; color: white;
+        padding: 8px 14px; border-radius: 6px;
+        font-weight: 700; font-size: 1rem; margin-bottom: 6px;
     }}
-    .student-card .sname  {{ font-size: 1.1rem; font-weight: 700; color: {TEAL}; }}
-    .student-card .smeta  {{ font-size: 0.8rem; color: #666; margin-top: 2px; }}
-
-    .pill {{
-        display: inline-block;
-        padding: 3px 10px;
-        border-radius: 12px;
-        font-size: 0.75rem;
-        font-weight: 700;
-        margin: 2px 2px;
+    .priority-card {{
+        padding: 10px 14px; border-radius: 6px; margin: 4px 0;
+        background: white; border-left: 5px solid #ccc;
     }}
-    .pill.high {{ background: #fde8e8; color: #c62828; }}
-    .pill.med  {{ background: #fff3e0; color: #e65100; }}
-    .pill.low  {{ background: #e8f5e9; color: #2e7d32; }}
-    .pill.none {{ background: #eeeeee; color: #555; }}
-
-    .pri-card {{
-        padding: 10px 14px;
-        border-radius: 8px;
-        margin: 4px 0;
-        background: white;
-        border-left: 5px solid #ccc;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    .priority-card.high {{ border-left-color: #c62828; }}
+    .priority-card.med  {{ border-left-color: #e65100; }}
+    .priority-card.low  {{ border-left-color: #2e7d32; }}
+    .priority-card .label {{ font-size: 0.75rem; font-weight: 700; color: #444; }}
+    .priority-card .pval  {{ font-size: 1.1rem; font-weight: 800; }}
+    .priority-card.high .pval {{ color: #c62828; }}
+    .priority-card.med  .pval {{ color: #e65100; }}
+    .priority-card.low  .pval {{ color: #2e7d32; }}
+    .priority-card .sub {{ font-size: 0.75rem; color: #666; }}
+    .student-badge {{
+        background: {TEAL}; color: white;
+        padding: 6px 14px; border-radius: 20px;
+        font-weight: 700; display: inline-block; margin-bottom: 8px;
     }}
-    .pri-card.high {{ border-left-color: #c62828; background: #fff8f8; }}
-    .pri-card.med  {{ border-left-color: #e65100; background: #fffaf5; }}
-    .pri-card.low  {{ border-left-color: #2e7d32; background: #f6fff6; }}
-    .pri-card .plabel {{ font-size: 0.72rem; font-weight: 700; color: #555; }}
-    .pri-card .pval   {{ font-size: 1rem;   font-weight: 800; }}
-    .pri-card.high .pval {{ color: #c62828; }}
-    .pri-card.med  .pval {{ color: #e65100; }}
-    .pri-card.low  .pval {{ color: #2e7d32; }}
-    .pri-card .psub  {{ font-size: 0.7rem; color: #888; }}
-
-    .ov-meta {{
-        background: #e8f4f4;
-        border-radius: 6px;
-        padding: 8px 14px;
-        font-size: 0.82rem;
-        color: #2a5a5a;
-        margin-bottom: 10px;
-    }}
-
-    .arc-box {{
-        background: #fff8e1;
-        border: 1px solid {AMBER};
-        border-radius: 8px;
-        padding: 10px 14px;
-        font-size: 0.85rem;
-        color: #7a5800;
-        margin: 6px 0;
-    }}
-    .arc-done {{
-        background: #e8f5e9;
-        border: 1px solid #2e7d32;
-        border-radius: 8px;
-        padding: 8px 14px;
-        font-size: 0.85rem;
-        color: #1b5e20;
-        margin: 6px 0;
-    }}
-
+    div[data-testid="stCheckbox"] label {{ font-size: 0.9rem; }}
     .stTabs [data-baseweb="tab-list"] {{ gap: 4px; }}
     .stTabs [data-baseweb="tab"] {{
         background: #e0ecec; border-radius: 6px 6px 0 0;
         color: {TEAL}; font-weight: 600;
     }}
     .stTabs [aria-selected="true"] {{ background: {TEAL} !important; color: white !important; }}
-
-    .prog-badge {{
-        display: inline-block;
-        background: {TEAL};
-        color: white;
-        padding: 2px 9px;
-        border-radius: 10px;
-        font-size: 0.75rem;
-        font-weight: 700;
+    .new-student-box {{
+        background: #fff8e1; border: 2px dashed {AMBER};
+        border-radius: 8px; padding: 14px; margin-top: 8px;
     }}
-    .prog-badge.jp {{ background: #1565c0; }}
-    .prog-badge.py {{ background: #6a1b9a; }}
-    .prog-badge.sy {{ background: {TEAL};  }}
-    .prog-badge.arch {{ background: #757575; }}
+    /* ── Persistent section toggle ── */
+    .sec-header {{
+        display: flex; align-items: center; justify-content: space-between;
+        background: white; border: 1px solid #d0e0e0;
+        border-radius: 8px; padding: 10px 16px; margin: 6px 0;
+        cursor: pointer; user-select: none;
+    }}
+    .sec-header:hover {{ background: #f0f8f8; }}
+    .sec-left {{ display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 0.95rem; color: #1a1a1a; }}
+    .sec-right {{ display: flex; align-items: center; gap: 10px; }}
+    .sec-pill {{
+        padding: 3px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 700;
+    }}
+    .sec-pill.high {{ background: #fde8e8; color: #c62828; }}
+    .sec-pill.med  {{ background: #fff3e0; color: #e65100; }}
+    .sec-pill.low  {{ background: #e8f5e9; color: #2e7d32; }}
+    .sec-body {{
+        background: white; border: 1px solid #d0e0e0; border-top: none;
+        border-radius: 0 0 8px 8px; padding: 14px 16px; margin-top: -8px; margin-bottom: 6px;
+    }}
+    div[data-testid="stButton"] button[kind="secondary"] {{
+        background: transparent; border: none; padding: 0;
+        font-size: 0.9rem; color: #555; text-align: left; width: 100%;
+    }}
 </style>
 """, unsafe_allow_html=True)
 
-# ── Supabase (sensory_overviews lives in the default project) ─────────────────
+# ── Supabase ───────────────────────────────────────────────────────────────────
+def _cred(name):
+    """Read a credential from Streamlit secrets or the environment (Render)."""
+    import os
+    try:
+        if name in st.secrets:
+            return st.secrets[name]
+    except Exception:
+        pass
+    return os.environ.get(name)
+
+
 @st.cache_resource
 def get_supabase():
-    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+    # sensory_overviews lives in the students project (same as the register
+    # and archive). Credentials come from the environment, not the code.
+    url = _cred("SUPABASE_URL_STUDENTS")
+    key = _cred("SUPABASE_KEY_STUDENTS")
+    if not url or not key:
+        st.error("Missing SUPABASE_URL_STUDENTS / SUPABASE_KEY_STUDENTS — "
+                 "add them to the app's environment settings.")
+        st.stop()
+    return create_client(url, key)
 
 supabase = get_supabase()
 
-# ── Constants ──────────────────────────────────────────────────────────────────
-SECTION_ICONS = {
-    "Body Awareness (Interoception)": "🫀",
-    "Visual":                         "👁️",
-    "Sense of Body in Space":         "🗺️",
-    "Auditory":                       "👂",
-    "Auditory Processing":            "🔊",
-    "Smell":                          "👃",
-    "Touch and Textures":             "🤚",
-    "Kinaesthetic":                   "🏃",
-}
 
-PROGRAM_LABELS = {"JP": "Junior Primary", "PY": "Primary Years", "SY": "Senior Years"}
+def resolve_initials(name):
+    """
+    Folder initials for a student. Register picks are already initials
+    (e.g. 'TS') and must be used as-is — running them through
+    initials_from_name would turn 'TS' into 'T' and file to the wrong folder.
+    """
+    raw = str(name or "").strip()
+    if not raw:
+        return None
+    up = raw.upper()
+    try:
+        reg_inis = {(r.get("initials") or "").strip().upper() for r in fetch_register(None)}
+    except Exception:
+        reg_inis = set()
+    if up in reg_inis or (" " not in raw and raw.isalpha() and raw == up and len(raw) <= 4):
+        return up
+    return initials_from_name(raw)
+
+# ── Section definitions ────────────────────────────────────────────────────────
+SECTIONS = {
+    "Body Awareness (Interoception)": {
+        "icon": "🫀",
+        "items": [
+            "Able to name own emotions",
+            "Able to recognise own emotions",
+            "Knows when thirsty",
+            "Knows when hungry",
+            "Knows when they need to go to the toilet",
+            "Able to say where hurts (accurately) when injured",
+            "Knows when they feel unwell",
+            "Knows when getting upset",
+            "Gets distressed easily or frequently",
+            "Knows when becoming anxious",
+            "Gets anxious easily or frequently",
+            "Knows when getting frustrated",
+            "Knows when becoming angry",
+            "Gets frustrated/angry easily",
+            "Seems to react to the emotions of others/places",
+        ],
+    },
+    "Visual": {
+        "icon": "👁️",
+        "items": [
+            "Does not recognise familiar people in unfamiliar clothes or contexts",
+            "Dislikes bright lights",
+            "Dislikes fluorescent lights",
+            "Avoids bright light",
+            "Attracted to lights",
+            "Attracted to shiny objects and bright colours",
+            "Attracted to patterns and visual textures",
+            "Attracted to darkness",
+        ],
+    },
+    "Sense of Body in Space": {
+        "icon": "🗺️",
+        "items": [
+            "Does not seem to know where body is in space",
+            "Gets lost in familiar places/routes",
+            "Remembers familiar places and routes",
+            "Avoids escalators/travellators",
+            "Dislikes crowds or being close to others",
+            "Difficulties catching a ball",
+            "Difficulties kicking a ball",
+            "Appears to not see certain colours",
+            "Walks into doors/people/objects",
+            "Prefers to sit at the front of a group",
+            "Prefers to sit at back of group",
+        ],
+    },
+    "Auditory": {
+        "icon": "👂",
+        "items": [
+            "Aversion to certain sounds",
+            "Seeks or creates certain sounds",
+            "Can hear sounds which others do not hear",
+            "Bangs objects and doors",
+            "Mumbles/talks/makes vocalisations to self constantly",
+            "Changes vocalisations in reaction to environmental noises",
+            "Changes vocalisations in reaction to emotional state",
+        ],
+    },
+    "Auditory Processing": {
+        "icon": "🔊",
+        "items": [
+            "Only seems to hear the first words of a sentence",
+            "Can follow complex or multi-step instructions",
+            "Can follow simple one step instructions",
+            "Finds it easier to listen when not looking at person",
+            "Echolalic (repeats phrases)",
+        ],
+    },
+    "Smell": {
+        "icon": "👃",
+        "items": [
+            "Avoids/dislikes certain everyday smells",
+            "Attracted to certain smells",
+        ],
+    },
+    "Touch and Textures": {
+        "icon": "🤚",
+        "items": [
+            "Does not like shaking hands or being hugged",
+            "Seeks/uses light touch",
+            "Seeks/uses firm touch/deep pressure (incl. hitting)",
+            "Aversion to certain fabrics/textures",
+            "Attracted to certain fabrics/textures",
+            "Very sensitive to pain and temperature",
+            "Does not indicate sensitivity to pain or temperature",
+            "Attracted to mouthing/chewing certain textures/things",
+            "Avoids particular textures of food & drink",
+            "Avoids particular colours/smells of food & drink",
+            "Preference for food to not touch other food on plate",
+        ],
+    },
+    "Kinaesthetic": {
+        "icon": "🏃",
+        "items": [
+            "Tries to avoid using fine motor skills",
+            "Enjoys using fine motor skills",
+            "Difficulties with fine motor skills",
+            "Tries to avoid running and/or climbing",
+            "Enjoys running and/or climbing",
+            "Difficulty running and/or climbing",
+            "Tries to avoid riding a bike",
+            "Enjoys riding a bike",
+            "Poor balance",
+            "Has extremely good balance",
+            "Enjoys/seeks out swings",
+            "Enjoys/seeks out trampolines",
+            "Enjoys/seeks out slides",
+            "Flaps hands when happy",
+            "Flaps hands when anxious",
+        ],
+    },
+}
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 def priority_info(pct):
     if pct >= 60:
-        return "HIGH PRIORITY",   "high", "🔴"
+        return "HIGH PRIORITY", "high", "🔴"
     elif pct >= 30:
-        return "MEDIUM PRIORITY", "med",  "🟡"
-    return "LOW PRIORITY",        "low",  "🟢"
+        return "MEDIUM PRIORITY", "med", "🟡"
+    return "LOW PRIORITY", "low", "🟢"
 
+def calc_priorities(responses):
+    results = {}
+    for sec, meta in SECTIONS.items():
+        items = meta["items"]
+        sec_resp = responses.get(sec, {})
+        checked = sum(1 for it in items if sec_resp.get(it, False))
+        pct = round((checked / len(items)) * 100, 1) if items else 0
+        label, css, emoji = priority_info(pct)
+        results[sec] = {"priority": label, "css": css, "emoji": emoji,
+                        "checked": checked, "total": len(items), "pct": pct}
+    return results
 
-def pri_card(section_name, info, icon=""):
+def priority_card(section_name, info, icon=""):
     return f"""
-    <div class="pri-card {info['css']}">
-        <div class="plabel">{icon} {section_name}</div>
+    <div class="priority-card {info['css']}">
+        <div class="label">{icon} {section_name}</div>
         <div class="pval">{info['emoji']} {info['priority']}</div>
-        <div class="psub">{info['checked']}/{info['total']} ({info['pct']}%)</div>
+        <div class="sub">{info['checked']} / {info['total']} items ({info['pct']}%)</div>
     </div>"""
 
-
-def prog_badge(program, archived=False):
-    if archived:
-        return '<span class="prog-badge arch">Archived</span>'
-    css = program.lower() if program in ("JP", "PY", "SY") else ""
-    return f'<span class="prog-badge {css}">{program or "—"}</span>'
-
-
-def student_label(reg):
-    """Initials · Program · Yr — the standard display used across the portal."""
-    bits = [reg["initials"]]
-    if reg.get("program"):
-        bits.append(reg["program"])
-    if reg.get("year_level") is not None and str(reg.get("year_level")).strip() != "":
-        bits.append(f"Yr {reg['year_level']}")
-    return " · ".join(bits)
-
-
-def go_to_sensory_overview(initials=None):
-    """Jump to the Sensory Overview page inside the portal, passing the student."""
-    if initials:
-        st.session_state["sensory_prefill_initials"] = initials
-    st.switch_page(SENSORY_OVERVIEW_PAGE)
-
-
-# ── Data loaders ───────────────────────────────────────────────────────────────
 def load_all_overviews():
     try:
         res = supabase.table("sensory_overviews") \
-            .select("id,student_id,student_name,overview_date,review_date,completed_by,priority_results,responses") \
-            .order("overview_date", desc=True).execute()
+            .select("*") \
+            .order("created_at", desc=True).execute()
         return res.data or []
     except Exception as e:
         st.error(f"Could not load overviews: {e}")
         return []
 
-
-@st.cache_data(ttl=60, show_spinner=False)
-def load_register():
-    """All register students (active + archived). Returns (rows, error)."""
-    if not ARCHIVE_OK:
-        return [], ARCHIVE_ERR
-    try:
-        rows = fetch_register(None) or []
-        clean = []
-        for r in rows:
-            ini = (r.get("initials") or "").strip().upper()
-            if not ini:
-                continue
-            clean.append({**r, "initials": ini})
-        return clean, None
-    except Exception as e:  # noqa: BLE001
-        return [], str(e)
-
-
-def match_to_register(overview, register):
+def generate_hypothesis(pr: dict) -> str:
     """
-    Link an overview to a register student. Tries, in order:
-    register id, exact full name, exact initials, then derived initials
-    (only when that is unambiguous).
+    Generate a functional hypothesis paragraph from priority results.
+    Maps high/medium sensory areas to likely functional implications.
     """
-    sid  = str(overview.get("student_id") or "").strip()
-    name = str(overview.get("student_name") or "").strip()
+    IMPLICATIONS = {
+        "Body Awareness (Interoception)": (
+            "difficulty recognising and regulating internal body signals, which may contribute to "
+            "emotional dysregulation, delayed awareness of distress, and challenges in self-monitoring "
+            "behaviour and physiological states"
+        ),
+        "Visual": (
+            "heightened or reduced sensitivity to visual stimuli, which may affect attention, "
+            "comfort in bright or busy environments, and ability to process visual information "
+            "in classroom settings"
+        ),
+        "Sense of Body in Space": (
+            "reduced proprioceptive or vestibular awareness, which may impact spatial orientation, "
+            "gross motor coordination, and comfort in group or crowded environments"
+        ),
+        "Auditory": (
+            "atypical auditory sensitivity, which may cause distress in noisy environments, "
+            "difficulty filtering background noise, and use of self-generated sound as a "
+            "regulatory strategy"
+        ),
+        "Auditory Processing": (
+            "challenges processing verbal instructions, which may affect the ability to follow "
+            "multi-step directions, retain spoken information, and engage in verbal learning tasks"
+        ),
+        "Smell": (
+            "sensitivity to olfactory input, which may result in avoidance of certain environments, "
+            "foods, or social situations due to smell-related discomfort"
+        ),
+        "Touch and Textures": (
+            "tactile sensitivity or seeking behaviour, which may influence responses to physical "
+            "contact, food textures, clothing, and the use of touch as a self-regulatory strategy"
+        ),
+        "Kinaesthetic": (
+            "differences in movement processing and motor planning, which may affect participation "
+            "in physical activities, use of movement as regulation, and fine motor task engagement"
+        ),
+    }
 
-    if sid:
-        for r in register:
-            if str(r.get("id")) == sid:
-                return r
-    if name:
-        lname = name.lower()
-        for r in register:
-            if (r.get("full_name") or "").strip().lower() == lname:
-                return r
-        for r in register:
-            if r["initials"] == name.upper():
-                return r
-        derived = initials_from_name(name)
-        if derived:
-            hits = [r for r in register if r["initials"] == derived.upper()]
-            active_hits = [r for r in hits if r.get("status") == "active"]
-            if len(active_hits) == 1:
-                return active_hits[0]
-            if len(hits) == 1:
-                return hits[0]
-    return None
+    STRATEGIES = {
+        "Body Awareness (Interoception)": [
+            "explicit interoception teaching (e.g. Zones of Regulation, body scan activities)",
+            "regular check-in routines using visual emotion scales",
+            "co-regulation support to build awareness of physiological cues",
+        ],
+        "Visual": [
+            "reducing visual clutter in the learning environment",
+            "offering tinted overlays, sunglasses, or alternative lighting options",
+            "providing advance notice before entering visually stimulating spaces",
+        ],
+        "Sense of Body in Space": [
+            "regular proprioceptive input (e.g. heavy work, wall push-ups, weighted items)",
+            "clear spatial boundaries using visual markers or designated seating",
+            "structured movement breaks throughout the day",
+        ],
+        "Auditory": [
+            "use of noise-cancelling headphones or ear defenders in loud environments",
+            "pre-warning before transitions to noisy settings",
+            "providing a quiet withdrawal space for regulation",
+        ],
+        "Auditory Processing": [
+            "breaking instructions into single steps with visual supports",
+            "allowing processing time before expecting a response",
+            "using written or visual instructions alongside verbal communication",
+        ],
+        "Smell": [
+            "identifying and minimising exposure to trigger smells where possible",
+            "offering scent-neutral toiletries and food options",
+            "providing advance warning before entering areas with strong smells",
+        ],
+        "Touch and Textures": [
+            "offering deep pressure input (e.g. weighted lap pad, compression clothing)",
+            "providing advance warning before physical contact",
+            "allowing flexibility around uniform, food textures, and tactile materials",
+        ],
+        "Kinaesthetic": [
+            "embedding regular movement breaks and sensory circuits",
+            "offering alternative seating (e.g. wobble cushion, standing desk)",
+            "using movement-based learning activities where possible",
+        ],
+    }
+
+    high = [(s, i) for s, i in pr.items() if i.get("priority") == "HIGH PRIORITY"]
+    med  = [(s, i) for s, i in pr.items() if i.get("priority") == "MEDIUM PRIORITY"]
+
+    if not high and not med:
+        return ("Based on the completed overview, no sensory areas were identified as high or "
+                "medium priority at this time. Continued monitoring is recommended.")
+
+    # Build hypothesis
+    priority_areas = [s for s, _ in high] + [s for s, _ in med]
+    implications   = [IMPLICATIONS[s] for s in priority_areas if s in IMPLICATIONS]
+
+    if len(implications) == 1:
+        impl_text = implications[0]
+    elif len(implications) == 2:
+        impl_text = f"{implications[0]}, and {implications[1]}"
+    else:
+        impl_text = "; ".join(implications[:-1]) + f"; and {implications[-1]}"
+
+    area_names = []
+    for s, _ in high:
+        area_names.append(f"{s} (HIGH)")
+    for s, _ in med:
+        area_names.append(f"{s} (MEDIUM)")
+
+    hypothesis = (
+        f"Based on the completed sensory overview, {', '.join(area_names[:3])}"
+        f"{'and other areas ' if len(area_names) > 3 else ''}"
+        f" {'were' if len(area_names) > 1 else 'was'} identified as priority areas. "
+        f"From what has been observed, it is suggested that this student may experience {impl_text}. "
+        f"These observed sensory differences may be contributing to behaviours including "
+        f"emotional dysregulation, avoidance, sensory-seeking, or difficulty sustaining "
+        f"engagement in the learning environment. This is based on staff observation only "
+        f"and does not constitute a clinical assessment."
+    )
+
+    # Strategies
+    all_strategies = []
+    for s in priority_areas[:4]:
+        if s in STRATEGIES:
+            all_strategies.extend(STRATEGIES[s][:2])
+
+    return hypothesis, all_strategies[:6]
 
 
-def build_student_list(all_overviews, register):
-    """
-    Group overviews by register student. Overviews that can't be matched are
-    grouped by their typed name and flagged as 'not on register'.
-    """
-    groups = {}
-    for ov in all_overviews:
-        reg = match_to_register(ov, register)
-        if reg:
-            key = f"reg::{reg['initials']}::{reg.get('id')}"
-            if key not in groups:
-                groups[key] = {
-                    "key": key,
-                    "register": reg,
-                    "initials": reg["initials"],
-                    "label": student_label(reg),
-                    "program": reg.get("program") or "",
-                    "status": "archived" if reg.get("status") == "archived" else "active",
-                    "overviews": [],
-                }
-        else:
-            raw = (ov.get("student_name") or "Unknown").strip()
-            key = f"raw::{raw.lower()}"
-            if key not in groups:
-                groups[key] = {
-                    "key": key,
-                    "register": None,
-                    "initials": None,
-                    "label": raw,
-                    "program": "",
-                    "status": "unlinked",
-                    "overviews": [],
-                }
-        groups[key]["overviews"].append(ov)
-
-    result = []
-    for g in groups.values():
-        g["overviews"].sort(key=lambda o: o.get("overview_date") or "", reverse=True)
-        g["latest_overview"] = g["overviews"][0]
-        result.append(g)
-    return sorted(result, key=lambda x: x["label"])
-
-
-def parse_priorities(raw):
-    if not raw:
-        return {}
-    try:
-        if isinstance(raw, str):
-            raw = json.loads(raw)
-        out = {}
-        for sec, info in raw.items():
-            _, css, emoji = priority_info(info.get("pct", 0))
-            out[sec] = {**info, "css": css, "emoji": emoji}
-        return out
-    except Exception:
-        return {}
-
-
-def parse_responses(raw):
-    if not raw:
-        return {}
-    try:
-        if isinstance(raw, str):
-            return json.loads(raw)
-        return raw
-    except Exception:
-        return {}
-
-
-def review_status(review_date_str):
-    if not review_date_str:
-        return "No review date set", "#888"
-    try:
-        rv = date.fromisoformat(review_date_str)
-        delta = (rv - date.today()).days
-        if delta < 0:
-            return f"⚠️ Review overdue ({abs(delta)} days)", "#c62828"
-        elif delta <= 14:
-            return f"🟡 Review due soon ({delta} days)", "#e65100"
-        else:
-            return f"🟢 Review due {rv.strftime('%d %b %Y')}", "#2e7d32"
-    except Exception:
-        return review_date_str, "#555"
-
-
-# ── Word report for archiving ─────────────────────────────────────────────────
-def build_overview_docx(overview, initials, label):
-    """Builds a Word copy of one saved overview (initials only — no full name)."""
+def generate_word_report(rec: dict) -> bytes:
+    """Generate a clean, editable Word document sensory overview report."""
     from docx import Document
-    from docx.shared import Pt, RGBColor
+    from docx.shared import Pt, RGBColor, Cm, Inches
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.enum.table import WD_ALIGN_VERTICAL
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+    from io import BytesIO
+
+    sname    = rec.get("student_name", "Unknown")
+    ov_date  = rec.get("overview_date", "—")
+    rev_date = rec.get("review_date",   "—")
+    by       = rec.get("completed_by",  "—")
+
+    try:
+        pr = rec.get("priority_results") or {}
+        if isinstance(pr, str):
+            pr = json.loads(pr)
+    except Exception:
+        pr = {}
+
+    try:
+        resp = rec.get("responses") or {}
+        if isinstance(resp, str):
+            resp = json.loads(resp)
+    except Exception:
+        resp = {}
+
+    hyp_result = generate_hypothesis(pr)
+    if isinstance(hyp_result, tuple):
+        hyp_text, strategies = hyp_result
+    else:
+        hyp_text, strategies = hyp_result, []
+
+    # Colours
+    TEAL_RGB  = RGBColor(0x1A, 0x7A, 0x7A)
+    AMBER_RGB = RGBColor(0xC8, 0x76, 0x0A)
+    HIGH_RGB  = RGBColor(0xC6, 0x28, 0x28)
+    MED_RGB   = RGBColor(0xE6, 0x51, 0x00)
+    LOW_RGB   = RGBColor(0x2E, 0x7D, 0x32)
+    WHITE     = RGBColor(0xFF, 0xFF, 0xFF)
+
+    def hex_to_rgb_str(r, g, b):
+        return f"{r:02X}{g:02X}{b:02X}"
+
+    TEAL_HEX  = "1A7A7A"
+    AMBER_HEX = "C8760A"
+    HIGH_HEX  = "C62828"
+    MED_HEX   = "E65100"
+    LOW_HEX   = "2E7D32"
+    HIGH_BG   = "FFF8F8"
+    MED_BG    = "FFFAF5"
+    LOW_BG    = "F6FFF6"
+
+    def set_cell_bg(cell, hex_colour):
+        tc   = cell._tc
+        tcPr = tc.get_or_add_tcPr()
+        shd  = OxmlElement("w:shd")
+        shd.set(qn("w:val"),   "clear")
+        shd.set(qn("w:color"), "auto")
+        shd.set(qn("w:fill"),  hex_colour)
+        tcPr.append(shd)
+
+    def set_cell_borders(cell, colour_hex="DDDDDD"):
+        tc   = cell._tc
+        tcPr = tc.get_or_add_tcPr()
+        tcBorders = OxmlElement("w:tcBorders")
+        for side in ["top","left","bottom","right"]:
+            el = OxmlElement(f"w:{side}")
+            el.set(qn("w:val"),   "single")
+            el.set(qn("w:sz"),    "4")
+            el.set(qn("w:color"), colour_hex)
+            tcBorders.append(el)
+        tcPr.append(tcBorders)
+
+    def add_heading(doc, text, colour_hex=TEAL_HEX, size=13):
+        p   = doc.add_paragraph()
+        run = p.add_run(text)
+        run.bold      = True
+        run.font.size = Pt(size)
+        run.font.color.rgb = RGBColor(
+            int(colour_hex[0:2],16),
+            int(colour_hex[2:4],16),
+            int(colour_hex[4:6],16),
+        )
+        p.paragraph_format.space_before = Pt(10)
+        p.paragraph_format.space_after  = Pt(2)
+        # Bottom border
+        pPr  = p._p.get_or_add_pPr()
+        pBdr = OxmlElement("w:pBdr")
+        bot  = OxmlElement("w:bottom")
+        bot.set(qn("w:val"),   "single")
+        bot.set(qn("w:sz"),    "6")
+        bot.set(qn("w:color"), colour_hex)
+        pBdr.append(bot)
+        pPr.append(pBdr)
+        return p
+
+    def pri_colours(pct):
+        if pct >= 60:   return "HIGH PRIORITY 🔴",   HIGH_HEX, HIGH_BG
+        elif pct >= 30: return "MEDIUM PRIORITY 🟡", MED_HEX,  MED_BG
+        return "LOW PRIORITY 🟢",    LOW_HEX,  LOW_BG
 
     doc = Document()
-    style = doc.styles["Normal"]
-    style.font.name = "Arial"
-    style.font.size = Pt(10.5)
 
-    h = doc.add_heading("Sensory Overview", level=0)
-    for run in h.runs:
-        run.font.color.rgb = RGBColor(0x1A, 0x7A, 0x7A)
+    # ── Page margins ───────────────────────────────────────────────────────────
+    for section in doc.sections:
+        section.top_margin    = Cm(1.8)
+        section.bottom_margin = Cm(1.8)
+        section.left_margin   = Cm(2.0)
+        section.right_margin  = Cm(2.0)
 
-    meta = doc.add_table(rows=0, cols=2)
-    meta.style = "Light Grid Accent 1"
-    for k, v in [
-        ("Student", label or initials),
-        ("Overview date", overview.get("overview_date") or "—"),
-        ("Review date", overview.get("review_date") or "—"),
-        ("Completed by", overview.get("completed_by") or "—"),
-    ]:
-        cells = meta.add_row().cells
-        cells[0].text = k
-        cells[1].text = str(v)
+    # ── Header banner ──────────────────────────────────────────────────────────
+    banner = doc.add_table(rows=1, cols=1)
+    banner.style = "Table Grid"
+    cell = banner.cell(0, 0)
+    set_cell_bg(cell, TEAL_HEX)
+    cell.paragraphs[0].clear()
+    r1 = cell.paragraphs[0].add_run("🧠  Sensory Overview Report")
+    r1.bold = True
+    r1.font.size  = Pt(16)
+    r1.font.color.rgb = WHITE
+    cell.paragraphs[0].paragraph_format.space_before = Pt(6)
+    cell.paragraphs[0].paragraph_format.space_after  = Pt(2)
 
-    pr = parse_priorities(overview.get("priority_results"))
-    doc.add_heading("Priority summary", level=1)
-    if pr:
-        order = {"HIGH PRIORITY": 0, "MEDIUM PRIORITY": 1, "LOW PRIORITY": 2}
-        t = doc.add_table(rows=1, cols=3)
-        t.style = "Light Grid Accent 1"
-        hdr = t.rows[0].cells
-        hdr[0].text, hdr[1].text, hdr[2].text = "Area", "Priority", "Items checked"
-        for sec, info in sorted(pr.items(), key=lambda kv: order.get(kv[1].get("priority"), 9)):
-            c = t.add_row().cells
-            c[0].text = sec
-            c[1].text = (info.get("priority") or "").title()
-            c[2].text = f"{info.get('checked', 0)}/{info.get('total', 0)} ({info.get('pct', 0)}%)"
-    else:
-        doc.add_paragraph("No priority data recorded.")
+    p2 = cell.add_paragraph()
+    p2.add_run(f"Cowandilla Learning Centre · Learning & Behaviour Unit")
+    p2.runs[0].font.size      = Pt(9)
+    p2.runs[0].font.color.rgb = WHITE
+    p2.paragraph_format.space_after = Pt(6)
 
-    responses = parse_responses(overview.get("responses"))
-    doc.add_heading("Checked items", level=1)
+    doc.add_paragraph()  # spacer
+
+    # ── Student details table ──────────────────────────────────────────────────
+    dtbl = doc.add_table(rows=2, cols=4)
+    dtbl.style = "Table Grid"
+    labels = ["Student", "Overview Date", "Review Date", "Completed by"]
+    values = [sname, ov_date, rev_date, by]
+    for i, (lbl, val) in enumerate(zip(labels, values)):
+        hcell = dtbl.rows[0].cells[i]
+        vcell = dtbl.rows[1].cells[i]
+        set_cell_bg(hcell, TEAL_HEX)
+        set_cell_bg(vcell, "E8F4F4")
+        hp = hcell.paragraphs[0]
+        hp.clear()
+        hr = hp.add_run(lbl)
+        hr.bold = True
+        hr.font.size      = Pt(8)
+        hr.font.color.rgb = WHITE
+        vp = vcell.paragraphs[0]
+        vp.clear()
+        vr = vp.add_run(val)
+        vr.font.size = Pt(9)
+
+    doc.add_paragraph()
+
+    # ── Priority Summary ───────────────────────────────────────────────────────
+    add_heading(doc, "Priority Summary")
+
+    pr_items = list(pr.items())
+    # 4 columns
+    for i in range(0, len(pr_items), 4):
+        chunk = pr_items[i:i+4]
+        tbl   = doc.add_table(rows=3, cols=len(chunk))
+        tbl.style = "Table Grid"
+        for ci, (sec, info) in enumerate(chunk):
+            pct         = info.get("pct", 0)
+            lbl, col_hex, bg_hex = pri_colours(pct)
+            icon        = SECTIONS.get(sec, {}).get("icon", "")
+
+            # Row 0 — section name
+            c0 = tbl.rows[0].cells[ci]
+            set_cell_bg(c0, "F0F8F8")
+            p0 = c0.paragraphs[0]
+            p0.clear()
+            r0 = p0.add_run(f"{icon} {sec}")
+            r0.bold      = True
+            r0.font.size = Pt(8)
+
+            # Row 1 — priority label
+            c1 = tbl.rows[1].cells[ci]
+            set_cell_bg(c1, bg_hex)
+            p1 = c1.paragraphs[0]
+            p1.clear()
+            r1 = p1.add_run(lbl)
+            r1.bold = True
+            r1.font.size = Pt(9)
+            r1.font.color.rgb = RGBColor(
+                int(col_hex[0:2],16), int(col_hex[2:4],16), int(col_hex[4:6],16)
+            )
+
+            # Row 2 — count
+            c2 = tbl.rows[2].cells[ci]
+            set_cell_bg(c2, bg_hex)
+            p2 = c2.paragraphs[0]
+            p2.clear()
+            r2 = p2.add_run(f"{info.get('checked',0)}/{info.get('total',0)} items ({pct}%)")
+            r2.font.size = Pt(7.5)
+            r2.font.color.rgb = RGBColor(0x88, 0x88, 0x88)
+
+        doc.add_paragraph()
+
+    # ── Hypothesis ─────────────────────────────────────────────────────────────
+    add_heading(doc, "Hypothesis from Observed Sensory Profile", AMBER_HEX)
+    p = doc.add_paragraph(hyp_text)
+    p.paragraph_format.space_after = Pt(6)
+    p.runs[0].font.size = Pt(10)
+
+    if strategies:
+        add_heading(doc, "Suggested Supports to Explore", TEAL_HEX, size=11)
+        for strat in strategies:
+            bp = doc.add_paragraph(style="List Bullet")
+            bp.add_run(strat.capitalize()).font.size = Pt(10)
+
+    # ── Page break ─────────────────────────────────────────────────────────────
+    doc.add_page_break()
+
+    # ── Page 2 header ──────────────────────────────────────────────────────────
+    p2h = doc.add_paragraph()
+    r   = p2h.add_run(f"Sensory Overview — {sname}  ·  Checked Items Detail")
+    r.bold            = True
+    r.font.size       = Pt(13)
+    r.font.color.rgb  = TEAL_RGB
+    p2h.paragraph_format.space_after = Pt(6)
+
+    # ── Checked items ──────────────────────────────────────────────────────────
     any_checked = False
-    for sec_name, items_dict in (responses or {}).items():
+    for sec_name, items_dict in resp.items():
         checked = [it for it, val in items_dict.items() if val]
         if not checked:
             continue
         any_checked = True
-        doc.add_heading(sec_name, level=2)
-        for it in checked:
-            doc.add_paragraph(it, style="List Bullet")
-    if not any_checked:
-        doc.add_paragraph("No items were checked in this overview.")
+        icon    = SECTIONS.get(sec_name, {}).get("icon", "")
+        pct     = round(len(checked) / max(len(items_dict), 1) * 100, 1)
+        lbl, col_hex, bg_hex = pri_colours(pct)
 
-    buf = io.BytesIO()
+        # Section header row
+        shdr = doc.add_table(rows=1, cols=1)
+        shdr.style = "Table Grid"
+        sc = shdr.cell(0, 0)
+        set_cell_bg(sc, col_hex)
+        sp = sc.paragraphs[0]
+        sp.clear()
+        sr = sp.add_run(f"{icon}  {sec_name}  ·  {lbl}  ({len(checked)}/{len(items_dict)} items)")
+        sr.bold           = True
+        sr.font.size      = Pt(9)
+        sr.font.color.rgb = WHITE
+
+        # Items in two columns
+        left_items  = checked[::2]
+        right_items = checked[1::2]
+        rows        = max(len(left_items), len(right_items))
+        itbl        = doc.add_table(rows=rows, cols=2)
+        itbl.style  = "Table Grid"
+        for ri in range(rows):
+            lc = itbl.rows[ri].cells[0]
+            rc = itbl.rows[ri].cells[1]
+            set_cell_bg(lc, bg_hex)
+            set_cell_bg(rc, bg_hex)
+            if ri < len(left_items):
+                lp = lc.paragraphs[0]
+                lp.clear()
+                lp.add_run(f"✅  {left_items[ri]}").font.size = Pt(9)
+            if ri < len(right_items):
+                rp = rc.paragraphs[0]
+                rp.clear()
+                rp.add_run(f"✅  {right_items[ri]}").font.size = Pt(9)
+
+        doc.add_paragraph()
+
+    if not any_checked:
+        doc.add_paragraph("No items were checked in this overview.").runs[0].font.size = Pt(10)
+
+    # ── Footer note ────────────────────────────────────────────────────────────
+    doc.add_paragraph()
+    fp = doc.add_paragraph(
+        f"Cowandilla Learning Centre · Learning & Behaviour Unit · "
+        f"Generated {date.today().strftime('%d %B %Y')} · "
+        f"Based on staff observation only — not a clinical assessment."
+    )
+    fp.runs[0].font.size      = Pt(7.5)
+    fp.runs[0].font.color.rgb = RGBColor(0xAA, 0xAA, 0xAA)
+    fp.paragraph_format.space_before = Pt(12)
+
+    buf = BytesIO()
     doc.save(buf)
     return buf.getvalue()
 
 
-def archive_title(initials, ov_date):
-    # Same title format the Sensory Overview tool uses, so both tools'
-    # copies are recognised as the same document.
-    return f"Sensory Overview — {initials} — {ov_date}"
+# ── Session state ──────────────────────────────────────────────────────────────
+if "responses" not in st.session_state:
+    st.session_state.responses = {sec: {it: False for it in m["items"]} for sec, m in SECTIONS.items()}
+if "saved_ok" not in st.session_state:
+    st.session_state.saved_ok = False
+if "section_open" not in st.session_state:
+    st.session_state.section_open = {sec: False for sec in SECTIONS}
+if "editing_mode" not in st.session_state:
+    st.session_state.editing_mode = False
+if "edit_record_id" not in st.session_state:
+    st.session_state.edit_record_id = None
 
+# ── Header ─────────────────────────────────────────────────────────────────────
+st.markdown("<h1>🧠 Sensory Overview</h1>", unsafe_allow_html=True)
 
-@st.cache_data(ttl=30, show_spinner=False)
-def archived_titles(initials):
-    if not ARCHIVE_OK or not initials:
-        return []
-    try:
-        rows = fetch_archive(student_initials=initials, doc_type=DOC_TYPE,
-                             include_confidential=True) or []
-        return [r.get("title") or "" for r in rows]
-    except Exception:  # noqa: BLE001
-        return []
+# Check for ?student_id= query param (deep-link from behaviour app)
+params = st.query_params
+deep_link_id   = params.get("student_id", None)
+deep_link_name = params.get("student_name", None)
 
+# Student passed from the Sensory Profiles page ("New Overview" /
+# "Start updated overview"). Used once, then cleared.
+_prefill = st.session_state.pop("sensory_prefill_initials", None)
+if _prefill:
+    st.session_state["sov_default_student"] = str(_prefill).strip().upper()
+    st.session_state.editing_mode = False
+    st.session_state.edit_record_id = None
+    st.session_state.saved_ok = False
+    st.session_state.pop("edit_student", None)
+    st.session_state.responses = {sec: {it: False for it in m["items"]} for sec, m in SECTIONS.items()}
+    st.toast(f"Starting a new overview for {st.session_state['sov_default_student']}")
+# Keep the chosen student as the default across reruns until saved/reset
+if st.session_state.get("sov_default_student"):
+    deep_link_name = st.session_state["sov_default_student"]
 
-def render_archive_control(student, overview):
-    """Save-to-archive block for one overview, with replace-vs-keep-both choice."""
-    ov_id   = overview.get("id")
-    ov_date = overview.get("overview_date") or "undated"
-    ini     = student["initials"]
+tab_new, tab_past = st.tabs(["📝  New Overview", "📋  Past Overviews"])
 
-    if not ARCHIVE_OK:
-        st.caption("🗄️ Archive unavailable — archive_utils could not be loaded.")
-        return
-    if not ini:
-        st.markdown(
-            '<div class="arc-box">📁 This overview isn\'t linked to a registered student, '
-            "so it can't be filed. Add the student in the <b>Student Register</b> "
-            "(or check the name matches), then it can be saved here.</div>",
-            unsafe_allow_html=True,
-        )
-        return
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 1 — NEW OVERVIEW
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_new:
 
-    title = archive_title(ini, ov_date)
-    existing = archived_titles(ini)
-    if title in existing:
-        st.markdown(f'<div class="arc-done">✅ This overview is in {ini}\'s archive folder.</div>',
-                    unsafe_allow_html=True)
-        return
+    if st.session_state.saved_ok:
+        st.success("✅ Overview saved successfully!")
 
-    st.markdown(f'<div class="arc-box">📁 <b>Not yet in {ini}\'s archive.</b> '
-                "Save a copy to their Document Archive folder?</div>",
-                unsafe_allow_html=True)
-
-    supersede = False
-    if existing:
-        mode = st.radio(
-            "A Sensory Overview is already in this student's folder:",
-            ["Replace previous version", "Keep both"],
-            horizontal=True, key=f"arcmode_{ov_id}",
-        )
-        supersede = (mode == "Replace previous version")
-
-    if st.button(f"🗄️ Save to {ini}'s archive", type="primary", key=f"arcsave_{ov_id}"):
-        try:
-            file_bytes = build_overview_docx(overview, ini, student["label"])
-            saved = archive_document(
-                source_tool="Sensory Profiles",
-                doc_type=DOC_TYPE,
-                title=title,
-                file_bytes=file_bytes,
-                filename=f"sensory_{ini}_{ov_date}.docx",
-                student_initials=ini,
-                created_by=st.session_state.get("user_email", "unknown"),
-                supersede=supersede,
-            )
-            if saved:
-                archived_titles.clear()
-                st.success("Saved to the Document Archive"
-                           + (" (previous version moved to restorable Deleted)." if supersede else "."))
-                st.rerun()
+        _rec = st.session_state.get("just_saved_overview")
+        if _rec:
+            _ini = resolve_initials(_rec.get("student_name", ""))
+            _filed = st.session_state.setdefault("_sov_filed", set())
+            _gkey = f"sov_{_ini}_{_rec.get('overview_date')}"
+            if _gkey in _filed:
+                st.info("🗄️ This overview has been saved to the student's archive.")
+            elif not _ini:
+                st.warning("📁 Not linked to a registered student, so it can't be filed to a "
+                           "folder. Pick a registered student next time to enable archiving.")
             else:
-                st.error("Could not save to the archive — nothing was filed.")
-        except Exception as e:  # noqa: BLE001
-            st.error(f"Could not save to the archive: {e}")
+                st.warning(f"📁 **Save this Sensory Overview to {_ini}'s archive?** "
+                           "It won't be filed until you confirm.")
+                _pv = fetch_archive(student_initials=_ini, doc_type="Sensory Overview",
+                                    include_confidential=True)
+                _sup = False
+                if _pv:
+                    _md = st.radio("A Sensory Overview is already in this student's folder:",
+                                   ["Replace previous version", "Keep both"],
+                                   horizontal=True, key=f"sovmode_{_gkey}")
+                    _sup = (_md == "Replace previous version")
+                pa, pb = st.columns(2)
+                with pa:
+                    if st.button(f"✅ Save to {_ini}'s archive", type="primary",
+                                 use_container_width=True, key=f"sovyes_{_gkey}"):
+                        try:
+                            _bytes = generate_word_report(_rec)
+                            _saved = archive_document(
+                                source_tool="Sensory Overview",
+                                doc_type="Sensory Overview",
+                                title=f"Sensory Overview — {_ini} — {_rec.get('overview_date')}",
+                                file_bytes=_bytes,
+                                filename=f"sensory_{_ini}_{_rec.get('overview_date')}.docx",
+                                student_initials=_ini,
+                                created_by=st.session_state.get("user_email", "unknown"),
+                                supersede=_sup,
+                            )
+                            if _saved:
+                                _filed.add(_gkey)
+                                st.success("Saved to the Document Archive.")
+                                st.rerun()
+                            else:
+                                st.error("Could not save to the archive.")
+                        except Exception as _ae:
+                            st.error(f"Could not save to the archive: {_ae}")
+                with pb:
+                    if st.button("Not yet", use_container_width=True, key=f"sovno_{_gkey}"):
+                        st.caption("Not filed — you'll be asked again next time.")
 
+        if st.button("Start another overview"):
+            st.session_state.responses = {sec: {it: False for it in m["items"]} for sec, m in SECTIONS.items()}
+            st.session_state.saved_ok        = False
+            st.session_state.editing_mode    = False
+            st.session_state.edit_record_id  = None
+            st.session_state.pop("just_saved_overview", None)
+            st.rerun()
 
-# ── Page header ────────────────────────────────────────────────────────────────
-st.markdown("<h1>🧠 Sensory Profiles</h1>", unsafe_allow_html=True)
-st.caption("View sensory overviews for registered students and file them to the Document Archive.")
+    # Editing mode banner
+    if st.session_state.editing_mode:
+        st.info(f"✏️ **Editing overview** for **{st.session_state.get('edit_student','')}** "
+                f"· Originally completed {st.session_state.get('edit_ov_date','—')} "
+                f"by {st.session_state.get('edit_by','—')}. "
+                f"Make changes and save to update.")
+        if st.button("✖ Cancel edit — start fresh instead"):
+            st.session_state.responses       = {sec: {it: False for it in m["items"]} for sec, m in SECTIONS.items()}
+            st.session_state.editing_mode    = False
+            st.session_state.edit_record_id  = None
+            st.rerun()
 
-register, reg_err = load_register()
-if reg_err:
-    st.warning(f"Student Register couldn't be loaded, so students are shown by typed name only. ({reg_err})")
+    # ── Student details ────────────────────────────────────────────────────────
+    with st.container(border=True):
+        st.markdown("#### 👤 Student")
 
-all_overviews = load_all_overviews()
+        sc1, sc2, sc3 = st.columns(3)
+        with sc1:
+            try:
+                _reg = fetch_register("active")
+            except Exception:
+                _reg = []
+            _reg_opts = sorted({(r.get("initials") or "").strip().upper() for r in _reg
+                                if r.get("initials")})
+            _reg_prog = {(r.get("initials") or "").strip().upper(): (r.get("program") or "")
+                         for r in _reg}
+            _OTHER = "Other / not on register"
+            _edit_name = st.session_state.get("edit_student", deep_link_name or "")
+            _picklist = _reg_opts + [_OTHER]
+            _pick = st.selectbox(
+                "Registered student *", _picklist,
+                index=(_picklist.index(_edit_name) if _edit_name in _reg_opts else 0),
+                help="Students are added in the Student Register. Pick one to tie this "
+                     "overview to their record and file it to their folder.")
+            if _pick != _OTHER:
+                student_name = _pick
+                _picked_prog = _reg_prog.get(_pick, "")
+                if not _reg_opts:
+                    st.info("No active students on the register — use 'Other' to proceed.")
+            else:
+                student_name = st.text_input(
+                    "Student name *",
+                    value=_edit_name if _edit_name not in _reg_opts else "",
+                    placeholder="Full name (not on register)")
+                _picked_prog = ""
+                st.caption("⚠️ Not on the register — register the student so this files to "
+                           "the right folder.")
+        with sc2:
+            _progs = ["— Select —", "JP", "PY", "SY"]
+            program = st.selectbox(
+                "Program *", _progs,
+                index=(_progs.index(_picked_prog) if _picked_prog in _progs else 0))
+        with sc3:
+            completed_by = st.text_input(
+                "Completed by *",
+                value=st.session_state.get("edit_by", "") if st.session_state.editing_mode else "",
+                placeholder="Staff name",
+            )
 
-if not all_overviews:
-    st.info("No overviews have been saved yet. Complete a Sensory Overview first.")
-    if st.button("➕ Go to Sensory Overview"):
-        go_to_sensory_overview()
-    st.stop()
+        selected_student_id = deep_link_id
 
-students = build_student_list(all_overviews, register)
+        oc1, oc2 = st.columns(2)
+        with oc1:
+            overview_date = st.date_input("Overview Date", value=date.today())
+        with oc2:
+            review_date = st.date_input("Review Date")
 
-# ── Top controls ───────────────────────────────────────────────────────────────
-c1, c2, c3, c4 = st.columns([1.3, 1.1, 1.5, 2])
-with c1:
-    status_filter = st.selectbox(
-        "Students",
-        ["Current", "Archived", "Not on register", "All"],
-    )
-with c2:
-    program_filter = st.selectbox("Program", ["All", "JP", "PY", "SY"])
-with c3:
-    overview_filter = st.selectbox(
-        "Review status",
-        ["Any", "Review overdue", "Review due soon"],
-    )
-with c4:
-    search = st.text_input("Search initials", placeholder="Type to filter…")
+    # ── Existing overviews for this student (by name match) ────────────────────
+    if student_name.strip():
+        try:
+            existing = supabase.table("sensory_overviews") \
+                .select("overview_date,completed_by,priority_results") \
+                .ilike("student_name", student_name.strip()) \
+                .order("overview_date", desc=True).limit(1).execute()
+            if existing.data:
+                prev = existing.data[0]
+                with st.expander(
+                    f"ℹ️ Previous overview exists — {prev['overview_date']} (by {prev['completed_by']})",
+                    expanded=False,
+                ):
+                    try:
+                        pr = prev["priority_results"]
+                        if isinstance(pr, str):
+                            pr = json.loads(pr)
+                        cols = st.columns(4)
+                        for idx, (sec, info) in enumerate(pr.items()):
+                            icon = SECTIONS.get(sec, {}).get("icon", "")
+                            _, css, emoji = priority_info(info.get("pct", 0))
+                            info["css"] = css
+                            info["emoji"] = emoji
+                            with cols[idx % 4]:
+                                st.markdown(priority_card(sec, info, icon), unsafe_allow_html=True)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
-if status_filter == "Current":
-    students = [s for s in students if s["status"] == "active"]
-elif status_filter == "Archived":
-    students = [s for s in students if s["status"] == "archived"]
-elif status_filter == "Not on register":
-    students = [s for s in students if s["status"] == "unlinked"]
+    st.markdown("---")
 
-if program_filter != "All":
-    students = [s for s in students if s["program"] == program_filter]
+    # ── Checklist sections ─────────────────────────────────────────────────────
+    st.markdown("#### Checklist — tick all items that apply")
 
-if search:
-    q = search.strip().lower()
-    students = [s for s in students if q in s["label"].lower()]
+    # Expand / collapse all controls
+    ctrl1, ctrl2 = st.columns([1, 1])
+    with ctrl1:
+        if st.button("⬇️  Expand all sections", use_container_width=True):
+            for sec in SECTIONS:
+                st.session_state.section_open[sec] = True
+            st.rerun()
+    with ctrl2:
+        if st.button("⬆️  Collapse all sections", use_container_width=True):
+            for sec in SECTIONS:
+                st.session_state.section_open[sec] = False
+            st.rerun()
 
+    for sec_name, meta in SECTIONS.items():
+        icon  = meta["icon"]
+        items = meta["items"]
+        sec_resp      = st.session_state.responses.get(sec_name, {})
+        checked_count = sum(1 for it in items if sec_resp.get(it, False))
+        pct           = round((checked_count / len(items)) * 100) if items else 0
+        _, css, emoji = priority_info(pct)
+        is_open       = st.session_state.section_open.get(sec_name, False)
+        chevron       = "🔽" if is_open else "▶️"
 
-def _review_delta(s):
-    rv = s["latest_overview"].get("review_date")
-    if not rv:
-        return None
-    try:
-        return (date.fromisoformat(rv) - date.today()).days
-    except Exception:
-        return None
-
-
-if overview_filter == "Review overdue":
-    students = [s for s in students if (d := _review_delta(s)) is not None and d < 0]
-elif overview_filter == "Review due soon":
-    students = [s for s in students if (d := _review_delta(s)) is not None and 0 <= d <= 14]
-
-unlinked_total = sum(1 for s in build_student_list(all_overviews, register) if s["status"] == "unlinked")
-if unlinked_total and status_filter != "Not on register":
-    st.caption(f"🗂️ {unlinked_total} student name{'s' if unlinked_total != 1 else ''} on saved overviews "
-               "don't match the Student Register — choose **Not on register** to review them.")
-
-st.markdown(f"**{len(students)} student{'s' if len(students) != 1 else ''}** matching filters")
-st.markdown("---")
-
-if not students:
-    st.info("No students match the current filters.")
-    st.stop()
-
-# ── Student list ───────────────────────────────────────────────────────────────
-for student in students:
-    label    = student["label"]
-    ini      = student["initials"]
-    overview = student["latest_overview"]
-    all_ovs  = student["overviews"]
-
-    pills_html = ""
-    pr = parse_priorities(overview.get("priority_results"))
-    for sec, info in pr.items():
-        icon = SECTION_ICONS.get(sec, "")
-        pills_html += f'<span class="pill {info["css"]}">{icon} {sec.split("(")[0].strip()}</span> '
-
-    has_high = any(i.get("priority") == "HIGH PRIORITY" for i in pr.values())
-    ov_date  = overview.get("overview_date", "—")
-    by       = overview.get("completed_by", "—")
-    tag = "📦 " if student["status"] == "archived" else ("🗂️ " if student["status"] == "unlinked" else "")
-
-    with st.expander(
-        f"{'🔴 ' if has_high else ''}{tag}{label}  ·  Last overview: {ov_date}  ·  {by}",
-        expanded=False,
-    ):
-        mc1, mc2 = st.columns([3, 1])
-        with mc1:
-            badge = prog_badge(student["program"], archived=(student["status"] == "archived"))
-            sub = ("Not on Student Register" if student["status"] == "unlinked"
-                   else PROGRAM_LABELS.get(student["program"], ""))
+        # Header row — clicking the button toggles open/closed
+        hdr_col, btn_col = st.columns([8, 1])
+        with hdr_col:
             st.markdown(
-                f'<div class="student-card">'
-                f'<div class="sname">{label} &nbsp;{badge}</div>'
-                f'<div class="smeta">{sub}</div>'
-                f'<div style="margin-top:6px;">{pills_html}</div>'
-                f'</div>',
+                f"""<div class="sec-header">
+                    <div class="sec-left">{icon} <span>{sec_name}</span></div>
+                    <div class="sec-right">
+                        <span class="sec-pill {css}">{emoji} {checked_count}/{len(items)}</span>
+                        <span style="color:#888;font-size:0.85rem;">{chevron}</span>
+                    </div>
+                </div>""",
                 unsafe_allow_html=True,
             )
-        with mc2:
-            st.markdown("&nbsp;")
-            if st.button("➕ New Overview", key=f"new_{student['key']}", use_container_width=True):
-                go_to_sensory_overview(ini)
+        with btn_col:
+            # Invisible toggle button aligned over the header
+            if st.button(
+                chevron,
+                key=f"toggle_{sec_name}",
+                help=f"{'Collapse' if is_open else 'Expand'} {sec_name}",
+                use_container_width=True,
+            ):
+                st.session_state.section_open[sec_name] = not is_open
+                st.rerun()
 
-        rev_label, rev_colour = review_status(overview.get("review_date"))
-        st.markdown(
-            f'<div class="ov-meta">'
-            f'📅 Overview: <strong>{ov_date}</strong> &nbsp;·&nbsp; '
-            f'Completed by: <strong>{by}</strong> &nbsp;·&nbsp; '
-            f'<span style="color:{rev_colour};font-weight:700;">{rev_label}</span>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
+        # Body — only rendered when open, state persists through checkbox reruns
+        if is_open:
+            with st.container(border=True):
+                cols = st.columns(2)
+                for i, item in enumerate(items):
+                    with cols[i % 2]:
+                        val = st.checkbox(
+                            item,
+                            value=st.session_state.responses[sec_name].get(item, False),
+                            key=f"chk_{sec_name}_{item}",
+                        )
+                        st.session_state.responses[sec_name][item] = val
 
-        # Archive status for the latest overview
-        render_archive_control(student, overview)
+    st.markdown("---")
 
-        tab_summary, tab_detail, tab_history = st.tabs(
-            ["📊 Priority Summary", "✅ Checked Items", "🕓 History"]
-        )
+    # ── Results summary ────────────────────────────────────────────────────────
+    st.markdown("#### Results Summary")
+    priorities = calc_priorities(st.session_state.responses)
+    cols = st.columns(4)
+    for idx, (sec, info) in enumerate(priorities.items()):
+        icon = SECTIONS[sec]["icon"]
+        with cols[idx % 4]:
+            st.markdown(priority_card(sec, info, icon), unsafe_allow_html=True)
 
-        with tab_summary:
-            if not pr:
-                st.warning("No priority data available.")
+    st.markdown("---")
+
+    # ── Save ───────────────────────────────────────────────────────────────────
+    btn_col, clr_col = st.columns([3, 1])
+    with btn_col:
+        if st.button("💾  Save Overview", type="primary", use_container_width=True):
+            if not student_name.strip():
+                st.error("Please enter a student name before saving.")
+            elif program == "— Select —":
+                st.error("Please select a program.")
             else:
-                for heading, level in [("🔴 High Priority", "HIGH PRIORITY"),
-                                       ("🟡 Medium Priority", "MEDIUM PRIORITY"),
-                                       ("🟢 Low Priority", "LOW PRIORITY")]:
-                    secs = [(s, i) for s, i in pr.items() if i.get("priority") == level]
-                    if not secs:
-                        continue
-                    st.markdown(f"##### {heading}")
-                    cols = st.columns(min(len(secs), 4))
-                    for idx, (sec, info) in enumerate(secs):
-                        with cols[idx % 4]:
-                            st.markdown(pri_card(sec, info, SECTION_ICONS.get(sec, "")), unsafe_allow_html=True)
+                store_priorities = {
+                    sec: {"priority": v["priority"], "checked": v["checked"],
+                          "total": v["total"], "pct": v["pct"]}
+                    for sec, v in priorities.items()
+                }
+                payload = {
+                    "student_id":       selected_student_id,
+                    "student_name":     student_name.strip(),
+                    "overview_date":    str(overview_date),
+                    "review_date":      str(review_date),
+                    "completed_by":     completed_by.strip(),
+                    "responses":        json.dumps(st.session_state.responses),
+                    "priority_results": json.dumps(store_priorities),
+                }
+                try:
+                    if st.session_state.editing_mode and st.session_state.edit_record_id:
+                        # Update existing record
+                        supabase.table("sensory_overviews") \
+                            .update(payload) \
+                            .eq("id", st.session_state.edit_record_id) \
+                            .execute()
+                    else:
+                        # Insert new record
+                        supabase.table("sensory_overviews").insert(payload).execute()
+                    st.session_state.saved_ok       = True
+                    st.session_state["just_saved_overview"] = payload
+                    st.session_state.pop("sov_default_student", None)
+                    st.session_state.editing_mode   = False
+                    st.session_state.edit_record_id = None
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Save failed: {e}")
 
-        with tab_detail:
-            responses = parse_responses(overview.get("responses"))
-            if not responses:
-                st.info("No response detail available.")
-            else:
-                any_checked = False
-                for sec_name, items_dict in responses.items():
-                    icon = SECTION_ICONS.get(sec_name, "")
-                    checked_items = [it for it, val in items_dict.items() if val]
-                    if not checked_items:
-                        continue
-                    any_checked = True
-                    _, css, emoji = priority_info(
-                        round(len(checked_items) / max(len(items_dict), 1) * 100, 1)
-                    )
-                    st.markdown(f"**{icon} {sec_name}** {emoji}")
-                    ic1, ic2 = st.columns(2)
-                    for i, item in enumerate(checked_items):
-                        with [ic1, ic2][i % 2]:
-                            st.markdown(f"✅ {item}")
-                    st.markdown("---")
-                if not any_checked:
-                    st.info("No items were checked in this overview.")
+    with clr_col:
+        if st.button("🗑️  Clear", use_container_width=True):
+            st.session_state.responses = {sec: {it: False for it in m["items"]} for sec, m in SECTIONS.items()}
+            st.session_state.pop("sov_default_student", None)
+            st.rerun()
 
-        with tab_history:
-            if len(all_ovs) <= 1:
-                st.info("Only one overview on file — history will appear here as more are added.")
-            else:
-                for ov in all_ovs[1:]:
-                    o_date = ov.get("overview_date", "—")
-                    o_by   = ov.get("completed_by", "—")
-                    o_rev  = ov.get("review_date", "—")
-                    with st.expander(f"📄 {o_date}  ·  {o_by}", expanded=False):
-                        st.caption(f"Review date: {o_rev}")
-                        hist_pr = parse_priorities(ov.get("priority_results"))
-                        if hist_pr:
-                            hc = st.columns(4)
-                            for idx, (sec, info) in enumerate(hist_pr.items()):
-                                with hc[idx % 4]:
-                                    st.markdown(
-                                        pri_card(sec, info, SECTION_ICONS.get(sec, "")),
-                                        unsafe_allow_html=True,
-                                    )
-                        render_archive_control(student, ov)
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 2 — PAST OVERVIEWS
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_past:
+    st.markdown("#### Past Sensory Overviews")
+    records = load_all_overviews()
 
-        st.markdown("---")
-        fa1, fa2 = st.columns(2)
-        with fa1:
-            if st.button("🔄 Start updated overview", key=f"upd_{student['key']}", use_container_width=True):
-                go_to_sensory_overview(ini)
-        with fa2:
-            st.page_link(SENSORY_OVERVIEW_PAGE, label="📋 Go to Sensory Overview", icon=None)
+    if not records:
+        st.info("No overviews saved yet.")
+    else:
+        f1, f2 = st.columns([2, 2])
+        with f1:
+            student_names = sorted(set(
+                (r.get("students") or {}).get("name") or r.get("student_name", "Unknown")
+                for r in records
+            ))
+            sel_student = st.selectbox("Filter by student", ["— All —"] + student_names)
+        with f2:
+            search = st.text_input("Search by staff / date", placeholder="e.g. Candice or 2026-03")
+
+        filtered = records
+        if sel_student != "— All —":
+            filtered = [r for r in filtered if
+                        ((r.get("students") or {}).get("name") or r.get("student_name")) == sel_student]
+        if search:
+            s = search.lower()
+            filtered = [r for r in filtered if
+                        s in (r.get("completed_by") or "").lower()
+                        or s in (r.get("overview_date") or "").lower()]
+
+        st.caption(f"Showing {len(filtered)} of {len(records)} records")
+
+        for rec in filtered:
+            sname    = rec.get("student_name", "Unknown")
+            ov_date  = rec.get("overview_date", "—")
+            by       = rec.get("completed_by", "—")
+            rev_date = rec.get("review_date", "—")
+
+            with st.expander(
+                f"**{sname}** · {ov_date} · {by}",
+                expanded=False
+            ):
+                st.markdown(f"**Review date:** {rev_date}")
+
+                try:
+                    pr = rec["priority_results"]
+                    if isinstance(pr, str):
+                        pr = json.loads(pr)
+                except Exception:
+                    pr = {}
+
+                if pr:
+                    p_cols = st.columns(4)
+                    for idx, (sec, info) in enumerate(pr.items()):
+                        icon = SECTIONS.get(sec, {}).get("icon", "")
+                        _, css, emoji = priority_info(info.get("pct", 0))
+                        info["css"] = css
+                        info["emoji"] = emoji
+                        with p_cols[idx % 4]:
+                            st.markdown(priority_card(sec, info, icon), unsafe_allow_html=True)
+
+                if st.toggle("Show checked items", key=f"detail_{rec['id']}"):
+                    try:
+                        resp = rec["responses"]
+                        if isinstance(resp, str):
+                            resp = json.loads(resp)
+                    except Exception:
+                        resp = {}
+                    for sec_name, items_dict in resp.items():
+                        icon = SECTIONS.get(sec_name, {}).get("icon", "")
+                        checked_items = [it for it, val in items_dict.items() if val]
+                        if checked_items:
+                            st.markdown(f"**{icon} {sec_name}**")
+                            for it in checked_items:
+                                st.markdown(f"&nbsp;&nbsp;&nbsp;✅ {it}")
+
+                st.markdown("---")
+
+                # ── Action buttons ─────────────────────────────────────────────
+                ac1, ac2, ac3 = st.columns(3)
+
+                # Download report
+                with ac1:
+                    try:
+                        doc_bytes = generate_word_report(rec)
+                        fname = f"sensory_{sname.replace(' ','_')}_{ov_date}.docx"
+                        st.download_button(
+                            "📄 Download Word Report",
+                            data=doc_bytes,
+                            file_name=fname,
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            use_container_width=True,
+                            key=f"dl_{rec['id']}",
+                        )
+                        _ini = resolve_initials(sname)
+                        _prev = fetch_archive(
+                            student_initials=_ini,
+                            doc_type="Sensory Overview",
+                            include_confidential=True,
+                        )
+                        if _prev:
+                            _mode = st.radio(
+                                "A Sensory Overview is already in this "
+                                "student's archive folder:",
+                                ["Replace previous version", "Keep both (add as separate file)"],
+                                key=f"arcmode_{rec['id']}", horizontal=True,
+                            )
+                        else:
+                            _mode = "new"
+                        if st.button("🗄️ Save to Document Archive",
+                                     key=f"arc_{rec['id']}"):
+                            _saved = archive_document(
+                                source_tool="Sensory Overview",
+                                doc_type="Sensory Overview",
+                                title=f"Sensory Overview — {_ini} — {ov_date}",
+                                file_bytes=doc_bytes.getvalue() if hasattr(doc_bytes, "getvalue") else doc_bytes,
+                                filename=f"sensory_{_ini}_{ov_date}.docx",
+                                student_initials=_ini,
+                                created_by=st.session_state.get("user_email", "unknown"),
+                                supersede=(_mode == "Replace previous version"),
+                            )
+                            if _saved:
+                                st.success("Saved to the Document Archive"
+                                           + (" (previous version moved to restorable Deleted)"
+                                              if _mode == "Replace previous version" else ""))
+                    except Exception as e:
+                        st.error(f"Report generation failed: {e}")
+
+                # Edit / add to overview
+                with ac2:
+                    if st.button("✏️ Edit / Add to Overview", key=f"edit_{rec['id']}", use_container_width=True):
+                        # Load this record into session state for editing
+                        try:
+                            resp = rec["responses"]
+                            if isinstance(resp, str):
+                                resp = json.loads(resp)
+                            st.session_state.responses = resp
+                        except Exception:
+                            st.session_state.responses = {sec: {it: False for it in m["items"]} for sec, m in SECTIONS.items()}
+                        st.session_state.edit_record_id  = rec["id"]
+                        st.session_state.edit_student    = sname
+                        st.session_state.edit_ov_date    = ov_date
+                        st.session_state.edit_rev_date   = rev_date
+                        st.session_state.edit_by         = by
+                        st.session_state.editing_mode    = True
+                        st.session_state.saved_ok        = False
+                        st.rerun()
+
+                # Delete
+                with ac3:
+                    if st.button("🗑️ Delete", key=f"del_{rec['id']}", use_container_width=True):
+                        try:
+                            supabase.table("sensory_overviews").delete().eq("id", rec["id"]).execute()
+                            st.success("Deleted.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Delete failed: {e}")
