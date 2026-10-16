@@ -432,6 +432,34 @@ def build_docx(doc_row, sections) -> bytes:
 # ------------------------------------------------------------------
 PRINT_TAG = "clc-print-layout"
 
+# Word is strict about the ORDER of child elements in table/cell/row
+# properties ("unreadable content" otherwise), so insert in schema order.
+_OX_ORDER = {
+    "tblPr": ["tblStyle", "tblpPr", "tblOverlap", "bidiVisual", "tblStyleRowBandSize", "tblStyleColBandSize",
+              "tblW", "jc", "tblCellSpacing", "tblInd", "tblBorders", "shd", "tblLayout", "tblCellMar",
+              "tblLook", "tblCaption", "tblDescription"],
+    "tcPr": ["cnfStyle", "tcW", "gridSpan", "hMerge", "vMerge", "tcBorders", "shd", "noWrap", "tcMar",
+             "textDirection", "tcFitText", "vAlign", "hideMark"],
+    "trPr": ["cnfStyle", "divId", "gridBefore", "gridAfter", "wBefore", "wAfter", "cantSplit", "trHeight",
+             "tblHeader", "tblCellSpacing", "jc", "hidden"],
+}
+
+
+def _ox_insert(parent, el):
+    from docx.oxml.ns import qn
+    pname = parent.tag.split("}")[1]
+    order = _OX_ORDER[pname]
+    name = el.tag.split("}")[1]
+    for old in parent.findall(qn("w:" + name)):
+        parent.remove(old)
+    idx = order.index(name)
+    for child in parent:
+        cname = child.tag.split("}")[1]
+        if cname in order and order.index(cname) > idx:
+            child.addprevious(el)
+            return
+    parent.append(el)
+
 
 def build_tracking_print_docx(doc_row, sections) -> bytes:
     from docx import Document
@@ -475,14 +503,14 @@ def build_tracking_print_docx(doc_row, sections) -> bytes:
     def shade_cell(cell, fill):
         tcPr = cell._tc.get_or_add_tcPr()
         shd = OxmlElement("w:shd"); shd.set(qn("w:val"), "clear"); shd.set(qn("w:fill"), fill)
-        tcPr.append(shd)
+        _ox_insert(tcPr, shd)
 
     def cell_margins(cell, top=60, bottom=60, left=110, right=110):
         tcPr = cell._tc.get_or_add_tcPr()
         mar = OxmlElement("w:tcMar")
         for k, v in (("top", top), ("bottom", bottom), ("start", left), ("end", right)):
             e = OxmlElement(f"w:{k}"); e.set(qn("w:w"), str(v)); e.set(qn("w:type"), "dxa"); mar.append(e)
-        tcPr.append(mar)
+        _ox_insert(tcPr, mar)
 
     def borders(table, color="B2DFDB", size=6, inside=True):
         tblPr = table._tbl.tblPr
@@ -491,12 +519,16 @@ def build_tracking_print_docx(doc_row, sections) -> bytes:
         for e in edges:
             el = OxmlElement(f"w:{e}"); el.set(qn("w:val"), "single"); el.set(qn("w:sz"), str(size))
             el.set(qn("w:color"), color); b.append(el)
-        tblPr.append(b)
+        _ox_insert(tblPr, b)
+
+    def caption(table, tag):
+        el = OxmlElement("w:tblCaption"); el.set(qn("w:val"), tag)
+        _ox_insert(table._tbl.tblPr, el)
 
     def fixed_widths(table, widths_in):
         table.autofit = False
         tblPr = table._tbl.tblPr
-        lay = OxmlElement("w:tblLayout"); lay.set(qn("w:type"), "fixed"); tblPr.append(lay)
+        lay = OxmlElement("w:tblLayout"); lay.set(qn("w:type"), "fixed"); _ox_insert(tblPr, lay)
         grid = table._tbl.tblGrid
         for gc, w in zip(grid.findall(qn("w:gridCol")), widths_in):
             gc.set(qn("w:w"), str(int(w * 1440)))
@@ -607,10 +639,10 @@ def build_tracking_print_docx(doc_row, sections) -> bytes:
                     runs(p, txt, size=size, color=INK, bold_all=(ci == 0))
         # repeat header row if the table breaks across pages
         trPr = t.rows[0]._tr.get_or_add_trPr()
-        h = OxmlElement("w:tblHeader"); h.set(qn("w:val"), "true"); trPr.append(h)
+        h = OxmlElement("w:tblHeader"); h.set(qn("w:val"), "true"); _ox_insert(trPr, h)
         for row in t.rows:  # don't split a row across pages
             trPr = row._tr.get_or_add_trPr()
-            cs = OxmlElement("w:cantSplit"); cs.set(qn("w:val"), "true"); trPr.append(cs)
+            cs = OxmlElement("w:cantSplit"); cs.set(qn("w:val"), "true"); _ox_insert(trPr, cs)
         if widths:
             fixed_widths(t, widths)
         return t
@@ -632,6 +664,14 @@ def build_tracking_print_docx(doc_row, sections) -> bytes:
         elif k.startswith("finding the tools"): by["tools"] = sec
     used = {id(v) for v in by.values()}
     others = [s_ for s_ in sections if id(s_) not in used]
+    key_of = {id(v): k for k, v in by.items()}
+    meta = {"v": 1, "order": [], "note_in_header": {}}
+    oi_ = 0
+    for s_ in sections:
+        if id(s_) in key_of:
+            meta["order"].append([key_of[id(s_)], s_["title"]])
+        else:
+            meta["order"].append([f"other:{oi_}", s_["title"]]); oi_ += 1
 
     # ================= PAGE 1 — EACH DAY =================
     band(doc_row["title"], doc_row.get("subtitle"))
@@ -639,6 +679,7 @@ def build_tracking_print_docx(doc_row, sections) -> bytes:
         t = d.add_table(rows=1, cols=1); borders(t, TEAL_LIGHT, 0, inside=False)
         c = t.rows[0].cells[0]; shade_cell(c, TEAL_LIGHT); cell_margins(c, 60, 60, 160, 160)
         runs(c.paragraphs[0], doc_row["intro"], size=9, color=INK)
+        caption(t, "clc:intro")
     spacer(8)
 
     day_cols = [k for k in ("start", "day", "end") if k in by]
@@ -651,8 +692,10 @@ def build_tracking_print_docx(doc_row, sections) -> bytes:
                   "day": ("During the day", None),
                   "end": ("End of the day", "Before you leave")}
         t = d.add_table(rows=2, cols=len(day_cols)); borders(t)
+        caption(t, "clc:day:" + ",".join(day_cols))
         for ci, k in enumerate(day_cols):
             notes, _ = body_lines(by[k]["content"])
+            meta["note_in_header"][k] = bool(notes)
             heading_cell(t.rows[0].cells[ci], labels[k][0], COL[k], labels[k][1] if not notes else notes[0])
             c = t.rows[1].cells[ci]; cell_margins(c, 90, 90, 120, 120)
             content = by[k]["content"]
@@ -672,6 +715,7 @@ def build_tracking_print_docx(doc_row, sections) -> bytes:
             cols.append(("term", tm))
         widths = [usable_in * w for w in ([0.35, 0.35, 0.30] if (wk and tm) else [0.5, 0.5])][:len(cols)]
         t = d.add_table(rows=2, cols=len(cols)); borders(t)
+        caption(t, "clc:weekterm:" + ",".join(k for k, _ in cols))
         if wk:
             hc = t.rows[0].cells[0].merge(t.rows[0].cells[1]) if len(cols) >= 2 and cols[1][0] == "week" else t.rows[0].cells[0]
             heading_cell(hc, "Each Week", COL["week"], "Team meetings, records and planning")
@@ -690,13 +734,13 @@ def build_tracking_print_docx(doc_row, sections) -> bytes:
         for n in notes:
             p = d.add_paragraph(); runs(p, n, size=9, color=GREY); p.paragraph_format.space_after = Pt(4)
         tl = [l for l in by["milestones"]["content"].splitlines() if l.strip().startswith("|")]
-        md_table(tl, widths=[usable_in * 0.16, usable_in * 0.56, usable_in * 0.28], size=9)
+        caption(md_table(tl, widths=[usable_in * 0.16, usable_in * 0.56, usable_in * 0.28], size=9), "clc:milestones")
 
     # ================= QUICK REFERENCE =================
     if "quickref" in by:
         section_heading(by["quickref"]["title"], page_break=True)
         tl = [l for l in by["quickref"]["content"].splitlines() if l.strip().startswith("|")]
-        md_table(tl, widths=[usable_in * 0.30, usable_in * 0.42, usable_in * 0.28], size=9.5)
+        caption(md_table(tl, widths=[usable_in * 0.30, usable_in * 0.42, usable_in * 0.28], size=9.5), "clc:quickref")
 
     # ================= FINDING THE TOOLS — one column per portal section =================
     if "tools" in by:
@@ -727,6 +771,7 @@ def build_tracking_print_docx(doc_row, sections) -> bytes:
             colw = usable_in / ncol
             img_w = min(3.2, colw - 0.3)
             t = d.add_table(rows=1, cols=ncol); borders(t, "FFFFFF", 0)
+            caption(t, "clc:tools")
             for ci, g in enumerate(final):
                 c = t.rows[0].cells[ci]; cell_margins(c, 40, 40, 80, 80)
                 first = True
@@ -742,7 +787,9 @@ def build_tracking_print_docx(doc_row, sections) -> bytes:
                     p = para()
                     if path:
                         w = min(width_in, image_display_width(path) / 96)
-                        p.add_run().add_picture(str(path), width=Inches(w))
+                        pc = p.add_run().add_picture(str(path), width=Inches(w))
+                        pc._inline.docPr.set("descr", Path(m.group(2)).name)
+                        pc._inline.docPr.set("title", m.group(1))
                     else:
                         runs(p, f"[{m.group(1) or m.group(2)}]", size=9, color=GREY)
                     p.paragraph_format.space_before = Pt(6); p.paragraph_format.space_after = Pt(1)
@@ -766,11 +813,11 @@ def build_tracking_print_docx(doc_row, sections) -> bytes:
                         p = para(); runs(p, tt, size=8.5, color=INK)
                         p.paragraph_format.left_indent = Inches(0.08)
             trPr = t.rows[0]._tr.get_or_add_trPr()
-            cs = OxmlElement("w:cantSplit"); cs.set(qn("w:val"), "true"); trPr.append(cs)
+            cs = OxmlElement("w:cantSplit"); cs.set(qn("w:val"), "true"); _ox_insert(trPr, cs)
             fixed_widths(t, [colw] * ncol)
 
     # ================= anything else, in order =================
-    for sec in others:
+    for oi, sec in enumerate(others):
         section_heading(sec["title"])
         notes, items = body_lines(sec["content"])
         for n in notes:
@@ -779,15 +826,176 @@ def build_tracking_print_docx(doc_row, sections) -> bytes:
             p = d.add_paragraph(); runs(p, n.lstrip("> "), size=9.5, color=INK)
         tl = [l for l in sec["content"].splitlines() if l.strip().startswith("|")]
         if tl:
-            md_table(tl)
+            caption(md_table(tl), f"clc:other-table:{oi}")
         if items:
             t = d.add_table(rows=1, cols=1); c = t.rows[0].cells[0]
+            caption(t, f"clc:other-items:{oi}")
             for ii, it in enumerate(items):
                 checklist_item(c, it, ii == 0)
 
+    # layout info (section titles/order) for reading an edited print version back in.
+    # Written directly: python-docx caps this property at 255 chars, Word doesn't.
+    _desc = d.core_properties._element.get_or_add_description()
+    _desc.text = "CLCMETA" + json.dumps(meta, ensure_ascii=False)
     buf = io.BytesIO()
     d.save(buf)
     return buf.getvalue()
+
+
+def parse_tracking_print_docx(docx_doc):
+    """Reads a (possibly Word-edited) print version back into
+    (intro, [(title, content), ...]) using the table tags + saved titles."""
+    from docx.oxml.ns import qn
+    from docx.table import Table as DocxTable
+    from docx.text.paragraph import Paragraph as DocxParagraph
+
+    _el = docx_doc.core_properties._element.find(
+        "{http://purl.org/dc/elements/1.1/}description")
+    raw = (_el.text if _el is not None else "") or ""
+    if not raw.startswith("CLCMETA"):
+        raise ValueError("this print version is missing its layout information — "
+                         "download a fresh print or editable version from the portal and edit that")
+    meta = json.loads(raw[len("CLCMETA"):])
+
+    def para_md(p):
+        """Runs → markdown, merging Word's arbitrary run splits; drops the ☐ box run."""
+        segs = []
+        for r in p.runs:
+            t = r.text
+            if not t or (t.strip() == "☐"):
+                continue
+            key = (bool(r.bold), bool(r.italic) and not r.bold)
+            if segs and segs[-1][0] == key:
+                segs[-1][1] += t
+            else:
+                segs.append([key, t])
+        out = ""
+        for (b, i), t in segs:
+            core = t.strip()
+            if not core:
+                out += t; continue
+            lead, trail = t[:len(t) - len(t.lstrip())], t[len(t.rstrip()):]
+            out += lead + (f"**{core}**" if b else f"*{core}*" if i else core) + trail
+        out = re.sub(r"^\s*☐\s*", "", out)
+        return out.strip()
+
+    def is_item(p):
+        return p.text.lstrip().startswith("☐")
+
+    def cell_items(cell, skip=0):
+        notes, items = [], []
+        for p in cell.paragraphs[skip:]:
+            if not p.text.strip():
+                continue
+            md = para_md(p)
+            if is_item(p):
+                items.append(md)
+            elif items:  # an Enter inside an item — join it back on
+                items[-1] += " " + md
+            else:
+                notes.append(md)
+        return notes, items
+
+    def table_md(t):
+        rows = [[para_md_cell(c) for c in r.cells] for r in t.rows]
+        if not rows:
+            return ""
+        lines = ["| " + " | ".join(rows[0]) + " |", "| " + " | ".join(["---"] * len(rows[0])) + " |"]
+        lines += ["| " + " | ".join(r) + " |" for r in rows[1:]]
+        return "\n".join(lines)
+
+    def para_md_cell(c):
+        return " ".join(re.sub(r"^\*\*(.*)\*\*$", r"\1", para_md(p)) for p in c.paragraphs if p.text.strip())
+
+    titles = {k: t for k, t in meta["order"]}
+    content, intro = {}, ""
+    body = docx_doc.element.body
+    pending_notes, last_heading = [], None
+    heading_keys = {t: k for k, t in meta["order"]}
+
+    for ch in body.iterchildren():
+        if ch.tag == qn("w:p"):
+            p = DocxParagraph(ch, docx_doc)
+            txt = p.text.strip()
+            if not txt and not ch.xpath(".//wp:docPr"):
+                continue
+            if txt in heading_keys or txt == "Each Week  ·  Each Term" or txt == "Each Day":
+                last_heading = heading_keys.get(txt); pending_notes = []
+                continue
+            if txt:
+                pending_notes.append(para_md(p))
+            continue
+        if ch.tag != qn("w:tbl"):
+            continue
+        t = DocxTable(ch, docx_doc)
+        cap = ch.xpath("./w:tblPr/w:tblCaption/@w:val")
+        tag = cap[0] if cap else ""
+        if tag == "clc:intro":
+            intro = "\n".join(para_md(p) for p in t.rows[0].cells[0].paragraphs if p.text.strip())
+        elif tag.startswith("clc:day:"):
+            keys = tag.split(":", 2)[2].split(",")
+            for ci, k in enumerate(keys):
+                lines = []
+                if meta["note_in_header"].get(k):
+                    hp = [p for p in t.rows[0].cells[ci].paragraphs if p.text.strip()]
+                    if len(hp) > 1:
+                        lines.append(para_md(hp[1]).strip("*"))
+                notes, items = cell_items(t.rows[1].cells[ci])
+                lines += notes + [f"- ☐ {it}" for it in items]
+                content[k] = "\n".join(lines)
+        elif tag.startswith("clc:weekterm:"):
+            keys = tag.split(":", 2)[2].split(",")
+            wk, tm = [], []
+            body_cells = t.rows[1]._tr.findall(qn("w:tc"))  # body row is never merged
+            for ci, k in enumerate(keys):
+                if ci >= len(body_cells):
+                    break
+                from docx.table import _Cell
+                _, items = cell_items(_Cell(body_cells[ci], t))
+                (wk if k == "week" else tm).extend(items)
+            if wk: content["week"] = "\n".join(f"- ☐ {it}" for it in wk)
+            if tm: content["term"] = "\n".join(f"- ☐ {it}" for it in tm)
+        elif tag in ("clc:milestones", "clc:quickref"):
+            k = tag.split(":")[1]
+            lines = pending_notes + [table_md(t)]
+            content[k] = "\n".join(lines); pending_notes = []
+        elif tag == "clc:tools":
+            lines = list(pending_notes); pending_notes = []
+            for cell in t.rows[0].cells:
+                lines.append("")
+                for p in cell.paragraphs:
+                    pics = p._p.xpath(".//wp:docPr")
+                    if pics and not p.text.strip():
+                        for dp in pics:
+                            fn = Path(dp.get("descr") or "").name
+                            if fn:
+                                lines.append(f"![{dp.get('title') or ''}]({fn})")
+                        continue
+                    if not p.text.strip():
+                        continue
+                    md = para_md(p)
+                    runs_ = [r for r in p.runs if r.text.strip()]
+                    all_bold = runs_ and all(r.bold for r in runs_)
+                    big = runs_ and runs_[0].font.size and runs_[0].font.size.pt >= 11.5
+                    if all_bold and big:
+                        lines.append(f"**{md.strip('*')}**")
+                    elif all_bold:
+                        lines.append(f"> {md.strip('*')}")
+                    else:
+                        lines.append(md)
+            content["tools"] = "\n".join(lines).strip()
+        elif tag.startswith("clc:other-items:"):
+            k = "other:" + tag.split(":")[2]
+            notes, items = cell_items(t.rows[0].cells[0])
+            content[k] = "\n".join(pending_notes + notes + [f"- ☐ {it}" for it in items]).strip()
+            pending_notes = []
+        elif tag.startswith("clc:other-table:"):
+            k = "other:" + tag.split(":")[2]
+            content[k] = "\n".join([content.get(k, "")] + pending_notes + [table_md(t)]).strip()
+            pending_notes = []
+
+    sections = [(title, content.get(k, "")) for k, title in meta["order"] if content.get(k, "").strip()]
+    return intro, sections
 
 
 PRINT_LAYOUTS = {
@@ -867,8 +1075,7 @@ def parse_docx_to_sections(file_bytes: bytes, split_level: str):
 
     doc = DocxDocument(io.BytesIO(file_bytes))
     if PRINT_TAG in (doc.core_properties.keywords or ""):
-        raise ValueError("this is the landscape PRINT version, which can't be uploaded. "
-                         "Download the EDITABLE Word version, make your changes in that, then upload it")
+        return parse_tracking_print_docx(doc)
 
     def iter_block_items(parent):
         for child in parent.element.body.iterchildren():
@@ -1760,8 +1967,8 @@ def admin_view():
             "Use this when the document has been updated in Word. The easiest way: **download the current "
             "version below, edit it in Word, then upload it here**. Each section title in the download is a "
             "Word *Heading 2* — keep new section titles in that style so they're picked up. "
-            "(Documents with a 🖨️ print version: edit the **editable** download, not the print one — "
-            "the print layout rebuilds itself from the content.)"
+            "Documents with a 🖨️ print version: you can edit and upload **either** the print or the editable "
+            "version — keep the ☐ boxes at the start of each checklist item."
         )
         st.download_button(
             f"⬇️ Download current version ({len(sections)} sections) — keep as a backup",
