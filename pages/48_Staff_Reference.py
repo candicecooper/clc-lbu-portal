@@ -51,6 +51,12 @@ alter table reference_sections enable row level security;
 create policy "ref_docs_all" on reference_documents for all using (true) with check (true);
 create policy "ref_secs_all" on reference_sections for all using (true) with check (true);
 -------------------------------------------------------------------
+IMAGES IN SECTIONS: put a line on its own like
+    ![Quick Log tile](tile_quick_log.png)
+and place the PNG in the repo at data/staff_reference_images/. Images
+show on the page and in the Word download, and survive a Word
+download → edit → "Upload a new version" round trip.
+
 Dependencies: streamlit, supabase, python-docx (all already used by
 other portal tools).
 """
@@ -199,10 +205,69 @@ def clear_caches():
     fetch_documents.clear()
     fetch_sections.clear()
     _docx_bytes.clear()
+    _print_bytes.clear()
 
 
 def _now():
     return datetime.now(timezone.utc).isoformat()
+
+
+# ------------------------------------------------------------------
+# Images inside section content: a line on its own like
+#   ![Quick Log tile](tile_quick_log.png)
+# Files live in the repo at data/staff_reference_images/.
+# Screenshots are captured at 2x, so they display at half pixel width.
+# ------------------------------------------------------------------
+from pathlib import Path
+
+IMG_LINE = re.compile(r"^\s*!\[([^\]]*)\]\(([^)\s]+)\)\s*$")
+_IMG_DIRS = [
+    Path(__file__).resolve().parent.parent / "data" / "staff_reference_images",
+    Path("data") / "staff_reference_images",
+]
+
+
+def image_path(fname):
+    fname = Path(fname).name  # never allow paths outside the folder
+    for d in _IMG_DIRS:
+        f = d / fname
+        if f.is_file():
+            return f
+    return None
+
+
+def image_display_width(path):
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            return max(40, min(700, im.width // 2))
+    except Exception:
+        return 334
+
+
+def render_content(text):
+    """st.markdown for text, st.image for image lines."""
+    buf = []
+
+    def flush():
+        if any(l.strip() for l in buf):
+            st.markdown("\n".join(buf))
+        buf.clear()
+
+    for line in (text or "").splitlines():
+        m = IMG_LINE.match(line)
+        if not m:
+            buf.append(line)
+            continue
+        flush()
+        path = image_path(m.group(2))
+        if path:
+            st.image(str(path), width=image_display_width(path))
+        else:
+            st.caption(f"🖼️ {m.group(1) or m.group(2)} (image not found in data/staff_reference_images)")
+    flush()
+    if not (text or "").strip():
+        st.markdown("_(empty)_")
 
 
 # ------------------------------------------------------------------
@@ -312,6 +377,23 @@ def build_docx(doc_row, sections) -> bytes:
             if not line.strip():
                 i += 1
                 continue
+            m = IMG_LINE.match(line)
+            if m:
+                path = image_path(m.group(2))
+                if d.paragraphs:  # keep a lead-in line on the same page as its image
+                    d.paragraphs[-1].paragraph_format.keep_with_next = True
+                p = d.add_paragraph()
+                if path:
+                    from docx.shared import Inches
+                    pic = p.add_run().add_picture(str(path), width=Inches(image_display_width(path) / 96))
+                    docpr = pic._inline.docPr
+                    docpr.set("descr", Path(m.group(2)).name)   # filename — read back on upload
+                    docpr.set("title", m.group(1))
+                else:
+                    add_runs(p, f"[image: {m.group(1) or m.group(2)}]")
+                p.paragraph_format.space_after = Pt(3)
+                i += 1
+                continue
             if line.lstrip().startswith("|"):
                 block = []
                 while i < len(lines) and lines[i].lstrip().startswith("|"):
@@ -339,6 +421,378 @@ def build_docx(doc_row, sections) -> bytes:
     buf = io.BytesIO()
     d.save(buf)
     return buf.getvalue()
+
+
+# ------------------------------------------------------------------
+# PRINT LAYOUTS — landscape, column-based versions of specific documents
+# for printing / pinning up. Built from the same live sections as the
+# editable download, so portal edits flow through. The editable download
+# (build_docx) is still the one used for the Word round trip; print
+# versions are tagged and refused by the uploader.
+# ------------------------------------------------------------------
+PRINT_TAG = "clc-print-layout"
+
+
+def build_tracking_print_docx(doc_row, sections) -> bytes:
+    from docx import Document
+    from docx.shared import Pt, RGBColor, Inches, Cm
+    from docx.enum.section import WD_ORIENT
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+    from docx.enum.text import WD_BREAK
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+
+    TEAL, TEAL_DARK, TEAL_LIGHT = "00695C", "004D40", "E0F2F1"
+    WHITE = RGBColor(0xFF, 0xFF, 0xFF)
+    INK = RGBColor(0x1A, 0x1A, 0x1A)
+    GREY = RGBColor(0x59, 0x59, 0x59)
+    # column header colours, matched to the portal's own section colours
+    COL = {"start": "00695C", "day": "00796B", "end": "004D40",
+           "week": "00695C", "term": "004D40"}
+
+    d = Document()
+    d.core_properties.keywords = PRINT_TAG
+    d.core_properties.title = doc_row["title"]
+    sec0 = d.sections[0]
+    sec0.orientation = WD_ORIENT.LANDSCAPE
+    sec0.page_width, sec0.page_height = Cm(29.7), Cm(21.0)
+    sec0.top_margin = sec0.bottom_margin = Cm(1.1)
+    sec0.left_margin = sec0.right_margin = Cm(1.3)
+    usable_in = (29.7 - 2.6) / 2.54
+
+    st_ = d.styles["Normal"]
+    st_.font.name = "Calibri"; st_.font.size = Pt(9.5)
+    st_.element.rPr.rFonts.set(qn("w:eastAsia"), "Calibri")
+    st_.paragraph_format.space_after = Pt(0)
+
+    # footer on every page
+    fp = sec0.footer.paragraphs[0]
+    acst = datetime.now(timezone(timedelta(hours=9, minutes=30)))
+    fr = fp.add_run(f"CLC-LBU  |  {doc_row['title']}  |  Printed from the Staff Portal {acst.strftime('%d/%m/%Y')} "
+                    "— the portal version is always current.")
+    fr.font.size = Pt(7.5); fr.font.color.rgb = GREY
+
+    def shade_cell(cell, fill):
+        tcPr = cell._tc.get_or_add_tcPr()
+        shd = OxmlElement("w:shd"); shd.set(qn("w:val"), "clear"); shd.set(qn("w:fill"), fill)
+        tcPr.append(shd)
+
+    def cell_margins(cell, top=60, bottom=60, left=110, right=110):
+        tcPr = cell._tc.get_or_add_tcPr()
+        mar = OxmlElement("w:tcMar")
+        for k, v in (("top", top), ("bottom", bottom), ("start", left), ("end", right)):
+            e = OxmlElement(f"w:{k}"); e.set(qn("w:w"), str(v)); e.set(qn("w:type"), "dxa"); mar.append(e)
+        tcPr.append(mar)
+
+    def borders(table, color="B2DFDB", size=6, inside=True):
+        tblPr = table._tbl.tblPr
+        b = OxmlElement("w:tblBorders")
+        edges = ["top", "left", "bottom", "right"] + (["insideH", "insideV"] if inside else [])
+        for e in edges:
+            el = OxmlElement(f"w:{e}"); el.set(qn("w:val"), "single"); el.set(qn("w:sz"), str(size))
+            el.set(qn("w:color"), color); b.append(el)
+        tblPr.append(b)
+
+    def fixed_widths(table, widths_in):
+        table.autofit = False
+        tblPr = table._tbl.tblPr
+        lay = OxmlElement("w:tblLayout"); lay.set(qn("w:type"), "fixed"); tblPr.append(lay)
+        grid = table._tbl.tblGrid
+        for gc, w in zip(grid.findall(qn("w:gridCol")), widths_in):
+            gc.set(qn("w:w"), str(int(w * 1440)))
+        for row in table.rows:
+            for c, w in zip(row.cells, widths_in):
+                c.width = Inches(w)
+
+    def runs(par, text, size=None, color=None, bold_all=False, italic=False):
+        for i, chunk in enumerate(re.split(r"\*\*(.+?)\*\*", text)):
+            if not chunk:
+                continue
+            for j, part in enumerate(re.split(r"(?<!\*)\*([^*]+)\*(?!\*)", chunk)):
+                if not part:
+                    continue
+                r = par.add_run(part)
+                r.font.bold = bold_all or (i % 2 == 1)
+                r.font.italic = italic or (j % 2 == 1)
+                if size: r.font.size = Pt(size)
+                if color is not None: r.font.color.rgb = color
+
+    def heading_cell(cell, text, fill, sub=None):
+        shade_cell(cell, fill); cell_margins(cell, 70, 70)
+        p = cell.paragraphs[0]
+        runs(p, text.upper(), size=10.5, color=WHITE, bold_all=True)
+        if sub:
+            p2 = cell.add_paragraph(); runs(p2, sub, size=8.5, color=RGBColor(0xE0, 0xF2, 0xF1), italic=True)
+
+    def checklist_item(cell, text, first, size=9.5):
+        p = cell.paragraphs[0] if first and not cell.paragraphs[0].text else cell.add_paragraph()
+        pf = p.paragraph_format
+        pf.left_indent = Inches(0.22); pf.first_line_indent = Inches(-0.22)
+        pf.space_before = Pt(0 if first else 5); pf.space_after = Pt(0)
+        box = p.add_run("☐  "); box.font.size = Pt(size + 1.5); box.font.color.rgb = RGBColor(0x00, 0x69, 0x5C)
+        runs(p, text, size=size, color=INK)
+        return p
+
+    def body_lines(content):
+        """Split section content into (notes, items): notes are plain lines,
+        items are '- ' lines with any leading ☐ stripped."""
+        notes, items = [], []
+        for ln in (content or "").splitlines():
+            t = ln.strip()
+            if not t:
+                continue
+            if t.startswith("- "):
+                items.append(re.sub(r"^☐\s*", "", t[2:].strip()))
+            else:
+                notes.append(t)
+        return notes, items
+
+    def fill_column(cell, content, size=9.5):
+        notes, items = body_lines(content)
+        first = True
+        for n in notes:
+            p = cell.paragraphs[0] if first else cell.add_paragraph()
+            runs(p, n.lstrip("> "), size=size - 0.5, color=GREY, italic=True)
+            p.paragraph_format.space_after = Pt(3)
+            first = False
+        for it in items:
+            checklist_item(cell, it, first, size); first = False
+
+    def band(text, sub=None):
+        t = d.add_table(rows=1, cols=1); borders(t, TEAL, 0, inside=False)
+        c = t.rows[0].cells[0]; shade_cell(c, TEAL); cell_margins(c, 90, 90, 160, 160)
+        p = c.paragraphs[0]
+        r = p.add_run("COWANDILLA LEARNING CENTRE  |  LEARNING & BEHAVIOUR UNIT")
+        r.font.size = Pt(7.5); r.font.bold = True; r.font.color.rgb = RGBColor(0xB2, 0xDF, 0xDB)
+        p2 = c.add_paragraph(); runs(p2, text, size=20, color=WHITE, bold_all=True)
+        if sub:
+            p3 = c.add_paragraph(); runs(p3, sub, size=9.5, color=RGBColor(0xE0, 0xF2, 0xF1), italic=True)
+
+    def section_heading(text, page_break=False):
+        p = d.add_paragraph()
+        if page_break:
+            p.add_run().add_break(WD_BREAK.PAGE)
+        r = p.add_run(text); r.font.size = Pt(14); r.font.bold = True
+        r.font.color.rgb = RGBColor(0x00, 0x4D, 0x40)
+        p.paragraph_format.space_before = Pt(2 if page_break else 10); p.paragraph_format.space_after = Pt(4)
+        p.paragraph_format.keep_with_next = True
+        return p
+
+    def spacer(pt=6):
+        p = d.add_paragraph(); p.paragraph_format.space_after = Pt(0)
+        r = p.add_run(""); p.paragraph_format.line_spacing = Pt(pt)
+
+    def md_table(lines, widths=None, size=9):
+        rows = []
+        for ln in lines:
+            cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+            if all(re.fullmatch(r":?-{2,}:?", c) for c in cells if c):
+                continue
+            rows.append(cells)
+        if not rows:
+            return
+        n = max(len(r) for r in rows)
+        t = d.add_table(rows=0, cols=n); borders(t)
+        t.alignment = WD_TABLE_ALIGNMENT.CENTER
+        for ri, row in enumerate(rows):
+            cells = t.add_row().cells
+            for ci in range(n):
+                c = cells[ci]; cell_margins(c, 45, 45)
+                txt = row[ci] if ci < len(row) else ""
+                p = c.paragraphs[0]
+                if ri == 0:
+                    shade_cell(c, TEAL); runs(p, txt, size=size + 0.5, color=WHITE, bold_all=True)
+                else:
+                    if ri % 2 == 0: shade_cell(c, "F1F8F7")
+                    runs(p, txt, size=size, color=INK, bold_all=(ci == 0))
+        # repeat header row if the table breaks across pages
+        trPr = t.rows[0]._tr.get_or_add_trPr()
+        h = OxmlElement("w:tblHeader"); h.set(qn("w:val"), "true"); trPr.append(h)
+        for row in t.rows:  # don't split a row across pages
+            trPr = row._tr.get_or_add_trPr()
+            cs = OxmlElement("w:cantSplit"); cs.set(qn("w:val"), "true"); trPr.append(cs)
+        if widths:
+            fixed_widths(t, widths)
+        return t
+
+    # ---- find the sections by title (falls back gracefully if renamed) ----
+    def norm(t):
+        return re.sub(r"[^a-z]+", " ", t.lower()).strip()
+
+    by = {}
+    for sec in sections:
+        k = norm(sec["title"])
+        if k.startswith("each day") and "start" in k: by["start"] = sec
+        elif k.startswith("each day") and "end" in k: by["end"] = sec
+        elif k == "each day" or k.startswith("each day during") or k.startswith("during the day"): by["day"] = sec
+        elif k.startswith("each week"): by["week"] = sec
+        elif k.startswith("each term"): by["term"] = sec
+        elif "milestone" in k: by["milestones"] = sec
+        elif k.startswith("quick reference"): by["quickref"] = sec
+        elif k.startswith("finding the tools"): by["tools"] = sec
+    used = {id(v) for v in by.values()}
+    others = [s_ for s_ in sections if id(s_) not in used]
+
+    # ================= PAGE 1 — EACH DAY =================
+    band(doc_row["title"], doc_row.get("subtitle"))
+    if doc_row.get("intro"):
+        t = d.add_table(rows=1, cols=1); borders(t, TEAL_LIGHT, 0, inside=False)
+        c = t.rows[0].cells[0]; shade_cell(c, TEAL_LIGHT); cell_margins(c, 60, 60, 160, 160)
+        runs(c.paragraphs[0], doc_row["intro"], size=9, color=INK)
+    spacer(8)
+
+    day_cols = [k for k in ("start", "day", "end") if k in by]
+    if day_cols:
+        section_heading("Each Day")
+        weights = {"start": 0.29, "day": 0.42, "end": 0.29}
+        tot = sum(weights[k] for k in day_cols)
+        widths = [usable_in * weights[k] / tot for k in day_cols]
+        labels = {"start": ("Start of the day", "Before students arrive"),
+                  "day": ("During the day", None),
+                  "end": ("End of the day", "Before you leave")}
+        t = d.add_table(rows=2, cols=len(day_cols)); borders(t)
+        for ci, k in enumerate(day_cols):
+            notes, _ = body_lines(by[k]["content"])
+            heading_cell(t.rows[0].cells[ci], labels[k][0], COL[k], labels[k][1] if not notes else notes[0])
+            c = t.rows[1].cells[ci]; cell_margins(c, 90, 90, 120, 120)
+            content = by[k]["content"]
+            if notes:  # first note already shown in the header
+                content = "\n".join(l for l in content.splitlines() if l.strip() != notes[0])
+            fill_column(c, content, size=9.5)
+        fixed_widths(t, widths)
+
+    # ================= PAGE 2 — EACH WEEK + EACH TERM =================
+    if "week" in by or "term" in by:
+        section_heading("Each Week  ·  Each Term", page_break=True)
+        _, wk = body_lines(by["week"]["content"]) if "week" in by else ([], [])
+        _, tm = body_lines(by["term"]["content"]) if "term" in by else ([], [])
+        half = (len(wk) + 1) // 2
+        cols = [("week", wk[:half]), ("week", wk[half:])] if wk else []
+        if tm:
+            cols.append(("term", tm))
+        widths = [usable_in * w for w in ([0.35, 0.35, 0.30] if (wk and tm) else [0.5, 0.5])][:len(cols)]
+        t = d.add_table(rows=2, cols=len(cols)); borders(t)
+        if wk:
+            hc = t.rows[0].cells[0].merge(t.rows[0].cells[1]) if len(cols) >= 2 and cols[1][0] == "week" else t.rows[0].cells[0]
+            heading_cell(hc, "Each Week", COL["week"], "Team meetings, records and planning")
+        if tm:
+            heading_cell(t.rows[0].cells[len(cols) - 1], "Each Term", COL["term"], "Assessment, attendance and sign-off")
+        for ci, (_, items) in enumerate(cols):
+            c = t.rows[1].cells[ci]; cell_margins(c, 90, 90, 120, 120)
+            for ii, it in enumerate(items):
+                checklist_item(c, it, ii == 0, size=9.5)
+        fixed_widths(t, widths)
+
+    # ================= MILESTONES =================
+    if "milestones" in by:
+        section_heading(by["milestones"]["title"], page_break=("week" not in by and "term" not in by))
+        notes = [l.strip() for l in by["milestones"]["content"].splitlines() if l.strip() and not l.strip().startswith("|")]
+        for n in notes:
+            p = d.add_paragraph(); runs(p, n, size=9, color=GREY); p.paragraph_format.space_after = Pt(4)
+        tl = [l for l in by["milestones"]["content"].splitlines() if l.strip().startswith("|")]
+        md_table(tl, widths=[usable_in * 0.16, usable_in * 0.56, usable_in * 0.28], size=9)
+
+    # ================= QUICK REFERENCE =================
+    if "quickref" in by:
+        section_heading(by["quickref"]["title"], page_break=True)
+        tl = [l for l in by["quickref"]["content"].splitlines() if l.strip().startswith("|")]
+        md_table(tl, widths=[usable_in * 0.30, usable_in * 0.42, usable_in * 0.28], size=9.5)
+
+    # ================= FINDING THE TOOLS — one column per portal section =================
+    if "tools" in by:
+        section_heading(by["tools"]["title"], page_break=True)
+        lines = by["tools"]["content"].splitlines()
+        intro, groups, cur = [], [], None
+        for ln in lines:
+            m = IMG_LINE.match(ln)
+            if m and Path(m.group(2)).name.startswith("section_"):
+                cur = {"header": m, "lines": []}; groups.append(cur); continue
+            if cur is None:
+                if ln.strip(): intro.append(ln.strip())
+            else:
+                cur["lines"].append(ln)
+        # anything after a bold "At the top of the portal" style line becomes its own column
+        final = []
+        for g in groups:
+            split_at = next((i for i, l in enumerate(g["lines"]) if re.fullmatch(r"\*\*.+\*\*", l.strip())), None)
+            if split_at is not None:
+                final.append({"header": g["header"], "lines": g["lines"][:split_at]})
+                final.append({"header": None, "title": g["lines"][split_at].strip().strip("*"), "lines": g["lines"][split_at + 1:]})
+            else:
+                final.append(g)
+        for n in intro:
+            p = d.add_paragraph(); runs(p, n, size=9, color=GREY); p.paragraph_format.space_after = Pt(4)
+        if final:
+            ncol = len(final)
+            colw = usable_in / ncol
+            img_w = min(3.2, colw - 0.3)
+            t = d.add_table(rows=1, cols=ncol); borders(t, "FFFFFF", 0)
+            for ci, g in enumerate(final):
+                c = t.rows[0].cells[ci]; cell_margins(c, 40, 40, 80, 80)
+                first = True
+
+                def para():
+                    nonlocal first
+                    p = c.paragraphs[0] if first else c.add_paragraph()
+                    first = False
+                    return p
+
+                def pic(m, width_in):
+                    path = image_path(m.group(2))
+                    p = para()
+                    if path:
+                        w = min(width_in, image_display_width(path) / 96)
+                        p.add_run().add_picture(str(path), width=Inches(w))
+                    else:
+                        runs(p, f"[{m.group(1) or m.group(2)}]", size=9, color=GREY)
+                    p.paragraph_format.space_before = Pt(6); p.paragraph_format.space_after = Pt(1)
+
+                if g.get("header") is not None:
+                    pic(g["header"], img_w)
+                else:
+                    p = para(); runs(p, g["title"], size=12, color=RGBColor(0x1E, 0x29, 0x3B), bold_all=True)
+                    p.paragraph_format.space_after = Pt(4)
+                for ln in g["lines"]:
+                    tt = ln.strip()
+                    if not tt:
+                        continue
+                    m = IMG_LINE.match(tt)
+                    if m:
+                        pic(m, img_w - 0.05)
+                    elif tt.startswith("> "):
+                        p = para(); runs(p, tt[2:], size=8.5, color=RGBColor(0x00, 0x4D, 0x40), bold_all=True)
+                        p.paragraph_format.space_before = Pt(3)
+                    else:
+                        p = para(); runs(p, tt, size=8.5, color=INK)
+                        p.paragraph_format.left_indent = Inches(0.08)
+            trPr = t.rows[0]._tr.get_or_add_trPr()
+            cs = OxmlElement("w:cantSplit"); cs.set(qn("w:val"), "true"); trPr.append(cs)
+            fixed_widths(t, [colw] * ncol)
+
+    # ================= anything else, in order =================
+    for sec in others:
+        section_heading(sec["title"])
+        notes, items = body_lines(sec["content"])
+        for n in notes:
+            if IMG_LINE.match(n) or n.startswith("|"):
+                continue
+            p = d.add_paragraph(); runs(p, n.lstrip("> "), size=9.5, color=INK)
+        tl = [l for l in sec["content"].splitlines() if l.strip().startswith("|")]
+        if tl:
+            md_table(tl)
+        if items:
+            t = d.add_table(rows=1, cols=1); c = t.rows[0].cells[0]
+            for ii, it in enumerate(items):
+                checklist_item(c, it, ii == 0)
+
+    buf = io.BytesIO()
+    d.save(buf)
+    return buf.getvalue()
+
+
+PRINT_LAYOUTS = {
+    "teacher-tracking-checklist": ("🖨️ Print version (landscape)", build_tracking_print_docx),
+}
 
 
 # ------------------------------------------------------------------
@@ -412,6 +866,9 @@ def parse_docx_to_sections(file_bytes: bytes, split_level: str):
     from docx.text.paragraph import Paragraph as DocxParagraph
 
     doc = DocxDocument(io.BytesIO(file_bytes))
+    if PRINT_TAG in (doc.core_properties.keywords or ""):
+        raise ValueError("this is the landscape PRINT version, which can't be uploaded. "
+                         "Download the EDITABLE Word version, make your changes in that, then upload it")
 
     def iter_block_items(parent):
         for child in parent.element.body.iterchildren():
@@ -449,6 +906,13 @@ def parse_docx_to_sections(file_bytes: bytes, split_level: str):
             continue
         if block.text.strip().startswith("CLC-LBU  |  Downloaded from the Staff Portal"):
             continue
+        pics = block._p.xpath(".//wp:docPr")
+        if pics and not block.text.strip():
+            for dp in pics:
+                fname = Path(dp.get("descr") or "").name
+                if fname.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
+                    target.append(f"![{dp.get('title') or ''}]({fname})")
+            continue
         if _is_split_heading(block, split_level):
             flush()
             current_title = block.text.strip()
@@ -466,7 +930,7 @@ def parse_docx_to_sections(file_bytes: bytes, split_level: str):
         if line:
             # Keep a blank line where a list/note/table meets ordinary text,
             # otherwise Markdown would run the text into the bullet above it.
-            kind = lambda l: "-" if l.startswith("- ") else (">" if l.startswith("> ") else ("|" if l.startswith("|") else "p"))
+            kind = lambda l: "-" if l.startswith("- ") else (">" if l.startswith("> ") else ("|" if l.startswith("|") else ("!" if l.startswith("![") else "p")))
             prev = next((l for l in reversed(target) if l.strip()), None)
             if prev is not None and target[-1].strip() and kind(prev) != kind(line) and "p" in (kind(prev), kind(line)):
                 target.append("")
@@ -499,6 +963,9 @@ def _upload_parse_widget(prefix):
                 st.session_state.pop(f"{prefix}_parsed", None)
             else:
                 st.session_state[f"{prefix}_parsed"] = {"intro": intro, "sections": sections, "filename": f.name}
+        except ValueError as e:
+            st.error(f"Can't use that file: {e}.")
+            st.session_state.pop(f"{prefix}_parsed", None)
         except Exception as e:
             st.error(f"Couldn't read that file ({e}). Make sure it's a .docx (Word 'Save As' if it's a .doc).")
             st.session_state.pop(f"{prefix}_parsed", None)
@@ -710,58 +1177,86 @@ SEED_DOC_TT = {
 }
 
 SEED_SECTIONS_TT = [
-    ("Every day — start of day", """- ☐ **By 8:30am:** Staff Bulletin checked on the staff portal, emails checked, phone calls made or returned.
-- ☐ **By 9:30am:** for every absent student, ring the caregiver and **record the reason on EMS**. All absences must be investigated and explained.
-- ☐ Late arrivals and early finishes noted so attendance in the **Behaviour Support tool** matches what happened."""),
-    ("Every day — as it happens", """Record at the time, not at the end of the week.
-- ☐ **Minor incident** → **Quick Incident Log** on the staff portal. It enters the Behaviour Support tool automatically — no second step.
-- ☐ **ABCH / Critical Incident** → **C.I. Bot** (preferred) or the Word template → **ABCH Report Formatter** → post to the **Teams ABCH channel** and tag **@Manager and @TC**. Same day.
-- ☐ **Any contact** with families, schools, SSS or agencies — call, email, text or conversation, however brief → **Communication Log** on the staff portal (date, who, method, summary).
-- ☐ **Any meeting** — TAC, Transition, Review — face-to-face, phone or email → documented and **uploaded to the student file**.
-- ☐ **Medication** given → medication log completed at the correct time. If given at a different time to the plan → medication error log, and inform the Site Manager and parent.
-- ☐ **Behaviour data tools** in use for a student (e.g. **Scatter Plot Tracker**, **Interval Support Tracker**) → filled in each session they apply to.
-- ☐ Stakeholder emails answered within **24–48 hours**."""),
-    ("Every day — end of day", """- ☐ Any incidents, contacts or meetings from today that weren't logged at the time → logged **before you leave**.
+    ("Each Day — Start of the Day", """- ☐ **By 8:30am:** Sign in on arrival at the front office. Staff Bulletin checked on the staff portal, emails checked, phone calls made or returned.
+- ☐ **By 9:30am: Attendance** — for every absent student, ring/text the caregiver and **record the reason on EMS**. All absences must be investigated and explained. Late arrivals and early finishes noted so attendance in the **Behaviour Support tool** matches what happened."""),
+    ("Each Day", """Record each day, not at the end of the week.
+- ☐ **Micro Behaviours:** in *Incident Management*. Record at least 1 micro behaviour for each student, each day.
+- ☐ **ABCH / Critical Incident:** record Critical Incidents using the C.I. Bot or the Word Template. CI needs to be completed and finished by the end of the day or within 24 hours.
+- ☐ **Communication:** record every communication in the **Communication Log** — any communication that has occurred (phone calls, emails, texts or face-to-face conversations) with families, school, SSS or agencies.
+- ☐ **Any meeting:** TAC, Transition, Review (face-to-face, phone or email) documented and **uploaded to the student file**.
+- ☐ **Behaviour data tools** in use for a student (e.g. **Scatter Plot Tracker**, **Interval Support Tracker**) filled in each session they apply to.
+- ☐ Stakeholder **Emails** answered within **24–48 hours**. If on leave for over 2 working days, an automatic email response needs to be implemented.
+- ☐ **Leaving Site:** please sign out and in at the front office as part of WH&S."""),
+    ("Each Day — End of the Day", """- ☐ Any incidents, contacts or meetings from today that weren't logged at the time → logged **before you leave**.
 - ☐ Emails checked before leaving from 3:30pm.
-- ☐ Student laptops/iPads locked away; program phone stored in the agreed location."""),
-    ("Every week", """- ☐ **Team meeting** held and **minuted in the Team Meetings tool** — agreements recorded with who is actioning them. Last week's actions reviewed before new business.
+- ☐ Student laptops/iPads locked away; program phone stored in the agreed location.
+- ☐ **Sign out** when leaving for the day at the front office."""),
+    ("Each Week", """- ☐ **Team meeting** held and **minuted in the Team Meetings tool** — agreements recorded with who is actioning them. Last week's actions reviewed before new business.
 - ☐ **Week A (student lens):** each student's goals, data and interventions discussed — bring the Behaviour Support, SMARTAR and attendance data to the meeting.
 - ☐ **Week B (system lens):** curriculum and program improvement.
 - ☐ Missed a meeting? Read the minutes and **action anything assigned to you**.
-- ☐ **OneNote student file — Checklist tab** updated for every student: tick off what's been completed so anyone can see where the placement is up to.
+- ☐ **OneNote student file: Checklist tab** updated for every student — tick off what's been completed so anyone can see where the placement is up to.
 - ☐ **SMARTAR / GAS progress** recorded for each student in **SGoal Quick Track**.
-- ☐ **Wednesday:** read newly referred student information (expected by 3:30pm) and the **Staff Bulletin** (sent COB Tuesday) before the 3:10pm staff meeting. Come ready to share data and strategies.
-- ☐ Offsite and student meetings for the coming week entered in the **CLC Calendar**; any Booking time entered in **NIT Bookings**."""),
-    ("Each student placement — milestones", """Full detail is in the **Teacher Case Management Process** document. The tracking points are:
-| When | What is recorded | Where |
+- ☐ **Wednesday:** read the Staff Bulletin (sent COB Tuesday) before the 3:10pm staff meeting.
+- ☐ Offsite and student meetings for the coming week entered in the **Daily Bulletin**; Booking time entered in **NIT Bookings**."""),
+    ("Each Student Placement — Milestones", """Full detail is in the **Teacher Case Management Process** document. The tracking points are:
+| When | What is Recorded | Where |
 | --- | --- | --- |
-| Before arrival | Student Information and Original SMARTAR Goals read; Review Meeting confirmed with TAC | OneNote student file |
-| First weeks | Baseline assessments: Sounds-Write, Word Aware, Big Ideas in Number | Assessment Data / student file |
-| First weeks | SMARTAR Goals amended with Leadership, converted to GAS | SMARTAR Goal Builder → copied to student file |
-| Review meeting | Review Report (draft to Leadership → print); Exit meeting scheduled; transition timetable shared | Reporting, Scheduled Meetings, Transition Plan tabs |
-| Transition | Transition timetable emailed to TAC, Leadership and Admin | Email + Transition Plan tab |
-| Exit meeting | Transition Report (with attendance data attached); exit confirmed by all TAC | Reporting tab; report to student file |
-| Conclusion | Transition Report sent to clc.admin281@schools.sa.edu.au for EMS upload | Email |
-| Archiving | All documents compiled and handed to Admin | Checklist tab |
-| Extension (only if needed) | Extension paperwork completed before the original dates lapse | Extension Requested tab |"""),
-    ("Each term", """- ☐ **Term assessment data** entered for every student.
-- ☐ Attendance concerns raised with leadership (see the Student Attendance Improvement Plan for ongoing non-attendance).
+| Before student starts | Student Information and Original SMARTAR Goals read; Review Meeting confirmed with TAC | OneNote student file |
+| Within the first weeks | Baseline assessments completed: Sounds-Write, Word Aware, Big Ideas in Number | Assessment Data / student file |
+| Within the first weeks | SMARTAR Goals amended with Leadership, converted to GAS | SMARTAR Goal Builder → copied to student file |
+| Review Meeting | Review Report: draft report emailed to Leadership 24hrs before the meeting; once sent back to you, print and have ready to share with TAC. At meeting: exit meeting scheduled; transition timetable agreed upon and shared; extension (if applicable) discussed and information shared around timelines and expectations | Reporting, Scheduled Meetings and Transition Plan tabs |
+| Transition Timetable | Transition timetable emailed to TAC, Leadership and Admin; uploaded to Student Files – Transition Plan | Email + Transition Plan tab |
+| Exit Meeting | Transition Report with attendance data attached; draft Exit report emailed to Leadership 24hrs before the meeting | Reporting tab; report to student file |
+| After Exit Meeting | Transition Report sent to clc.admin281@schools.sa.edu.au | Email |
+| Archiving | All documents compiled and handed to Admin | Checklist tab |"""),
+    ("Each Term", """- ☐ **Term assessment data** entered for every student.
+- ☐ **Attendance concerns** raised with leadership (see the Student Attendance Improvement Plan for ongoing non-attendance).
 - ☐ **End of Term Checklist** completed and signed off on the staff portal."""),
-    ("Quick reference — what goes where", """| What | Where | When |
+    ("Quick reference — What goes where", """| What | Where | When |
 | --- | --- | --- |
-| Student absence reason | EMS | By 9:30am |
-| Minor incident | Quick Incident Log | At the time |
-| ABCH / Critical Incident | C.I. Bot → ABCH Report Formatter → Teams ABCH (@Manager @TC) | Same day |
-| Contact with families, schools, agencies | Communication Log | At the time |
+| Student Absence | EMS | By 9:30am |
+| Micro Behaviours | Quick Incident Log | 1 or more recordings each day |
+| ABCH / Critical Incident | C.I. Bot → ABCH Report Formatter → Teams ABCH (@Manager @TC) | Same day or completed within 24 hours |
+| Contact with families, schools, agencies | Communication Log | Each day |
 | Meetings (TAC, Review, Transition, Exit) | Student file | Same day |
-| Medication given | Medication log | At the time |
-| Scatter Plot / Interval data | Scatter Plot Tracker / Interval Support Tracker | Each session it applies |
+| Tracking Tools | In the drop-down tiles | Where applicable |
 | Team meeting minutes and actions | Team Meetings tool | Weekly |
 | Case management progress | OneNote Checklist tab | Weekly, and as milestones happen |
 | Goal progress | SGoal Quick Track | Weekly |
-| Offsite meetings | CLC Calendar | Before the week |
+| Offsite meetings | CLC Bulletin | Before the week |
 | Term assessments | Assessment Data | Each term |
 | End of term sign-off | End of Term Checklist | End of term |"""),
+    ("Finding the tools on the portal", """Open the section on the portal home page, then click the tile.
+
+![Incident Management section](section_incident_management.png)
+![Quick Log tile](tile_quick_log.png)
+Record at least 1 micro behaviour for each student, each day.
+
+![ABCH Process tile](tile_abch_process.png)
+Record Critical Incidents using the C.I. Bot or the Word Template.
+
+![ABCH Report Formatter tile](tile_abch_report_formatter.png)
+Copy the report and paste, then format the report. Post to **TEAMS – ABC-H Documents** and tag **@Manager** and **@TC**.
+> CI needs to be completed and finished by the end of the day or within 24 hours.
+
+![Reporting Tools section](section_reporting_tools.png)
+![Communication Log tile](tile_communication_log.png)
+Record every communication that has occurred (phone calls, emails, texts or face-to-face conversations) with families, school, SSS or agencies.
+
+![Student Files tile](tile_student_files.png)
+Takes you into OneNote – CLC staff 2026 – Student Files 2026. Record in **Scheduled Meetings** all meetings that have been organised (TAC, Transition, Review).
+
+![Tracking Tools section](section_tracking_tools.png)
+These resources can be used to support tracking of behaviour and the student's profile, e.g.:
+
+![Sensory Overview tile](tile_sensory_overview.png)
+![SMARTAR Goal Builder tile](tile_smartar_goal_builder.png)
+Has each of the student's SMARTAR Goals.
+
+**At the top of the portal**
+![SGoal Quick Track tile](tile_sgoal_quick_track.png)
+Use this tool to track SMARTAR goals quickly."""),
 ]
 
 SEED_PACKS = [
@@ -821,10 +1316,20 @@ def _render_document(doc):
     col1, col2 = st.columns([3, 1])
     with col2:
         if sections:
+            pl = PRINT_LAYOUTS.get(doc.get("slug"))
+            if pl:
+                st.download_button(
+                    pl[0],
+                    data=_print_bytes(doc["id"], doc.get("updated_at") or ""),
+                    file_name=_docx_filename(doc).replace(".docx", "_print.docx"),
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True, type="primary",
+                    key=f"pdl_{doc['id']}",
+                )
             st.download_button(
-                "⬇️ Download full document (Word)",
+                "⬇️ Editable Word version" if pl else "⬇️ Download full document (Word)",
                 data=build_docx(doc, sections),
-                file_name=f"{(doc.get('doc_code','') + '_' + doc['title']).strip('_').replace(' ', '_')}.docx",
+                file_name=_docx_filename(doc),
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True,
                 key=f"dl_{doc['id']}",
@@ -841,7 +1346,7 @@ def _render_document(doc):
     expand_all = st.toggle("Expand all sections", value=False, key=f"exp_{doc['id']}")
     for sec in sections:
         with st.expander(sec["title"], expanded=expand_all):
-            st.markdown(sec.get("content") or "_(empty)_")
+            render_content(sec.get("content"))
 
     upd = doc.get("updated_at", "")
     if upd:
@@ -985,7 +1490,10 @@ def staff_view():
                     label = sec["title"] if scope_choice != "All documents" else \
                         f"{doc.get('doc_code','')} {doc['title']} → {sec['title']}".strip()
                     with st.expander(label):
-                        st.markdown(_highlight(sec.get("content") or "_(empty)_", query))
+                        render_content("\n".join(
+                            l if IMG_LINE.match(l) else _highlight(l, query)
+                            for l in (sec.get("content") or "").splitlines()
+                        ))
                         if st.button("Open full document →", key=f"kwopen_{doc['id']}_{sec['id']}"):
                             _open_document(doc["id"])
 
@@ -1011,7 +1519,7 @@ def staff_view():
                     label = sec["title"] if scope_choice != "All documents" else \
                         f"{doc.get('doc_code','')} {doc['title']} → {sec['title']}".strip()
                     with st.expander(label, expanded=(i == 0)):
-                        st.markdown(sec.get("content") or "_(empty)_")
+                        render_content(sec.get("content"))
                         if st.button("Open full document →", key=f"aiopen_{doc['id']}_{sec['id']}"):
                             _open_document(doc["id"])
 
@@ -1084,10 +1592,11 @@ def _doc_card(doc):
                 _open_document(doc["id"])
         with b2:
             if section_count:
+                has_print = doc.get("slug") in PRINT_LAYOUTS
                 st.download_button(
-                    "⬇️ Word",
-                    data=_docx_bytes(doc["id"], doc.get("updated_at") or ""),
-                    file_name=_docx_filename(doc),
+                    "🖨️ Print" if has_print else "⬇️ Word",
+                    data=(_print_bytes if has_print else _docx_bytes)(doc["id"], doc.get("updated_at") or ""),
+                    file_name=_docx_filename(doc).replace(".docx", "_print.docx") if has_print else _docx_filename(doc),
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                     use_container_width=True,
                     key=f"carddl_{doc['id']}",
@@ -1096,6 +1605,15 @@ def _doc_card(doc):
 
 def _docx_filename(doc):
     return f"{(doc.get('doc_code','') + '_' + doc['title']).strip('_').replace(' ', '_')}.docx"
+
+
+@st.cache_data(ttl=60)
+def _print_bytes(doc_id, updated_at):
+    """Landscape print version for documents that have one, cached per version."""
+    doc = next((d for d in fetch_documents(include_unpublished=True) if d["id"] == doc_id), None)
+    if not doc or doc.get("slug") not in PRINT_LAYOUTS:
+        return b""
+    return PRINT_LAYOUTS[doc["slug"]][1](doc, fetch_sections(doc_id))
 
 
 @st.cache_data(ttl=60)
@@ -1241,7 +1759,9 @@ def admin_view():
         st.markdown(
             "Use this when the document has been updated in Word. The easiest way: **download the current "
             "version below, edit it in Word, then upload it here**. Each section title in the download is a "
-            "Word *Heading 2* — keep new section titles in that style so they're picked up."
+            "Word *Heading 2* — keep new section titles in that style so they're picked up. "
+            "(Documents with a 🖨️ print version: edit the **editable** download, not the print one — "
+            "the print layout rebuilds itself from the content.)"
         )
         st.download_button(
             f"⬇️ Download current version ({len(sections)} sections) — keep as a backup",
@@ -1307,7 +1827,7 @@ def admin_view():
         with st.expander(f"{idx+1}. {sec['title']}"):
             s_title = st.text_input("Section title", value=sec["title"], key=f"st_{sec['id']}")
             s_content = st.text_area(
-                "Content — '- ' for bullets, **bold**, '> ' for a highlighted note",
+                "Content — '- ' for bullets, **bold**, '> ' for a highlighted note, ![caption](file.png) on its own line for an image",
                 value=sec.get("content", ""), height=260, key=f"sc_{sec['id']}",
             )
             c1, c2, c3, c4 = st.columns(4)
