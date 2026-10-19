@@ -165,11 +165,36 @@ def fetch_bookings(sb, start_date=None, end_date=None, status_filter=None):
     return [r for r in rows if r.get("booking_date")]
 
 
+def _is_ventia(r):
+    return bool((r.get("ventia_wo_number") or "").strip())
+
+
 def fetch_requests(sb):
-    """Open Ventia requests (no contractor booked yet), most urgent first."""
-    result = sb.table(TABLE_NAME).select("*").in_("status", REQUEST_STATUSES).execute()
-    rows = result.data or []
+    """Open Ventia jobs — lodged with Ventia and not yet completed or cancelled.
+    That includes jobs that are booked with a contractor: they stay here until
+    someone confirms the work is done. Most urgent first."""
+    result = (sb.table(TABLE_NAME).select("*")
+              .neq("status", "Completed").neq("status", "Cancelled").execute())
+    rows = [r for r in (result.data or []) if _is_ventia(r)]
     return sorted(rows, key=lambda r: (r.get("priority") or "P9", str(r.get("requested_date") or ""), r.get("id") or 0))
+
+
+def fetch_completed_requests(sb):
+    """Ventia jobs that have been confirmed complete, newest first."""
+    result = sb.table(TABLE_NAME).select("*").eq("status", "Completed").execute()
+    rows = [r for r in (result.data or []) if _is_ventia(r)]
+    return sorted(rows, key=lambda r: str(r.get("booking_date") or ""), reverse=True)
+
+
+def set_status(sb, row, new_status, message):
+    """Change a job's status, report the outcome after the rerun."""
+    try:
+        update_booking(sb, row["id"], {"status": new_status})
+    except Exception as _e:
+        st.error(f"⚠️ Couldn't update this job — nothing was changed: {explain_db_error(_e)}")
+    else:
+        flash(message)
+        st.rerun()
 
 
 def wo_matches(sb, wo_number, exclude_id=None):
