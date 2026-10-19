@@ -501,18 +501,54 @@ def request_form(sb, existing=None):
             st.rerun()
 
 
+def _booking_when(r):
+    """'Tue 21 Oct, 09:00–12:00' for a dated booking, else ''."""
+    if not r.get("booking_date"):
+        return ""
+    try:
+        d = pd.to_datetime(r["booking_date"]).date()
+    except Exception:
+        return str(r["booking_date"])
+    out = d.strftime("%a %-d %b")
+    st_t, en_t = (r.get("start_time") or "")[:5], (r.get("end_time") or "")[:5]
+    if st_t:
+        out += f", {st_t}" + (f"–{en_t}" if en_t else "")
+    return out
+
+
+def request_stage(r, today_d):
+    """(label, overdue) for where an open Ventia job is up to."""
+    status = r.get("status")
+    if status == "Requested":
+        return "Awaiting allocation", False
+    if status == "Allocated":
+        return "Allocated — needs booking", False
+    label = "Confirmed" if status == "Confirmed" else "Booked"
+    when = _booking_when(r)
+    overdue = False
+    try:
+        overdue = bool(r.get("booking_date")) and pd.to_datetime(r["booking_date"]).date() < today_d
+    except Exception:
+        pass
+    text = f"{label} {when}".strip()
+    if overdue:
+        text += " — date has passed, confirm if done"
+    return text, overdue
+
+
 def requests_view(sb, open_requests, load_error=None):
-    st.subheader("Open Ventia requests")
+    st.subheader("Open Ventia jobs")
     st.caption(
-        "Jobs lodged with Ventia that don't have a contractor booked yet — most urgent first. "
-        "When Ventia tells you who has been allocated and you've agreed a time, click **Book contractor**. "
-        "These don't appear on the Calendar or Daily Bulletin until they're booked."
+        "Every Ventia job that isn't finished yet, most urgent first. A job stays here from the moment you lodge it, "
+        "through allocation and booking, until you click **Mark job completed** once the work has been done. "
+        "Completed jobs move to the list below but still show in the Term view. "
+        "Jobs only appear on the Calendar and Daily Bulletin once they have a booking date."
     )
     if load_error:
-        st.error(f"⚠️ Couldn't load Ventia requests: {load_error}")
+        st.error(f"⚠️ Couldn't load Ventia jobs: {load_error}")
         return
     if not open_requests:
-        st.info("No open Ventia requests. Lodge one above and it will wait here until you book a contractor.")
+        st.info("No open Ventia jobs. Lodge one above and it will stay here until the work is completed.")
         return
 
     today_d = date.today()
@@ -520,18 +556,19 @@ def requests_view(sb, open_requests, load_error=None):
         rid = r["id"]
         wo = r.get("ventia_wo_number") or "no WO no."
         prio = r.get("priority") or "—"
-        state = "Awaiting allocation" if r.get("status") == "Requested" else "Allocated — needs booking"
-        title = f"{prio} · WO {wo} · {r.get('work_type') or ''}"
+        stage, overdue = request_stage(r, today_d)
+        dated = bool(r.get("booking_date"))
+        title = f"{'⏰ ' if overdue else ''}{prio} · WO {wo} · {r.get('work_type') or ''}"
         if r.get("work_summary"):
             title += f" — {r['work_summary']}"
-        title += f"  [{state}]"
+        title += f"  [{stage}]"
 
         with st.expander(title):
             colour = PRIORITY_COLOURS.get(prio, "#6b7280")
             st.markdown(
                 f'<span style="background:{colour};color:white;padding:.15rem .6rem;border-radius:10px;'
                 f'font-weight:700;font-size:.85rem;">{html.escape(prio)}</span> '
-                f'<span style="font-weight:600;">{state}</span>',
+                f'<span style="font-weight:600;">{html.escape(stage)}</span>',
                 unsafe_allow_html=True,
             )
             if r.get("requested_date"):
@@ -544,8 +581,13 @@ def requests_view(sb, open_requests, load_error=None):
                     pass
             st.write(f"**Service required:** {r.get('work_type') or ''}")
             st.write(f"**Location:** {r.get('location_onsite') or ''}")
+            if dated:
+                st.write(f"**Booked for:** {_booking_when(r)}")
             if r.get("company_name"):
-                st.write(f"**Contractor allocated:** {r['company_name']}")
+                contact = r.get("contact_name") or ""
+                if r.get("contact_phone"):
+                    contact += f" — {r['contact_phone']}" if contact else r["contact_phone"]
+                st.write(f"**Contractor:** {r['company_name']}" + (f" ({contact})" if contact else ""))
             if r.get("internal_notes"):
                 st.write(f"**Notes:** {r['internal_notes']}")
 
@@ -564,12 +606,37 @@ def requests_view(sb, open_requests, load_error=None):
                         flash(f"WO {wo} marked as allocated — book the contractor when you've agreed a time.")
                         st.rerun()
 
+            if dated:
+                # Booked with a contractor: the next step is confirming the work was done
+                if st.button("✅ Mark job completed", key=f"done_{rid}", type="primary"):
+                    set_status(sb, r, "Completed",
+                               f"✅ WO {wo} marked completed. It has left the open list and still shows in the Term view.")
+            else:
+                st.caption("Not booked yet. If the work has already been done (or Ventia dealt with it directly), "
+                           "you can mark it completed here — pick the date it was done so it shows in the Term view.")
+                done_date = st.date_input("Date the work was done", value=today_d, key=f"donedate_{rid}")
+                if st.button("✅ Mark job completed", key=f"donenow_{rid}", type="primary"):
+                    try:
+                        update_booking(sb, rid, {"status": "Completed", "booking_date": done_date.isoformat()})
+                    except Exception as _e:
+                        st.error(f"⚠️ Couldn't update this job — nothing was changed: {explain_db_error(_e)}")
+                    else:
+                        flash(f"✅ WO {wo} marked completed on {done_date.strftime('%a %-d %b')}. "
+                              "It has left the open list and shows in the Term view.")
+                        st.rerun()
+
             ca, cb, cc = st.columns(3)
             with ca:
-                if st.button("📅 Book contractor", key=f"book_{rid}", type="primary"):
-                    st.session_state.pop("editing_request", None)
-                    st.session_state["editing_booking"] = r
-                    st.rerun()
+                if dated:
+                    if st.button("📅 Edit booking", key=f"editbk_{rid}"):
+                        st.session_state.pop("editing_request", None)
+                        st.session_state["editing_booking"] = r
+                        st.rerun()
+                else:
+                    if st.button("📅 Book contractor", key=f"book_{rid}", type="primary"):
+                        st.session_state.pop("editing_request", None)
+                        st.session_state["editing_booking"] = r
+                        st.rerun()
             with cb:
                 if st.button("✏️ Edit request", key=f"editreq_{rid}"):
                     st.session_state.pop("editing_booking", None)
@@ -577,14 +644,33 @@ def requests_view(sb, open_requests, load_error=None):
                     st.rerun()
             with cc:
                 sure = st.checkbox("Tick to confirm cancelling", key=f"cancel_ok_{rid}")
-                if st.button("🚫 Cancel request", key=f"cancel_{rid}", disabled=not sure):
-                    try:
-                        update_booking(sb, rid, {"status": "Cancelled"})
-                    except Exception as _e:
-                        st.error(f"⚠️ Couldn't cancel this request: {explain_db_error(_e)}")
-                    else:
-                        flash(f"WO {wo} cancelled.")
-                        st.rerun()
+                if st.button("🚫 Cancel job", key=f"cancel_{rid}", disabled=not sure):
+                    set_status(sb, r, "Cancelled", f"WO {wo} cancelled.")
+
+
+def completed_view(sb, completed, load_error=None):
+    """Closed Ventia jobs — out of the open list, still in the Term view."""
+    with st.expander(f"✅ Completed Ventia jobs ({len(completed)})"):
+        if load_error:
+            st.error(f"⚠️ Couldn't load completed jobs: {load_error}")
+            return
+        if not completed:
+            st.caption("Nothing has been marked completed yet.")
+            return
+        st.caption("Finished jobs, newest first. They still show in the Term view and the bookings list. "
+                   "Use Reopen if one was marked completed by mistake.")
+        for r in completed:
+            rid = r["id"]
+            wo = r.get("ventia_wo_number") or ""
+            c1, c2 = st.columns([6, 1])
+            with c1:
+                line = f"**{r.get('priority') or '—'} · WO {wo}** — {build_public_summary(r.get('work_type',''), r.get('work_summary',''))}"
+                extra = [x for x in (r.get("company_name"), _booking_when(r)) if x]
+                st.write(line + (" · " + " · ".join(extra) if extra else ""))
+            with c2:
+                if st.button("↩️ Reopen", key=f"reopen_{rid}"):
+                    set_status(sb, r, "Booked" if r.get("booking_date") else "Requested",
+                               f"WO {wo} reopened — it is back in the open Ventia jobs list.")
 
 
 # ---------------------------------------------------------------------------
@@ -654,11 +740,18 @@ def list_view(sb):
             if b.get("internal_notes"):
                 st.write(f"**Internal notes:** {b['internal_notes']}")
 
-            colA, colB = st.columns(2)
+            colA, colM, colB = st.columns(3)
             with colA:
                 if st.button("Edit", key=f"edit_{b['id']}"):
                     st.session_state["editing_booking"] = b
                     st.rerun()
+            with colM:
+                if b.get("status") in ("Booked", "Confirmed"):
+                    if st.button("✅ Mark completed", key=f"complete_{b['id']}"):
+                        set_status(sb, b, "Completed", "✅ Marked completed — it still shows in the Term view.")
+                elif b.get("status") == "Completed":
+                    if st.button("↩️ Reopen", key=f"reopenbk_{b['id']}"):
+                        set_status(sb, b, "Booked", "Booking reopened.")
             with colB:
                 if st.button("Delete", key=f"delete_{b['id']}"):
                     delete_booking(sb, b["id"])
@@ -704,6 +797,7 @@ def term_view(sb):
 
     term_no, t_start, t_end = terms[term_idx]
     st.markdown(f"**Term {term_no}, {year}** \u2014 {t_start.strftime('%A %-d %B')} to {t_end.strftime('%A %-d %B')}")
+    st.caption("Left-edge colour shows status: amber = Booked \u00b7 green = Confirmed \u00b7 grey with \u2713 = Completed \u00b7 red = Cancelled")
 
     bookings = fetch_bookings(sb, t_start, t_end)
     by_date = {}
@@ -745,8 +839,8 @@ def term_view(sb):
                         chips = ""
                         for b in day_bookings:
                             label = build_public_summary(b.get("work_type",""), b.get("work_summary",""))
-                            t_str = (b.get("start_time") or "")[:5]
                             status = b.get("status","")
+                            t_str = ("✓ " if status == "Completed" else "") + (b.get("start_time") or "")[:5]
                             status_dot = {"Booked":"#e8a125","Confirmed":"#4a8f33","Completed":"#9ca3af","Cancelled":"#c0392b"}.get(status, "#9ca3af")
                             chips += (
                                 f'<div style="background:#eef6f6;border-left:3px solid {status_dot};padding:.25rem .4rem;'
@@ -814,13 +908,19 @@ def main():
     except Exception as _req_err:
         open_requests, request_err = [], str(_req_err)
 
+    try:
+        completed_rows, completed_err = fetch_completed_requests(sb), None
+    except Exception as _done_err:
+        completed_rows, completed_err = [], str(_done_err)
+
     tab0, tab1, tab2, tab3 = st.tabs([
-        f"📨 Ventia requests ({len(open_requests)})", "📋 View bookings", "➕ Add booking", "🗓️ Term view",
+        f"📨 Ventia jobs ({len(open_requests)} open)", "📋 View bookings", "➕ Add booking", "🗓️ Term view",
     ])
     with tab0:
         with st.expander("➕ Lodge a new Ventia request", expanded=not open_requests):
             request_form(sb)
         requests_view(sb, open_requests, request_err)
+        completed_view(sb, completed_rows, completed_err)
     with tab1:
         list_view(sb)
     with tab2:
