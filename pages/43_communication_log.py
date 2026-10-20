@@ -43,7 +43,7 @@ TABLE_NAME = "student_communications"
 ARCHIVE_TABLE = "student_comm_archive"
 ATTACH_TABLE = "comm_attachments"
 BUCKET = "comm-attachments"
-ALLOWED_EXT = ["png", "jpg", "jpeg", "gif", "webp", "pdf"]
+ALLOWED_EXT = ["png", "jpg", "jpeg", "gif", "webp", "pdf", "doc", "docx"]
 
 ATTACH_WARNING = (
     "⚠️ **Don't attach anything containing personal information or photos of students** "
@@ -387,7 +387,7 @@ def render_attachments(client, comm_id, key_prefix):
         st.caption("No attachments on this record yet.")
 
     st.warning(ATTACH_WARNING)
-    add_files = st.file_uploader("Add image(s) / PDF(s) to this record",
+    add_files = st.file_uploader("Add image(s), PDF(s) or Word doc(s) to this record",
                                  type=ALLOWED_EXT, accept_multiple_files=True,
                                  key=f"{key_prefix}_add")
     add_label = st.text_input("Label for the above (optional)", key=f"{key_prefix}_lbl",
@@ -1287,7 +1287,7 @@ with tab_log:
 
     st.markdown("**Attachments (optional)**")
     st.warning(ATTACH_WARNING)
-    new_files = st.file_uploader("Attach image(s) / PDF(s)", type=ALLOWED_EXT,
+    new_files = st.file_uploader("Attach image(s), PDF(s) or Word doc(s)", type=ALLOWED_EXT,
                                  accept_multiple_files=True,
                                  key=f"log_files_{st.session_state.up_seed}")
     new_label = st.text_input("Label for the attachment(s) (optional)",
@@ -1645,7 +1645,7 @@ with tab_students:
                 st.session_state.q_seed = 0
             st.markdown("**Attachments (optional)**")
             st.warning(ATTACH_WARNING)
-            q_files = st.file_uploader("Attach image(s) / PDF(s)", type=ALLOWED_EXT,
+            q_files = st.file_uploader("Attach image(s), PDF(s) or Word doc(s)", type=ALLOWED_EXT,
                                        accept_multiple_files=True,
                                        key=f"q_files_{st.session_state.q_seed}")
             q_lbl = st.text_input("Label for the attachment(s) (optional)",
