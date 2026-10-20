@@ -624,7 +624,7 @@ def build_tracking_print_docx(doc_row, sections) -> bytes:
         p = d.add_paragraph(); p.paragraph_format.space_after = Pt(0)
         r = p.add_run(""); p.paragraph_format.line_spacing = Pt(pt)
 
-    def md_table(lines, widths=None, size=9):
+    def md_table(lines, widths=None, size=9, pad=45):
         rows = []
         for ln in lines:
             cells = [c.strip() for c in ln.strip().strip("|").split("|")]
@@ -639,7 +639,7 @@ def build_tracking_print_docx(doc_row, sections) -> bytes:
         for ri, row in enumerate(rows):
             cells = t.add_row().cells
             for ci in range(n):
-                c = cells[ci]; cell_margins(c, 45, 45)
+                c = cells[ci]; cell_margins(c, pad, pad)
                 txt = row[ci] if ci < len(row) else ""
                 p = c.paragraphs[0]
                 if ri == 0:
@@ -671,6 +671,7 @@ def build_tracking_print_docx(doc_row, sections) -> bytes:
         elif k.startswith("each term"): by["term"] = sec
         elif "milestone" in k: by["milestones"] = sec
         elif k.startswith("quick reference"): by["quickref"] = sec
+        elif k.startswith("meetings") or ("meeting" in k and ("prepar" in k or k.startswith("before a meeting"))): by["meetprep"] = sec
         elif k.startswith("finding the tools"): by["tools"] = sec
     used = {id(v) for v in by.values()}
     others = [s_ for s_ in sections if id(s_) not in used]
@@ -746,11 +747,56 @@ def build_tracking_print_docx(doc_row, sections) -> bytes:
         tl = [l for l in by["milestones"]["content"].splitlines() if l.strip().startswith("|")]
         caption(md_table(tl, widths=[usable_in * 0.16, usable_in * 0.56, usable_in * 0.28], size=9), "clc:milestones")
 
+    # ================= PREPARING FOR A MEETING (top of the quick reference page) =================
+    if "meetprep" in by:
+        section_heading(by["meetprep"]["title"], page_break=True)
+        groups, intro_m, cur = [], [], None
+        for ln in by["meetprep"]["content"].splitlines():
+            t_ = ln.strip()
+            if not t_:
+                continue
+            if re.fullmatch(r"\*\*[^*]+\*\*", t_):
+                cur = {"name": t_.strip("*"), "items": []}; groups.append(cur)
+            elif t_.startswith("- "):
+                if cur is None:
+                    cur = {"name": "", "items": []}; groups.append(cur)
+                cur["items"].append(re.sub(r"^☐\s*", "", t_[2:].strip()))
+            else:
+                intro_m.append(t_)
+        notes, items = body_lines(by["meetprep"]["content"])
+        for n in intro_m:
+            p = d.add_paragraph(); runs(p, n, size=9.5, color=GREY); p.paragraph_format.space_after = Pt(4)
+        if groups and all(g["name"] for g in groups):
+            weights = [max(1.0, len(g["items"]) ** 0.5) for g in groups]
+            widths = [usable_in * w / sum(weights) for w in weights]
+            fills = ["00695C", "00796B", "004D40", "00695C"]
+            t = d.add_table(rows=2, cols=len(groups)); borders(t)
+            caption(t, f"clc:meetings:{len(groups)}")
+            for ci, g in enumerate(groups):
+                heading_cell(t.rows[0].cells[ci], g["name"], fills[ci % len(fills)])
+                c = t.rows[1].cells[ci]; cell_margins(c, 90, 90, 120, 120)
+                for ii, it in enumerate(g["items"]):
+                    checklist_item(c, it, ii == 0, size=9.5)
+            fixed_widths(t, widths)
+            items = []  # already drawn
+        if items:
+            half = (len(items) + 1) // 2
+            t = d.add_table(rows=1, cols=2); borders(t)
+            caption(t, "clc:meetprep")
+            for ci, chunk in enumerate([items[:half], items[half:]]):
+                c = t.rows[0].cells[ci]; shade_cell(c, "F1F8F7"); cell_margins(c, 90, 90, 120, 120)
+                for ii, it in enumerate(chunk):
+                    checklist_item(c, it, ii == 0, size=9.5)
+            fixed_widths(t, [usable_in / 2, usable_in / 2])
+        spacer(8)
+
     # ================= QUICK REFERENCE =================
     if "quickref" in by:
-        section_heading(by["quickref"]["title"], page_break=True)
+        section_heading(by["quickref"]["title"], page_break=("meetprep" not in by))
         tl = [l for l in by["quickref"]["content"].splitlines() if l.strip().startswith("|")]
-        caption(md_table(tl, widths=[usable_in * 0.30, usable_in * 0.42, usable_in * 0.28], size=9.5), "clc:quickref")
+        tight = "meetprep" in by  # shares a page with the meetings box
+        caption(md_table(tl, widths=[usable_in * 0.30, usable_in * 0.42, usable_in * 0.28],
+                         size=8.5 if tight else 9.5, pad=25 if tight else 45), "clc:quickref")
 
     # ================= FINDING THE TOOLS — one column per portal section =================
     if "tools" in by:
@@ -965,6 +1011,25 @@ def parse_tracking_print_docx(docx_doc):
                 (wk if k == "week" else tm).extend(items)
             if wk: content["week"] = "\n".join(f"- ☐ {it}" for it in wk)
             if tm: content["term"] = "\n".join(f"- ☐ {it}" for it in tm)
+        elif tag.startswith("clc:meetings:"):
+            from docx.table import _Cell
+            heads = t.rows[0]._tr.findall(qn("w:tc")); bodies = t.rows[1]._tr.findall(qn("w:tc"))
+            lines = list(pending_notes)
+            for hc, bc in zip(heads, bodies):
+                hp = [p for p in _Cell(hc, t).paragraphs if p.text.strip()]
+                name = hp[0].text.strip() if hp else ""
+                name = name[:1] + name[1:].lower() if name.isupper() else name  # header is shown in capitals
+                lines.append(f"**{name}**")
+                lines += [f"- ☐ {it}" for it in cell_items(_Cell(bc, t))[1]]
+            content["meetprep"] = "\n".join(lines)
+            pending_notes = []
+        elif tag == "clc:meetprep":
+            items = []
+            for tc in t.rows[0]._tr.findall(qn("w:tc")):
+                from docx.table import _Cell
+                items += cell_items(_Cell(tc, t))[1]
+            content["meetprep"] = "\n".join(pending_notes + [f"- ☐ {it}" for it in items])
+            pending_notes = []
         elif tag in ("clc:milestones", "clc:quickref"):
             k = tag.split(":")[1]
             lines = pending_notes + [table_md(t)]
@@ -1430,13 +1495,30 @@ SEED_SECTIONS_TT = [
     ("Each Term", """- ☐ **Term assessment data** entered for every student.
 - ☐ **Attendance concerns** raised with leadership (see the Student Attendance Improvement Plan for ongoing non-attendance).
 - ☐ **End of Term Checklist** completed and signed off on the staff portal."""),
+    ("Meetings — Before, During and After", """For every meeting (TAC, Transition, Review, Exit and any other student meeting).
+
+**Before the meeting**
+- ☐ **Book at the right time:** meetings are booked **before school, after school or in NIT time** as a priority.
+- ☐ **Remind all expected attendees** of the meeting by email, call or text.
+- ☐ **Book the meeting room** if required, using **Meeting Room Booking** on the portal.
+- ☐ **Book NIT Bookings** if required and available.
+
+**During the meeting**
+- ☐ **Record minutes.** Ask attendees for permission before recording the meeting.
+
+**After the meeting**
+- ☐ **Record a recount of the meeting and the actions** agreed (who is doing what, and by when).
+- ☐ **Proofread the transcript in the Minutes Polisher** (Meeting Tools).
+- ☐ **Save to the Communication Log and the Student Files (OneNote).** In OneNote, create a **Meetings** folder if there isn't one, with a subfolder for each meeting type (TAC, Transition, Review, Exit)."""),
     ("Quick reference — What goes where", """| What | Where | When |
 | --- | --- | --- |
 | Student Absence | EMS | By 9:30am |
 | Micro Behaviours | Quick Incident Log | 1 or more recordings each day |
 | ABCH / Critical Incident | C.I. Bot → ABCH Report Formatter → Teams ABCH (@Manager @TC) | Same day or completed within 24 hours |
 | Contact with families, schools, agencies | Communication Log | Each day |
-| Meetings (TAC, Review, Transition, Exit) | Student file | Same day |
+| Meetings (TAC, Review, Transition, Exit) | Student Files (OneNote) — Meetings folder + Communication Log | Same day |
+| Meeting preparation | Attendees reminded (email/call/text); Meeting Room Booking and NIT Bookings if required | Before the meeting |
+| Meeting minutes and actions | Minutes Polisher (Meeting Tools) → Communication Log + Student Files | After the meeting |
 | Tracking Tools | In the drop-down tiles | Where applicable |
 | Team meeting minutes and actions | Team Meetings tool | Weekly |
 | Case management progress | OneNote Checklist tab | Weekly, and as milestones happen |
