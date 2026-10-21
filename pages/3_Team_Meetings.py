@@ -1577,2260 +1577,711 @@ def render_specialist_meeting():
 # PROGRAM MEETING (JP/PY/SY) - WITH SMARTAR INTEGRATION
 # ─────────────────────────────────────────────────────────────────────────────
 
-def render_program_meeting(program):
-    import json as _json
-    prog_label = PROGRAMS[program]["label"]
-    accent = PROGRAMS[program]["color"]
+# ─────────────────────────────────────────────────────────────────────────────
+# PROGRAM MEETINGS (v2) — one structure for every meeting type
+# Student Lens, System Lens and Ad-Hoc all share the same sections:
+#   1. Meeting details (type is ticked here)
+#   2. Agenda items (optional, set before the meeting)
+#   3. Transcript or summary (paste or upload)
+#   4. Minutes (generated from 2 + 3, editable, Polisher-style)
+#   5. Save & download
+# Records stay in tm_program_meetings. Old records are never rewritten on
+# open — they are only changed when you press Save.
+# ─────────────────────────────────────────────────────────────────────────────
+import re
 
-    # Auto-save status display
-    if st.session_state.autosave_message:
-        st.caption(st.session_state.autosave_message)
+MEETING_TYPES = {
+    "student": {"label": "Student Lens",   "week_type": "A",      "icon": "🔵"},
+    "system":  {"label": "System Lens",    "week_type": "B",      "icon": "🟡"},
+    "adhoc":   {"label": "Ad-Hoc Meeting", "week_type": "ad-hoc", "icon": "⚪"},
+}
+_TYPE_FROM_WEEK = {"A": "student", "B": "system", "ad-hoc": "adhoc"}
+_PM_MINUTES_MODEL = "openai/gpt-oss-120b"
+_PM_OPTIONAL_COLS = ("agenda_items", "source_transcript")
 
-    # Fetch past meetings for this program
-    past_meetings = fetch("tm_program_meetings", {"program": program}, "meeting_date")
+_PM_SYSTEM = """You are a professional minute-taker for Cowandilla Learning Centre (CLC), Learning & Behaviour Unit, an alternative education setting in South Australia. Turn the transcript or summary into polished, sendable meeting minutes.
 
-    # ── Duplicate check banner ────────────────────────────────────────────────
-    dup_groups = find_duplicate_meeting_groups(program)
-    if dup_groups:
-        with st.expander(f"⚠️ Duplicate check — {len(dup_groups)} meeting(s) saved more than once", expanded=True):
-            st.caption("These meetings share the same date / term / week / type. Keep the newest and remove the extras.")
-            for sig, recs in dup_groups.items():
-                _, mdate, wtype, mterm, mweek = sig
-                st.markdown(f"**{mdate} · Term {mterm} · Week {mweek} · Type {wtype or '—'}** — {len(recs)} copies")
-                # recs are newest-first already from fetch order is by date; sort by id text desc
-                recs_sorted = sorted(recs, key=lambda r: str(r.get("updated_at") or r.get("created_at") or r.get("id") or ""), reverse=True)
-                keep = recs_sorted[0]
-                st.caption(f"Keeping most recent (ID {keep.get('id')}). Extras: {', '.join(str(r.get('id')) for r in recs_sorted[1:])}")
-                if st.session_state.get("admin"):
-                    if st.button(f"🗑️ Delete {len(recs_sorted)-1} extra copy(ies)", key=f"dedupe_{program}_{mdate}_{wtype}_{mweek}"):
-                        deleted = 0
-                        for r in recs_sorted[1:]:
-                            try:
-                                delete_row("tm_program_meetings", r.get("id"))
-                                deleted += 1
-                            except Exception as _e:
-                                st.error(f"Could not delete ID {r.get('id')}: {_e}")
-                        st.success(f"Removed {deleted} duplicate copy(ies).")
-                        st.rerun()
-                else:
-                    st.caption("🔐 Log in as admin (sidebar) to remove duplicates.")
-        # refresh list after potential changes
-        past_meetings = fetch("tm_program_meetings", {"program": program}, "meeting_date")
-
-    # Meeting selection - New or Edit existing
-    st.markdown("#### 📂 Select Meeting")
-    # past_meetings is date-descending; show the newest 20 (newest first) so a
-    # meeting you just saved is always selectable at the top.
-    recent_records = past_meetings[:20]
-    meeting_options = ["➕ New Meeting"] + [
-        f"{rec.get('meeting_date','')} - Term {rec.get('term','')} W{rec.get('week_number','')} - Week {rec.get('week_type','')}"
-        for rec in recent_records
-    ]
-
-    # If we arrived back from the Goal Builder ("Return to Team Meeting"), reopen
-    # the exact meeting that was being worked on so the spotlight (with the goal
-    # just created) and all notes are right there.
-    _open_id = st.query_params.get("open_meeting")
-    if _open_id:
-        _match = next((r for r in recent_records if str(r.get("id")) == str(_open_id)), None)
-        if _match:
-            st.session_state.current_meeting_id = _match["id"]
-            try:
-                if _match.get("student_concerns"):
-                    st.session_state[f"pm_concerns_{program}"] = _json.loads(_match["student_concerns"])
-                if _match.get("smartar_spotlight"):
-                    st.session_state[f"pm_smartar_{program}"] = _json.loads(_match["smartar_spotlight"])
-                if _match.get("priority_focus"):
-                    st.session_state[f"pm_priority_{program}"] = _json.loads(_match["priority_focus"])
-                if _match.get("actions"):
-                    st.session_state[f"pm_actions_{program}"] = _json.loads(_match["actions"])
-            except Exception:
-                pass
-            # Pull the freshly created goal in from the Goal Builder right away
-            try:
-                fetch_student_smartar_goals.clear()
-            except Exception:
-                pass
-        # Clear the param so later manual navigation isn't forced back here
-        try:
-            del st.query_params["open_meeting"]
-        except Exception:
-            pass
-
-    # Pre-select the meeting matching current_meeting_id (e.g. the one just saved).
-    # This is driven entirely by the `index` argument with NO widget key, so we
-    # never write the selectbox's own session_state key — Streamlit forbids that
-    # once the widget has been instantiated, which was causing save failures.
-    default_index = 0
-    if st.session_state.current_meeting_id:
-        for _i, _rec in enumerate(recent_records):
-            if str(_rec.get("id")) == str(st.session_state.current_meeting_id):
-                default_index = _i + 1  # +1 to skip the "➕ New Meeting" entry
-                break
-
-    selected_meeting = st.selectbox(
-        "Choose a meeting to edit or create new",
-        options=meeting_options,
-        index=default_index,
-    )
-    
-    # Load existing meeting if selected
-    selected_record = None
-    if selected_meeting != "➕ New Meeting":
-        # Find the selected record (aligned with meeting_options order)
-        selected_idx = meeting_options.index(selected_meeting) - 1
-        selected_record = recent_records[selected_idx]
-        
-        # Set current_meeting_id so it updates instead of creating new
-        if not st.session_state.current_meeting_id or st.session_state.current_meeting_id != selected_record['id']:
-            st.session_state.current_meeting_id = selected_record['id']
-            
-            # Load data into session state
-            try:
-                if selected_record.get('student_concerns'):
-                    st.session_state[f"pm_concerns_{program}"] = _json.loads(selected_record['student_concerns'])
-                if selected_record.get('smartar_spotlight'):
-                    st.session_state[f"pm_smartar_{program}"] = _json.loads(selected_record['smartar_spotlight'])
-                if selected_record.get('priority_focus'):
-                    st.session_state[f"pm_priority_{program}"] = _json.loads(selected_record['priority_focus'])
-                if selected_record.get('actions'):
-                    st.session_state[f"pm_actions_{program}"] = _json.loads(selected_record['actions'])
-            except:
-                pass
-        
-        st.info(f"✏️ Editing existing meeting - Meeting ID: {selected_record['id']}")
-        
-        # Show saved minutes in an expander for reference
-        if selected_record.get('meeting_minutes'):
-            with st.expander("📄 View Saved Minutes from This Meeting", expanded=False):
-                st.markdown(selected_record['meeting_minutes'])
-    else:
-        # Clear meeting_id for new meeting
-        if selected_meeting == "➕ New Meeting" and st.session_state.current_meeting_id:
-            st.session_state.current_meeting_id = None
-            # Clear session state (lists)
-            for k in [f"pm_concerns_{program}", f"pm_smartar_{program}",
-                      f"pm_priority_{program}", f"pm_actions_{program}"]:
-                st.session_state.pop(k, None)
-            # Also purge per-row widget states so a fresh meeting starts genuinely blank
-            for wk in list(st.session_state.keys()):
-                if wk.startswith(f"con_notes_{program}_") or wk.startswith(f"sm_notes_{program}_") \
-                   or wk.startswith(f"sm_notes_b_{program}_"):
-                    st.session_state.pop(wk, None)
-    
-    st.markdown("---")
-
-    # Fetch students for autocomplete
-    @st.cache_data(ttl=120)
-    def fetch_students(prog):
-        names = []
-        try:
-            import os
-            from supabase import create_client as _cc
-            burl = st.secrets.get("BEHAVIOUR_SUPABASE_URL","") or os.environ.get("BEHAVIOUR_SUPABASE_URL","")
-            bkey = st.secrets.get("BEHAVIOUR_SUPABASE_KEY","") or os.environ.get("BEHAVIOUR_SUPABASE_KEY","")
-            if burl:
-                bsb = _cc(burl, bkey)
-                res = bsb.table("students").select("id,name,year_level").eq("archived", False).execute()
-                if res.data:
-                    names = [s["name"] for s in res.data]
-        except Exception:
-            pass
-        try:
-            res2 = supabase.table("scatter_students").select("name").execute()
-            if res2.data:
-                scatter_names = [s["name"] for s in res2.data if s.get("name")]
-                for n in scatter_names:
-                    if n not in names:
-                        names.append(n)
-        except Exception:
-            pass
-        return sorted(names)
-
-    student_names = fetch_students(program)
-
-    last_records = fetch("tm_program_meetings", {"program": program}, "meeting_date")
-    last_week_type = None
-    # REMOVED: last_actions = [] - no more carrying forward old actions
-    if last_records:
-        last = last_records[-1]
-        last_week_type = last.get("week_type")
-        # Old actions are NOT carried forward anymore - each meeting starts fresh
-
-    suggested_type = "B" if last_week_type == "A" else "A"
-
-    wt_col1, wt_col2 = st.columns([3, 2])
-    with wt_col1:
-        week_type = st.radio(
-            "Meeting type",
-            ["A — Student Lens", "B — System Lens", "📋 Ad-hoc Meeting"],
-            index=0 if suggested_type == "A" else 1,
-            horizontal=True,
-            key=f"pm_wt_{program}",
-        )
-    with wt_col2:
-        if last_week_type:
-            st.caption(f"Last scheduled meeting: Week {last_week_type}")
-
-    is_week_a = week_type.startswith("A")
-    is_adhoc  = week_type.startswith("📋")
-
-    if is_week_a:
-        st.markdown(f"""<div style="background:#dbeafe;border-left:5px solid #1a4d8c;
-            border-radius:0 8px 8px 0;padding:8px 14px;margin-bottom:12px;font-size:13px;color:#1a4d8c;">
-            ⬤ <strong>WEEK A — STUDENT LENS</strong> · Individual Progress · SMARTAR Goals · Evidence
-        </div>""", unsafe_allow_html=True)
-    elif is_adhoc:
-        st.markdown(f"""<div style="background:#f3f0ff;border-left:5px solid #6d28d9;
-            border-radius:0 8px 8px 0;padding:8px 14px;margin-bottom:12px;font-size:13px;color:#4c1d95;">
-            📋 <strong>AD-HOC / ADDITIONAL MEETING</strong>
-        </div>""", unsafe_allow_html=True)
-    else:
-        st.markdown(f"""<div style="background:#fef3c7;border-left:5px solid #d97706;
-            border-radius:0 8px 8px 0;padding:8px 14px;margin-bottom:12px;font-size:13px;color:#92400e;">
-            ⬤ <strong>WEEK B — SYSTEM LENS</strong> · CLC Priorities · Innovation Fidelity · Staff Alignment
-        </div>""", unsafe_allow_html=True)
-
-    if is_adhoc:
-        # ────────────────────────────────────────────────────────────────────────────
-        # AD-HOC MEETING WITH TRANSCRIPT SUPPORT
-        # ────────────────────────────────────────────────────────────────────────────
-        
-        # DEBUG PANEL - SHOW WHAT'S IN DATABASE
-        st.warning("🔍 **DEBUG MODE** - Checking what's saved in database...")
-        
-        if st.session_state.current_meeting_id:
-            try:
-                debug_result = supabase.table('tm_program_meetings').select("*").eq('id', st.session_state.current_meeting_id).execute()
-                if debug_result.data:
-                    debug_mtg = debug_result.data[0]
-                    
-                    col_d1, col_d2, col_d3 = st.columns(3)
-                    with col_d1:
-                        st.metric("Check-in Notes", "✅ YES" if debug_mtg.get('checkin_notes') and debug_mtg.get('checkin_notes').strip() else "❌ EMPTY")
-                    with col_d2:
-                        st.metric("TAC/Reports Notes", "✅ YES" if debug_mtg.get('reports_tac_notes') and debug_mtg.get('reports_tac_notes').strip() else "❌ EMPTY")
-                    with col_d3:
-                        trans_len = len(debug_mtg.get('meeting_minutes', ''))
-                        st.metric("Transcript Length", f"{trans_len} chars")
-                    
-                    if not debug_mtg.get('checkin_notes') or not debug_mtg.get('checkin_notes').strip():
-                        st.error("""
-❌ **EXTRACTED NOTES ARE EMPTY**
-
-**Fix:** 
-1. Make sure transcript is in the form above
-2. Click [🤖 Extract Key Points] button
-3. Wait for ✅ Extracted & Saved message
-4. Then download minutes
-
-The Word document will ONLY show the extracted summary if extracted_notes is saved!
-                        """)
-                    else:
-                        st.success(f"✅ **Extracted notes ARE saved!** ({len(debug_mtg.get('extracted_notes'))} chars)")
-            except Exception as e:
-                st.info(f"Debug check: {e}")
-        else:
-            st.info("💡 Load a meeting first to see debug info")
-        
-        st.markdown("---")
-        st.markdown("#### 📚 Saved & Archived Ad-Hoc Meetings")
-        
-        # Tabs for Active vs Archived
-        active_tab, archive_tab = st.tabs(["📝 Active Meetings", "📦 Archived"])
-        
-        with active_tab:
-            try:
-                # Load active ad-hoc meetings (no archived filter - column doesn't exist)
-                active_meetings = supabase.table('tm_program_meetings').select("*").eq('program', program).eq('week_type', 'ad-hoc').order('meeting_date', desc=True).execute()
-                active_adhoc = active_meetings.data or []
-                
-                if active_adhoc:
-                    st.markdown("**Click a meeting to open and continue editing:**")
-                    for mtg in active_adhoc:
-                        mtg_date = mtg.get('meeting_date', '')
-                        mtg_facilitator = mtg.get('facilitator', '')
-                        mtg_id = mtg.get('id', '')
-                        
-                        col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
-                        
-                        with col1:
-                            if st.button(f"📝 {mtg_date} — {mtg_facilitator}", key=f"load_active_{mtg_id}", use_container_width=True):
-                                st.session_state.current_meeting_id = mtg_id
-                                st.session_state.meeting_loaded = True
-                                # Don't rerun - let form load naturally below
-                        
-                        with col2:
-                            if st.button("📄 View", key=f"view_active_{mtg_id}", use_container_width=True, help="Load for editing"):
-                                st.session_state.current_meeting_id = mtg_id
-                                st.rerun()
-                        
-                        with col3:
-                            if st.button("📥 Minutes", key=f"dl_active_{mtg_id}", use_container_width=True):
-                                # Fetch fresh data from database
-                                try:
-                                    fresh_mtg = supabase.table('tm_program_meetings').select("*").eq('id', mtg_id).execute()
-                                    if fresh_mtg.data:
-                                        mtg = fresh_mtg.data[0]
-                                except:
-                                    pass
-                                
-                                # Generate Word document
-                                doc = generate_minutes_docx(
-                                    program=program,
-                                    meeting_date=mtg_date,
-                                    facilitator=mtg_facilitator,
-                                    attendees=mtg.get('attendees', ''),
-                                    extracted_notes=mtg.get('checkin_notes', ''),
-                                    summary_notes=mtg.get('reports_tac_notes', ''),
-                                    transcript=mtg.get('meeting_minutes', '')
-                                )
-                                
-                                # Save to bytes for download
-                                doc_bytes = io.BytesIO()
-                                doc.save(doc_bytes)
-                                doc_bytes.seek(0)
-                                
-                                st.download_button(
-                                    label="📥 Download (.docx)",
-                                    data=doc_bytes,
-                                    file_name=f"Minutes_{mtg_date}_{mtg_facilitator}_{program}.docx",
-                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                    key=f"dl_minutes_active_{mtg_id}",
-                                    use_container_width=True
-                                )
-                        
-                        with col4:
-                            if st.button("🗑️ Delete", key=f"delete_active_{mtg_id}", use_container_width=True):
-                                if st.session_state.get(f"confirm_delete_{mtg_id}", False):
-                                    try:
-                                        supabase.table('tm_program_meetings').delete().eq('id', mtg_id).execute()
-                                        st.success(f"🗑️ {mtg_facilitator} deleted - refresh to see changes")
-                                    except Exception as e:
-                                        st.error(f"Error deleting: {e}")
-                                else:
-                                    st.session_state[f"confirm_delete_{mtg_id}"] = True
-                                    st.warning(f"⚠️ Click again to confirm delete")
-                else:
-                    st.info("No active ad-hoc meetings. Create a new one below!")
-            except Exception as e:
-                st.warning(f"Could not load active meetings: {e}")
-        
-        with archive_tab:
-            st.info("""
-**Ad-Hoc Meeting Management:**
-
-Meetings can be deleted when no longer needed. All ad-hoc meetings are displayed in the "Active Meetings" tab.
-
-To remove a meeting, click the 🗑️ Delete button and confirm.
-            """)
-            st.caption("💡 Note: Archived column not available for ad-hoc meetings in this version.")
-        
-        st.markdown("---")
-        
-        st.markdown("#### 📋 Meeting Details")
-        
-        # Load meeting data if one is selected
-        meeting_data = None
-        if st.session_state.current_meeting_id:
-            try:
-                result = supabase.table('tm_program_meetings').select("*").eq('id', st.session_state.current_meeting_id).execute()
-                if result.data:
-                    meeting_data = result.data[0]
-                    st.info(f"✅ Editing: {meeting_data.get('meeting_date', '')} — {meeting_data.get('facilitator', '')}", icon="✅")
-                    
-                    # Load transcript and notes into session state for editing
-                    if meeting_data.get('meeting_minutes'):
-                        st.session_state[f"adhoc_transcript_{program}"] = meeting_data.get('meeting_minutes', '')
-                    if meeting_data.get('reports_tac_notes'):
-                        st.session_state[f"adhoc_notes_{program}"] = meeting_data.get('reports_tac_notes', '')
-                    if meeting_data.get('checkin_notes'):
-                        st.session_state[f"adhoc_extracted_{program}"] = meeting_data.get('checkin_notes', '')
-                        st.session_state[f"adhoc_extracted_edited_{program}"] = meeting_data.get('checkin_notes', '')
-            except Exception as e:
-                st.error(f"Error loading meeting: {e}")
-        
-        adhoc_col1, adhoc_col2, adhoc_col3, adhoc_col4 = st.columns(4)
-        
-        default_date = datetime.date.fromisoformat(meeting_data['meeting_date']) if meeting_data and meeting_data.get('meeting_date') else datetime.date.today()
-        default_term = meeting_data.get('term', '') if meeting_data else ''
-        default_facilitator = meeting_data.get('facilitator', '') if meeting_data else _safe_staff_name()
-        default_attendees = meeting_data.get('attendees', '') if meeting_data else ''
-        
-        with adhoc_col1: adhoc_date = st.date_input("Date", value=default_date, key=f"adhoc_date_{program}")
-        with adhoc_col2: adhoc_term = st.text_input("Term", value=default_term, placeholder="e.g. Term 1", key=f"adhoc_term_{program}")
-        with adhoc_col3: adhoc_facilitator = st.text_input("Facilitator", value=default_facilitator, key=f"adhoc_fac_{program}")
-        with adhoc_col4: adhoc_attendees = st.text_input("Attendees", value=default_attendees, placeholder="Comma-separated", key=f"adhoc_att_{program}")
-        
-        st.markdown("---")
-        
-        # TRANSCRIPT INPUT
-        st.markdown("#### 🎤 Meeting Transcript / Notes")
-        st.caption("Paste meeting transcript, notes, or discussion summary below")
-        
-        transcript_tab1, transcript_tab2 = st.tabs(["📝 Paste Transcript", "📤 Upload File"])
-        
-        with transcript_tab1:
-            adhoc_transcript = st.text_area(
-                "Transcript / Notes",
-                value=meeting_data.get('meeting_minutes', '') if meeting_data else '',
-                height=200,
-                placeholder="Paste your meeting transcript, discussion notes, or meeting summary here...",
-                key=f"adhoc_transcript_{program}",
-                label_visibility="collapsed"
-            )
-            # Show real-time feedback
-            current_length = len(st.session_state.get(f"adhoc_transcript_{program}", "").strip())
-            if current_length > 0:
-                st.caption(f"✅ {current_length} characters captured")
-            else:
-                st.caption("👆 Start typing or pasting here...")
-        
-        with transcript_tab2:
-            uploaded_file = st.file_uploader("Upload transcript file (.txt, .docx)", 
-                                             type=['txt', 'docx'],
-                                             key=f"adhoc_upload_{program}")
-            if uploaded_file:
-                uploaded_transcript = ""
-                if uploaded_file.type == "text/plain":
-                    uploaded_transcript = uploaded_file.read().decode("utf-8")
-                elif uploaded_file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-                    try:
-                        doc = Document(uploaded_file)
-                        uploaded_transcript = "\n".join([p.text for p in doc.paragraphs])
-                    except:
-                        st.error("Could not read Word document")
-                        uploaded_transcript = ""
-                
-                if uploaded_transcript:
-                    # Store in session state so save button can access it
-                    st.session_state[f"adhoc_transcript_{program}"] = uploaded_transcript
-                    st.success(f"✅ Uploaded: {uploaded_file.name}")
-        
-        st.markdown("---")
-        
-        # MEETING SUMMARY OPTIONS
-        st.markdown("#### 📝 Meeting Summary")
-        st.caption("Choose: AI extraction from transcript OR paste a polished summary")
-        
-        summary_tab1, summary_tab2 = st.tabs(["🤖 AI Extract", "✍️ Paste Polished Summary"])
-        
-        with summary_tab1:
-            st.markdown("##### 📝 Summarize Your Transcript")
-            
-            # AI Extract option
-            col_ai1, col_ai2 = st.columns([1, 2])
-            
-            with col_ai1:
-                if st.button("🤖 AI Extract", key=f"adhoc_ai_extract_{program}", type="primary"):
-                    adhoc_transcript = st.session_state.get(f"adhoc_transcript_{program}", "").strip()
-                    if adhoc_transcript:
-                        with st.spinner("🤖 Extracting key points..."):
-                            try:
-                                groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
-                                
-                                if groq_client:
-                                    # Apply token budget guard
-                                    adhoc_for_extract, was_truncated = _fit_to_groq_budget(
-                                        adhoc_transcript, max_tokens=1000, prompt_overhead_tokens=300
-                                    )
-                                    
-                                    if was_truncated:
-                                        st.warning(
-                                            "⚠️ This transcript is longer than the AI can read in one go "
-                                            "(Groq's 8,000 tokens/minute limit). Only "
-                                            "the first part was extracted. Paste the rest of the transcript "
-                                            "and click **AI Extract** again — the new part "
-                                            "will be added to the extracted content below rather than replacing it."
-                                        )
-                                    
-                                    response = groq_client.chat.completions.create(
-                                        model="openai/gpt-oss-120b",
-                                        messages=[
-                                            {
-                                                "role": "system",
-                                                "content": """Extract items and actions from this meeting transcript, keeping ALL details.
+Use EXACTLY these markdown headings, in this order:
+### Attendance
+### Apologies
+### Arising Business
+### Items Discussed
+### Actions
+### Next Meeting
 
 Rules:
-1. Keep ALL substantive points from the transcript
-2. Preserve exact wording and specific information (names, dates, figures)
-3. Do not invent anything that isn't in the transcript
-
-Output EXACTLY in this format:
-
-===ITEMS DISCUSSED===
-[Keep ALL details about what was discussed - do not summarize]
-
-===ACTIONS===
-- Who: What by When
-[Extract only explicit action items with who, what, and when]
-"""
-                                            },
-                                            {
-                                                "role": "user",
-                                                "content": f"Meeting transcript:\n\n{adhoc_for_extract}"
-                                            }
-                                        ],
-                                        temperature=0.3,
-                                        max_tokens=1000
-                                    )
-                                    
-                                    new_extracted = response.choices[0].message.content.strip()
-                                    
-                                    # Handle incremental extraction
-                                    existing_extracted = st.session_state.get(f"adhoc_extracted_{program}", "").strip()
-                                    if existing_extracted:
-                                        combined = existing_extracted + "\n\n— continued —\n\n" + new_extracted
-                                        st.success("✅ Transcript extracted and added to the extracted content below.")
-                                    else:
-                                        combined = new_extracted
-                                        st.success("✅ Transcript extracted — review below and edit as needed.")
-                                    
-                                    st.session_state[f"adhoc_extracted_{program}"] = combined
-                                else:
-                                    st.warning("Groq API not configured")
-                                    
-                            except Exception as e:
-                                st.error(f"Error: {e}")
-                    else:
-                        st.warning("Paste transcript first")
-            
-            with col_ai2:
-                st.caption("Let AI extract key points from your transcript")
-            
-            st.markdown("---")
-            st.caption("**Or write your summary manually:**")
-            
-            extracted_summary = st.text_area(
-                "Summary of meeting",
-                height=150,
-                placeholder="""Example:
-- TEAM UPDATES: Discussed new behavior support plan for Student X
-- DECISIONS: Approved trial of visual schedule in the morning routine
-- ACTIONS: Ben to implement by Friday; Candice to monitor progress
-- NOTES: Next check-in: following Thursday""",
-                key=f"adhoc_summary_manual_{program}",
-                label_visibility="collapsed"
-            )
-            
-            if extracted_summary.strip():
-                st.session_state[f"adhoc_extracted_{program}"] = extracted_summary.strip()
-                st.success("✅ Summary captured")
-        
-        with summary_tab2:
-            st.markdown("#### ✍️ Paste Polished Summary")
-            st.caption("If you already have a well-written summary, paste it here and we'll tidy up formatting")
-            
-            polished_summary = st.text_area(
-                "Paste your polished meeting summary here:",
-                height=250,
-                placeholder="""Example:
-
-**Check-in**
-Team discussed recent changes and workload distribution.
-
-**Student Concerns**
-- Abdullah: Needs additional support during transitions
-- Sarah: Progressing well with literacy
-
-**Actions**
-- Ben to implement transition schedule by Friday
-- Sarah to monitor daily progress checks""",
-                key=f"adhoc_polished_{program}",
-                label_visibility="collapsed"
-            )
-            
-            if polished_summary.strip():
-                col_tidy1, col_tidy2 = st.columns([1, 3])
-                
-                with col_tidy1:
-                    if st.button("✨ Tidy Formatting", key=f"tidy_summary_{program}", type="primary"):
-                        # Store the polished summary with basic formatting tidying
-                        st.session_state[f"adhoc_extracted_{program}"] = polished_summary.strip()
-                        
-                        # Save to database if meeting is loaded
-                        if st.session_state.current_meeting_id:
-                            try:
-                                supabase.table('tm_program_meetings').update({'checkin_notes': polished_summary.strip()}).eq('id', st.session_state.current_meeting_id).execute()
-                                st.success("✅ Summary saved to meeting!")
-                            except Exception as e:
-                                st.success("✅ Summary ready! (Save meeting to persist to database)")
-                        else:
-                            st.info("💡 Save your meeting to store the summary in the database")
-                
-                with col_tidy2:
-                    st.caption("Just stores your summary as-is with proper formatting for download")
-        
-        # DISPLAY EXTRACTED CONTENT (from session or loaded meeting)
-        extracted_from_session = st.session_state.get(f"adhoc_extracted_{program}", '')
-        extracted_from_db = meeting_data.get('extracted_notes', '') if meeting_data else ''
-        extracted_content = extracted_from_session or extracted_from_db
-        
-        if extracted_content:
-            st.markdown("#### 📊 Meeting Minutes (Ready to Edit)")
-            st.markdown(extracted_content)
-            
-            st.markdown("---")
-            st.markdown("#### ✏️ Edit Minutes Before Saving")
-            st.caption("Refine the extracted content below - your edits will be saved")
-            
-            # Editable text area for extracted content
-            edited_minutes = st.text_area(
-                "Edit extracted minutes:",
-                value=extracted_content,
-                height=250,
-                key=f"edited_minutes_{program}",
-                label_visibility="collapsed"
-            )
-            
-            # Store the edited version in session state
-            st.session_state[f"adhoc_extracted_edited_{program}"] = edited_minutes
-            
-            st.info("💡 Edit the minutes above, then click [💾 Save] below to save your changes")
-            
-            st.markdown("---")
-            
-            # INSTANT DOWNLOAD BUTTON (with edited content)
-            col_inst1, col_inst2 = st.columns([1, 3])
-            
-            with col_inst1:
-                if st.button("📥 Download Now", key=f"instant_download_{program}", type="primary", use_container_width=True):
-                    # Get transcript from session state
-                    adhoc_transcript = st.session_state.get(f"adhoc_transcript_{program}", "")
-                    
-                    # Create Word document with EDITED extracted content
-                    doc = generate_minutes_docx(
-                        program=program,
-                        meeting_date=adhoc_date,
-                        facilitator=adhoc_facilitator,
-                        attendees=adhoc_attendees,
-                        extracted_notes=edited_minutes,  # Use the edited version
-                        summary_notes="",
-                        transcript=adhoc_transcript
-                    )
-                    
-                    # Save to bytes
-                    doc_bytes = io.BytesIO()
-                    doc.save(doc_bytes)
-                    doc_bytes.seek(0)
-                    
-                    st.download_button(
-                        label="💾 Click Here to Download",
-                        data=doc_bytes,
-                        file_name=f"Minutes_{adhoc_date}_{adhoc_facilitator}_{program}.docx",
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        key=f"instant_dl_button_{program}"
-                    )
-            
-            with col_inst2:
-                st.caption("💡 Download with your edits (no need to save first)")
-            
-            st.markdown("---")
-        
-        # MEETING NOTES
-        st.markdown("#### 📝 Meeting Summary & Actions")
-        adhoc_notes = st.text_area(
-            "Summary & Action Items",
-            value=meeting_data.get('summary_notes', '') if meeting_data else '',
-            height=150,
-            placeholder="Summary of meeting, decisions made, action items, and next steps...",
-            key=f"adhoc_notes_{program}",
-            label_visibility="collapsed"
-        )
-        notes_length = len(st.session_state.get(f"adhoc_notes_{program}", "").strip())
-        if notes_length > 0:
-            st.caption(f"✅ {notes_length} characters in notes")
-        
-        st.markdown("---")
-        
-        st.markdown("---")
-        
-        # Show status of what's filled in
-        debug_transcript = st.session_state.get(f"adhoc_transcript_{program}", "").strip()
-        debug_notes = st.session_state.get(f"adhoc_notes_{program}", "").strip()
-        
-        col_status1, col_status2 = st.columns(2)
-        
-        with col_status1:
-            if len(debug_transcript) > 0:
-                st.success(f"✅ Transcript: {len(debug_transcript)} characters")
-            else:
-                st.caption("📝 No transcript yet (optional)")
-        
-        with col_status2:
-            if len(debug_notes) > 0:
-                st.success(f"✅ Summary: {len(debug_notes)} characters")
-            else:
-                st.caption("📝 No summary yet (optional)")
-        
-        # SAVE MEETING
-        st.markdown("#### 💾 Save & Manage Meeting")
-        
-        save_col1, save_col2, save_col3 = st.columns([2, 1, 1])
-        
-        with save_col1:
-            if st.button("💾 Save Ad-Hoc Meeting", key=f"save_adhoc_{program}", type="primary", use_container_width=True):
-                # Get transcript and notes from session state
-                adhoc_transcript = st.session_state.get(f"adhoc_transcript_{program}", "").strip()
-                adhoc_notes = st.session_state.get(f"adhoc_notes_{program}", "").strip()
-                
-                # Allow save if EITHER transcript OR notes exist
-                if not adhoc_transcript and not adhoc_notes:
-                    st.error("""
-**Need content to save!**
-
-Please fill in at least ONE section:
-- 🎤 **Meeting Transcript** tab (your meeting notes)
-- OR 📝 **Summary & Actions** section (key points)
-                    """)
-                else:
-                    try:
-                        # Use notes as transcript if no transcript provided
-                        final_transcript = adhoc_transcript if adhoc_transcript else adhoc_notes
-                        
-                        meeting_payload = {
-                            'program': program,
-                            'meeting_date': str(adhoc_date),
-                            'term': adhoc_term.strip(),
-                            'week_type': 'ad-hoc',
-                            'facilitator': adhoc_facilitator or _safe_staff_name(),
-                            'attendees': adhoc_attendees or '',
-                            'checkin_notes': final_transcript,  # Store transcript/summary as check-in notes
-                            'student_concerns': _json.dumps([]),
-                            'smartar_spotlight': _json.dumps([]),
-                            'reports_tac_notes': adhoc_notes,  # Store summary/actions
-                            'priority_focus': _json.dumps([]),
-                            'meeting_minutes': final_transcript,  # Also store for backup
-                            'actions': _json.dumps([]),
-                        }
-                        
-                        if st.session_state.current_meeting_id:
-                            supabase.table('tm_program_meetings').update(meeting_payload).eq('id', st.session_state.current_meeting_id).execute()
-                            st.success(f"✅ Ad-Hoc Meeting Updated")
-                        else:
-                            result = supabase.table('tm_program_meetings').insert(meeting_payload).execute()
-                            st.session_state.current_meeting_id = result.data[0]['id']
-                            st.success(f"✅ Ad-Hoc Meeting Saved (ID: {st.session_state.current_meeting_id})")
-                        
-                        st.info("💡 Your data is saved. Continue editing or download minutes below.")
-                    
-                    except Exception as e:
-                        st.error(f"Error saving meeting: {e}")
-        
-        # DOWNLOAD MEETING
-        with save_col2:
-            if st.session_state.current_meeting_id:
-                # Get values from session state for safety
-                adhoc_transcript = st.session_state.get(f"adhoc_transcript_{program}", "")
-                adhoc_notes = st.session_state.get(f"adhoc_notes_{program}", "")
-                
-                # Create downloadable text file
-                meeting_text = f"""AD-HOC MEETING RECORD
-═══════════════════════════════════════════════════
-
-Program: {program}
-Date: {adhoc_date}
-Facilitator: {adhoc_facilitator}
-Attendees: {adhoc_attendees}
-Meeting ID: {st.session_state.current_meeting_id}
-
-TRANSCRIPT / NOTES
-───────────────────────────────────────────────────
-{adhoc_transcript}
-
-SUMMARY & ACTION ITEMS
-───────────────────────────────────────────────────
-{adhoc_notes}
-
-═══════════════════════════════════════════════════
-Generated: {datetime.datetime.now().strftime('%d %B %Y at %I:%M %p')}
-"""
-                st.download_button(
-                    label="📥 Download",
-                    data=meeting_text,
-                    file_name=f"AdHoc_{adhoc_date}_{adhoc_facilitator}.txt",
-                    mime="text/plain",
-                    key=f"dl_adhoc_{program}"
-                )
-        
-        st.markdown("---")
-        
-        # DEBUG PANEL
-        if st.session_state.current_meeting_id:
-            if st.checkbox("🔍 Debug: Show meeting data in database", value=False, key=f"debug_data_{program}"):
-                try:
-                    debug_result = supabase.table('tm_program_meetings').select("*").eq('id', st.session_state.current_meeting_id).execute()
-                    if debug_result.data:
-                        debug_mtg = debug_result.data[0]
-                        st.info("**Meeting Data in Database:**")
-                        st.json({
-                            'checkin_notes': debug_mtg.get('checkin_notes', '[EMPTY]'),
-                            'reports_tac_notes': debug_mtg.get('reports_tac_notes', '[EMPTY]'),
-                            'transcript_length': len(debug_mtg.get('meeting_minutes', '')) if debug_mtg.get('meeting_minutes') else 0,
-                        })
-                        
-                        if not debug_mtg.get('checkin_notes'):
-                            st.warning("⚠️ **checkin_notes is EMPTY**\n\nYou need to:\n1. Write your transcript/notes\n2. Click [🤖 Extract Key Points] or [✨ Tidy Formatting]\n3. Wait for it to save\n4. Then download minutes")
-                except Exception as e:
-                    st.error(f"Debug error: {e}")
-        
-        st.markdown("---")
-        
-        st.markdown("---")
-        
-        # MINUTES DOWNLOAD FOR CURRENT MEETING
-        if st.session_state.current_meeting_id:
-            st.markdown("#### 📄 Download Minutes for This Meeting")
-            
-            if st.button("📄 Generate & Download Minutes", key=f"gen_minutes_{program}", type="primary", use_container_width=True):
-                # Fetch the meeting record
-                try:
-                    mtg_result = supabase.table('tm_program_meetings').select("*").eq('id', st.session_state.current_meeting_id).execute()
-                    if mtg_result.data:
-                        mtg = mtg_result.data[0]
-                        
-                        # Create Word document with professional formatting
-                        doc = generate_minutes_docx(
-                            program=mtg.get('program', program),
-                            meeting_date=mtg.get('meeting_date', ''),
-                            facilitator=mtg.get('facilitator', ''),
-                            attendees=mtg.get('attendees', ''),
-                            extracted_notes=mtg.get('checkin_notes', ''),
-                            summary_notes=mtg.get('reports_tac_notes', ''),
-                            transcript=mtg.get('meeting_minutes', '')
-                        )
-                        
-                        # Save to bytes for download
-                        doc_bytes = io.BytesIO()
-                        doc.save(doc_bytes)
-                        doc_bytes.seek(0)
-                        
-                        st.download_button(
-                            label="📥 Download Minutes (.docx) — Ready to Email",
-                            data=doc_bytes,
-                            file_name=f"Minutes_{mtg.get('meeting_date', 'Meeting')}_{program}.docx",
-                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                            key=f"dl_final_minutes_{program}",
-                            type="primary",
-                            use_container_width=True
-                        )
-                        
-                        st.caption("✅ Professional Word document - ready to send to staff immediately")
-                except Exception as e:
-                    st.error(f"Error generating minutes: {e}")
-        
-        return
-
-    st.markdown("#### 📋 Meeting Details")
-    mc1, mc2, mc3, mc4 = st.columns(4)
-    
-    # Pre-populate with existing data if editing
-    default_date = datetime.date.fromisoformat(selected_record['meeting_date']) if selected_record else datetime.date.today()
-    default_term = selected_record.get('term', '') if selected_record else ''
-    default_week = selected_record.get('week_number', 1) if selected_record else 1
-    default_facilitator = selected_record.get('facilitator', _safe_staff_name()) if selected_record else _safe_staff_name()
-    default_attendees = selected_record.get('attendees', '') if selected_record else ''
-    # Check session state first (for transcript auto-fill), then selected_record
-    default_checkin = st.session_state.get(f"pm_checkin_{program}") or (selected_record.get('checkin_notes', '') if selected_record else '')
-    default_reports = st.session_state.get(f"pm_reports_{program}") or (selected_record.get('reports_tac_notes', '') if selected_record else '')
-    
-    with mc1: pm_date        = st.date_input("Date", value=default_date, key=f"pm_date_{program}")
-    with mc2: pm_term        = st.text_input("Term", value=default_term, placeholder="T1", key=f"pm_term_{program}")
-    with mc3: pm_week        = st.number_input("Week #", min_value=1, max_value=11, value=default_week, key=f"pm_week_{program}")
-    with mc4: pm_facilitator = st.text_input("Facilitator", value=default_facilitator, key=f"pm_fac_{program}")
-    pm_attendees = st.text_input("Attendees", value=default_attendees, placeholder="Names separated by commas", key=f"pm_att_{program}")
-
-    st.markdown("""<div style="background:#f0f9f9;border:1px solid #1A7A7A;border-radius:8px;
-        padding:6px 12px;font-size:0.78rem;color:#1A7A7A;margin-bottom:8px;">
-        <strong>Meeting Norms:</strong> ☑ Student-centred &nbsp;·&nbsp; ☑ Evidence before opinion
-        &nbsp;·&nbsp; ☑ Clear actions + ownership &nbsp;·&nbsp; ☑ Stick to time
-    </div>""", unsafe_allow_html=True)
-    
-    # STATUS DISPLAY - Updated messaging
-    if not st.session_state.current_meeting_id:
-        st.markdown("""
-        <div style="background:#e0f2fe;border-left:4px solid #0284c7;border-radius:0 8px 8px 0;
-                    padding:8px 14px;margin-bottom:12px;font-size:13px;color:#075985;">
-          ℹ️ <strong>New Meeting:</strong> Meeting ID will be created automatically when you start entering content. 
-          SMARTAR links will appear as soon as you enter a student name below.
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.success(f"✅ Meeting Active (ID: {st.session_state.current_meeting_id}) - SMARTAR integration ready")
-    
-    st.markdown("---")
-    
-    # ── TRANSCRIPT INPUT & AI ORGANIZATION (ENHANCED) ──
-    st.markdown("#### 📝 Meeting Transcript Input & Auto-Organization")
-    st.caption("Paste raw meeting transcript - AI will organize it into meeting sections & auto-fill the form")
-    
-    transcript_input = st.text_area(
-        "Paste meeting transcript or raw notes:",
-        height=120,
-        key=f"pm_transcript_{program}",
-        label_visibility="collapsed",
-        placeholder="Paste your raw meeting transcript here. The AI will organize it and auto-fill your meeting form..."
-    )
-    
-    if transcript_input.strip():
-        st.markdown("---")
-        st.markdown("#### 📋 Organize Transcript into Meeting Sections")
-        
-        col_org1, col_org2, col_org3 = st.columns([2, 1, 1])
-        
-        with col_org1:
-            st.caption("Use AI to automatically divide your transcript into CLC meeting sections, or organize manually by keyword")
-        
-        with col_org2:
-            if st.button("🤖 AI Organize", key=f"ai_organize_{program}", type="primary", use_container_width=True):
-                transcript_to_org = transcript_input.strip()
-                if transcript_to_org:
-                    with st.spinner("🤖 Organizing transcript with AI..."):
-                        try:
-                            groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
-                            
-                            if groq_client:
-                                # Apply token budget guard
-                                transcript_for_org, was_truncated = _fit_to_groq_budget(
-                                    transcript_to_org, max_tokens=2000, prompt_overhead_tokens=350
-                                )
-                                
-                                if was_truncated:
-                                    st.warning(
-                                        "⚠️ This transcript is longer than the AI can read in one go "
-                                        "(Groq's 8,000 tokens/minute limit). Only "
-                                        "the first part was organized. Paste the rest of the transcript "
-                                        "above and click **AI Organize** again — the new part "
-                                        "will be added to the organized content below rather than replacing it."
-                                    )
-                                
-                                response = groq_client.chat.completions.create(
-                                    model="openai/gpt-oss-120b",
-                                    messages=[
-                                        {
-                                            "role": "system",
-                                            "content": """You are organizing a meeting transcript into two sections.
-
-Rules:
-1. Keep ALL substantive details from the transcript
-2. Do NOT summarize, condense, or remove detail
-3. Preserve exact wording and specific information (names, dates, figures)
-4. Do not invent anything that isn't in the transcript
-
-Output EXACTLY in this format:
-
-===ITEMS DISCUSSED===
-[Keep ALL details about what was discussed - no summarization]
-
-===ACTIONS===
-- Who: What by When
-- Who: What by When
-[Extract only explicit action items with who, what, and when. If no clear actions, write: None identified]
-
-Use ONLY these two sections. Do NOT add other sections."""
-                                        },
-                                        {
-                                            "role": "user",
-                                            "content": f"Organize this meeting transcript:\n\n{transcript_for_org}"
-                                        }
-                                    ],
-                                    temperature=0.3,
-                                    max_tokens=2000
-                                )
-                                
-                                new_organized = response.choices[0].message.content.strip()
-                                
-                                # Handle incremental organization (like STAFF Meetings synthesis)
-                                existing_org = st.session_state.get(f"organized_transcript_{program}", "").strip()
-                                if existing_org:
-                                    combined = existing_org + "\n\n— continued —\n\n" + new_organized
-                                    st.success("✅ Transcript organized and added to the organized content below.")
-                                else:
-                                    combined = new_organized
-                                    st.success("✅ Transcript organized — review below and edit as needed.")
-                                
-                                st.session_state[f"organized_transcript_{program}"] = combined
-                            else:
-                                st.warning("Groq API not configured")
-                                
-                        except Exception as e:
-                            st.error(f"Error organizing: {e}")
-                else:
-                    st.warning("Please paste a transcript first")
-        
-        with col_org3:
-            if st.button("📋 Manual", key=f"manual_organize_{program}", use_container_width=True):
-                st.session_state[f"show_manual_org_{program}"] = True
-                st.rerun()
-    
-    # ── DISPLAY ORGANIZED TRANSCRIPT ──
-    if f"organized_transcript_{program}" in st.session_state:
-        org_content = st.session_state[f"organized_transcript_{program}"]
-        
-        st.markdown("---")
-        st.markdown("#### 📋 Organized Meeting Transcript (Edit as Needed)")
-        
-        # Make organized content EDITABLE
-        edited_org_content = st.text_area(
-            "Edit organized content here (you can add, delete, or change anything):",
-            value=org_content,
-            height=200,
-            key=f"edited_org_content_{program}",
-            label_visibility="collapsed"
-        )
-        
-        # Update session state with edited version
-        st.session_state[f"organized_transcript_{program}"] = edited_org_content
-        
-        st.info("✏️ You can edit the organized content above - delete sections, reword, add details, etc.")
-        
-        # Use the edited version for auto-fill
-        org_content = edited_org_content
-        
-        # ── AUTO-FILL FORM BUTTON ──
-        if st.button("✅ Use This Content in Meeting Form", key=f"autofill_form_{program}", type="primary", use_container_width=True):
-            # Simple 2-section parsing
-            lines = org_content.split('\n')
-            current_section = None
-            items_discussed = []
-            actions_list = []
-            
-            for line in lines:
-                if '===ITEMS DISCUSSED===' in line:
-                    current_section = 'items'
-                elif '===ACTIONS===' in line:
-                    current_section = 'actions'
-                elif current_section and line.strip() and not line.startswith('==='):
-                    if current_section == 'items':
-                        items_discussed.append(line.strip())
-                    elif current_section == 'actions':
-                        actions_list.append(line.strip())
-            
-            st.markdown("---")
-            st.markdown("#### ✅ Content Ready to Use")
-            
-            items_text = "\n".join(items_discussed) if items_discussed else "[No items extracted]"
-            actions_text = "\n".join(actions_list) if actions_list else "[No actions extracted]"
-            
-            st.info(f"**Items Discussed:** {len(items_discussed)} lines")
-            st.info(f"**Actions:** {len(actions_list)} items")
-            
-            # ── DISPLAY ITEMS DISCUSSED ──
-            st.markdown("---")
-            st.markdown("#### 📝 Items Discussed (Copy to Meeting Form)")
-            
-            edited_items = st.text_area(
-                "Edit as needed before copying to meeting form:",
-                value=items_text,
-                height=150,
-                key=f"items_display_editable_{program}",
-                label_visibility="collapsed"
-            )
-            
-            st.caption("👆 Copy this content and paste into the appropriate meeting form sections (Check-in, Student Concerns, SMARTAR Goals, etc.)")
-            
-            # ── DISPLAY ACTIONS ──
-            st.markdown("---")
-            st.markdown("#### ✋ Actions (Copy to Meeting Form)")
-            
-            edited_actions = st.text_area(
-                "Edit as needed before copying to meeting form:",
-                value=actions_text,
-                height=120,
-                key=f"actions_display_editable_{program}",
-                label_visibility="collapsed"
-            )
-            
-            st.caption("👆 Copy and paste these actions into the meeting form's Actions section")
-            
-            st.markdown("---")
-            st.info("""
-**How to use this content:**
-1. Copy the "Items Discussed" content above
-2. Paste into your meeting form's relevant sections (Check-in, Student Concerns, SMARTAR Goals, etc.)
-3. Copy the "Actions" content 
-4. Paste into your meeting form's Actions section
-5. Save the meeting
-
-The AI has kept all detail from your transcript - no summarization.""")
-            
-        st.markdown("---")
-            
-    elif f"show_manual_org_{program}" in st.session_state:
-        # Basic keyword-based organization (fallback)
-        st.markdown("---")
-        st.markdown("#### 📋 Keyword-Based Organization")
-        
-        sections = {
-            "✅ Check-in": [],
-            "👤 Student Concerns": [],
-            "🎯 SMARTAR Goals": [],
-            "📊 Report": [],
-            "🔗 TAC (Transition Advisory Committee)": [],
-            "🚀 Transitions": [],
-            "✋ Actions & Clarifications": []
-        }
-        
-        lines = transcript_input.split('\n')
-        current_section = None
-        
-        for line in lines:
-            line_lower = line.lower()
-            
-            if any(word in line_lower for word in ['check', 'check-in', 'checkin', 'update']):
-                current_section = "✅ Check-in"
-            elif any(word in line_lower for word in ['concern', 'student concern', 'behavior', 'wellbeing']):
-                current_section = "👤 Student Concerns"
-            elif any(word in line_lower for word in ['smartar', 'goal', 'learning target', 'objective']):
-                current_section = "🎯 SMARTAR Goals"
-            elif any(word in line_lower for word in ['report', 'progress', 'assessment', 'data']):
-                current_section = "📊 Report"
-            elif any(word in line_lower for word in ['tac', 'transition advisory', 'planning']):
-                current_section = "🔗 TAC (Transition Advisory Committee)"
-            elif any(word in line_lower for word in ['transition', 'visual', 'support']):
-                current_section = "🚀 Transitions"
-            elif any(word in line_lower for word in ['action', 'who', 'what', 'by when', 'clarif']):
-                current_section = "✋ Actions & Clarifications"
-            
-            if current_section and line.strip():
-                sections[current_section].append(line.strip())
-        
-        for section_name, content in sections.items():
-            if content:
-                with st.expander(section_name, expanded=True):
-                    section_text = "\n".join(content)
-                    st.text_area(
-                        "Copy this content:",
-                        value=section_text,
-                        height=100,
-                        disabled=True,
-                        key=f"copy_{section_name}_{program}"
-                    )
-        
-        st.markdown("---")
-
-    checkin_label  = "TEAM CHECK-IN — Regulation Before Reaction" if is_week_a else "TEAM CHECK-IN"
-    checkin_prompt = "What do we need to know to support students effectively today?" if is_week_a else "Quick updates impacting program delivery"
-    st.markdown(f"#### ⏱ 0–10 min | {checkin_label}")
-    st.caption(checkin_prompt)
-    pm_checkin = st.text_area("Check-in notes", value=default_checkin, height=80, key=f"pm_checkin_{program}",
-        label_visibility="collapsed", placeholder=checkin_prompt)
-    st.markdown("---")
-
-    if is_week_a:
-        st.markdown("#### ⏱ 10–25 min | STUDENT CONCERNS — Structured Problem Solving")
-        st.caption("Facilitator prompt: Push for function-based thinking, not description.")
-
-        # Manual entry section
-        st.markdown("**Option A: Manual Entry**")
-        
-        import uuid as _uuid
-        concerns_key = f"pm_concerns_{program}"
-        if concerns_key not in st.session_state:
-            # Load from selected_record if editing
-            if selected_record and selected_record.get('student_concerns'):
-                try:
-                    loaded = _json.loads(selected_record['student_concerns'])
-                    st.session_state[concerns_key] = loaded if isinstance(loaded, list) else [{"notes": ""}]
-                except:
-                    st.session_state[concerns_key] = [{"notes": ""}]
-            else:
-                st.session_state[concerns_key] = [{"notes": ""}]
-        # If auto-filled from transcript, it's already in session_state, so use it
-        
-        concerns = st.session_state[concerns_key]
-
-        # Give every row a STABLE id. Widget keys are tied to the id (not the list
-        # position) so adding/removing a student never scrambles what was typed.
-        for row in concerns:
-            if not row.get("_id"):
-                row["_id"] = _uuid.uuid4().hex
-
-        delete_id = None
-        for idx, row in enumerate(concerns):
-            cid = row["_id"]
-            col_text, col_del = st.columns([11, 0.5])
-            with col_text:
-                row["notes"] = st.text_area(
-                    f"Student {idx + 1}",
-                    value=row.get("notes", ""),
-                    key=f"con_notes_{program}_{cid}",
-                    height=100,
-                    placeholder="Student name · Concern / behaviour · Hypothesis (why?) · Strategy to try · Who · By when",
-                )
-            with col_del:
-                st.markdown("<div style='margin-top:2rem;'></div>", unsafe_allow_html=True)
-                if len(concerns) > 1:
-                    if st.button("✕", key=f"con_del_{program}_{cid}"):
-                        delete_id = cid
-        if delete_id is not None:
-            # Remove the matching row AND its widget state, then rerun.
-            st.session_state[concerns_key] = [c for c in concerns if c.get("_id") != delete_id]
-            st.session_state.pop(f"con_notes_{program}_{delete_id}", None)
-            st.rerun()
-
-        if st.button("➕ Add student concern", key=f"con_add_{program}"):
-            concerns.append({"notes": "", "_id": _uuid.uuid4().hex})
-            st.rerun()
-        
-        # Show summary of documented students
-        if concerns and any(c.get('notes', '').strip() for c in concerns):
-            existing_count = len([c for c in concerns if c.get('notes', '').strip()])
-            st.caption(f"📋 {existing_count} student(s) currently documented above")
-        
-        st.markdown("---")
-        
-        # AI Generation section
-        st.markdown("**Option B: Generate from Transcript**")
-        st.caption("AI will identify NEW student concerns not already documented above")
-        
-        transcript_concerns = st.text_area(
-            "Meeting transcript",
-            height=180,
-            key=f"transcript_concerns_{program}",
-            label_visibility="collapsed",
-            placeholder="Paste meeting transcript here..."
-        )
-        
-        col_gen, col_status = st.columns([2, 3])
-        with col_gen:
-            if st.button("✨ Analyze with AI", key=f"gen_concerns_{program}", type="primary"):
-                if transcript_concerns.strip():
-                    with st.spinner("Analyzing transcript..."):
-                        existing_json = _json.dumps(concerns)
-                        result = generate_smart_minutes_week_a(transcript_concerns, existing_json, program)
-                        
-                        if result:
-                            st.session_state[f'_ai_new_concerns_{program}'] = result['student_concerns']
-                            st.session_state[f'_ai_minutes_{program}'] = result['minutes']
-                            st.session_state[f'_ai_actions_{program}'] = result['actions']
-                            st.success("✓ Analysis complete!")
-                            time.sleep(0.5)
-                            st.rerun()
-                else:
-                    st.warning("Please paste transcript first")
-        
-        with col_status:
-            if st.session_state.get(f'_ai_new_concerns_{program}'):
-                st.info("✓ AI results ready below")
-        
-        st.markdown("---")
-        
-        # AI Results Review
-        if st.session_state.get(f'_ai_new_concerns_{program}'):
-            st.markdown("### 🤖 AI Analysis Results")
-            new_concerns_text = st.session_state[f'_ai_new_concerns_{program}']
-            
-            if "No new student concerns" in new_concerns_text:
-                st.info("✓ All students in transcript already documented")
-                if st.button("Clear Results", key=f"clear_concerns_{program}"):
-                    del st.session_state[f'_ai_new_concerns_{program}']
-                    st.rerun()
-            else:
-                st.markdown("**New Student Concerns Found:**")
-                edited_concerns = st.text_area(
-                    "Review concerns",
-                    value=new_concerns_text,
-                    height=150,
-                    key=f"review_concerns_{program}",
-                    label_visibility="collapsed"
-                )
-                
-                new_lines = [line.strip() for line in edited_concerns.split('\n') 
-                            if line.strip() and not line.startswith("No new")]
-                
-                if new_lines:
-                    st.caption(f"Will add {len(new_lines)} new concern(s)")
-                
-                col_accept, col_reject = st.columns(2)
-                with col_accept:
-                    if st.button("✅ Accept & Add", key=f"accept_concerns_{program}", type="primary"):
-                        for line in new_lines:
-                            if line:
-                                concerns.append({"notes": line})
-                        del st.session_state[f'_ai_new_concerns_{program}']
-                        st.success(f"Added {len(new_lines)} concern(s)!")
-                        time.sleep(0.5)
-                        st.rerun()
-                
-                with col_reject:
-                    if st.button("❌ Discard", key=f"reject_concerns_{program}"):
-                        del st.session_state[f'_ai_new_concerns_{program}']
-                        st.rerun()
-        
-        st.markdown("---")
-
-        st.markdown("#### ⏱ 25–40 min | SMARTAR GOAL SPOTLIGHT — 4 Students")
-        st.caption("Click student name to open Goal Builder, or add new student")
-
-        if not st.session_state.current_meeting_id:
-            st.info("💡 Save the meeting details above first — SMARTAR links will activate once the meeting has an ID.")
-
-        if student_names:
-            st.caption(f"💡 {len(student_names)} students loaded")
-
-        # SMARTAR student selection - REDESIGNED with buttons
-        st.markdown("**Select students for goal spotlight:**")
-        
-        smartar_key = f"pm_smartar_{program}"
-        if smartar_key not in st.session_state:
-            st.session_state[smartar_key] = []
-        
-        smartar = st.session_state[smartar_key]
-        
-        # Display existing students with their CURRENT SMARTAR goal + notes
-        if smartar:
-            hdr_l, hdr_r = st.columns([5, 1])
-            with hdr_r:
-                st.button("↻ Refresh goals", key=f"refresh_goals_{program}",
-                          on_click=fetch_student_smartar_goals.clear,
-                          help="Reload current goals from the Goal Builder")
-            for idx, student_data in enumerate(smartar):
-                student_name = student_data.get("student_name", "")
-                if not student_name:
-                    continue
-
-                col_name, col_goal_btn, col_remove = st.columns([4, 2, 0.5])
-                with col_name:
-                    st.markdown(f"**{idx + 1}. {student_name}**")
-                with col_goal_btn:
-                    if st.session_state.current_meeting_id:
-                        smartar_url = get_smartar_goal_link(
-                            student_name,
-                            st.session_state.current_meeting_id,
-                            program,
-                            pm_term or "T1",
-                            pm_week
-                        )
-                        smartar_link_button(smartar_url)
-                    else:
-                        st.caption("Save meeting first")
-                with col_remove:
-                    if st.button("✕", key=f"sm_remove_{program}_{idx}"):
-                        smartar.pop(idx)
-                        st.rerun()
-
-                # Show the student's CURRENT SMARTAR goal(s) inline
-                render_current_smartar_goals(student_name)
-
-                # Meeting notes recorded alongside the goal
-                student_data["notes"] = st.text_area(
-                    f"Notes for {student_name}",
-                    value=student_data.get("notes", ""),
-                    key=f"sm_notes_{program}_{idx}",
-                    height=80,
-                    placeholder="Notes alongside this goal — progress, evidence, adjustments, next steps…",
-                    label_visibility="collapsed"
-                )
-                st.markdown("<div style='margin-bottom:6px;'></div>", unsafe_allow_html=True)
-
-        st.markdown("---")
-        
-        # Add student section - SIMPLIFIED
-        st.markdown("**Add student to spotlight:**")
-        
-        col_select, col_add = st.columns([4, 1])
-        
-        with col_select:
-            # Student selector with autocomplete
-            new_student_name = st.selectbox(
-                "Select student",
-                options=[""] + student_names,
-                key=f"new_student_select_{program}",
-                label_visibility="collapsed"
-            )
-            # OR manual entry
-            if not new_student_name:
-                new_student_name = st.text_input(
-                    "Or type student name",
-                    key=f"new_student_manual_{program}",
-                    placeholder="Type student name if not in list...",
-                    label_visibility="collapsed"
-                )
-        
-        with col_add:
-            st.markdown("<div style='margin-top:1.8rem;'></div>", unsafe_allow_html=True)
-            if st.button("➕ Add to spotlight", key=f"add_student_{program}", type="primary"):
-                if new_student_name and new_student_name.strip():
-                    nm = new_student_name.strip()
-                    if not any(s.get("student_name") == nm for s in smartar):
-                        smartar.append({"student_name": nm, "notes": ""})
-                    if not st.session_state.current_meeting_id:
-                        st.session_state[f"_smartar_added_{program}"] = nm
-                    st.rerun()
-                else:
-                    st.warning("⚠️ Please select or enter a student name")
-
-        # After adding, show a clear, reliable link that opens the Goal Builder in a
-        # NEW tab (so this meeting form is never lost). Requires a saved meeting id.
-        _just_added = st.session_state.pop(f"_smartar_added_{program}", None)
-        if st.session_state.current_meeting_id and smartar:
-            last = smartar[-1].get("student_name", "")
-            if last:
-                _url = get_smartar_goal_link(last, st.session_state.current_meeting_id, program, pm_term or "T1", pm_week)
-                st.markdown("**Set this student's goal:**")
-                smartar_link_button(_url, f"🎯 Open Goal Builder for {last}")
-        elif not st.session_state.current_meeting_id:
-            st.info("💡 Save the meeting first (button at the bottom) — then a Goal Builder link will appear for each student.")
-        
-        st.markdown("---")
-
-        st.markdown("#### ⏱ 40–45 min | REPORTS / TAC / TRANSITIONS")
-        pm_reports = st.text_area("Reports, TAC meetings, review or transition planning",
-            value=default_reports, height=80, key=f"pm_reports_{program}", label_visibility="collapsed",
-            placeholder="Upcoming reports due · TAC meetings · Review or transition planning")
-        priority_rows = []
-
-    else:  # Week B - System Lens
-        st.markdown("#### ⏱ 10–45 min | WEEK B — SYSTEM LENS")
-        st.caption("Align to: Implementation Plan · PDP Focus Areas · LBU Priorities")
-
-        priority_key = f"pm_priority_{program}"
-
-        # Initialise from saved record if first load
-        if priority_key not in st.session_state:
-            raw_pf = selected_record.get('priority_focus', '') if selected_record else ''
-            existing_focus = ""
-            if raw_pf:
-                try:
-                    import json as _json_pf
-                    pf_data = _json_pf.loads(raw_pf)
-                    if isinstance(pf_data, dict):
-                        existing_focus = pf_data.get("notes", "")
-                    elif isinstance(pf_data, list) and pf_data:
-                        lines = []
-                        for r in pf_data:
-                            if isinstance(r, dict):
-                                parts = [v for v in r.values() if v]
-                                if parts:
-                                    lines.append("• " + " | ".join(parts))
-                        existing_focus = "\n".join(lines)
-                except Exception:
-                    existing_focus = str(raw_pf)
-            st.session_state[priority_key] = {"notes": existing_focus}
-
-        priority_store = st.session_state[priority_key]
-        if not isinstance(priority_store, dict):
-            priority_store = {"notes": ""}
-            st.session_state[priority_key] = priority_store
-
-        # ── SINGLE TRANSCRIPT DROP ZONE ────────────────────────────────────
-        st.markdown("**📋 Drop Transcript / Raw Notes**")
-        st.caption(
-            "Paste a voice transcript, rough notes, or dot points from the whole meeting. "
-            "AI will read it and split content into the **Focus Area** summary and **Meeting Minutes** below."
-        )
-        st.caption("⚠️ Keep transcripts under ~3,000 characters for best results with the free Groq tier.")
-        transcript_raw = st.text_area(
-            "Transcript",
-            height=200,
-            key=f"pr_transcript_{program}",
-            label_visibility="collapsed",
-            placeholder=(
-                "Paste full meeting transcript or rough notes here…\n\n"
-                "e.g. 'We talked about BSEM implementation — Brenton said check-ins are happening but "
-                "not all staff using the language consistently. Candice to model it next week. "
-                "Also discussed upcoming reports — due end of week 8. Tom will send the template out by Thursday.'"
-            )
-        )
-
-        if st.button("✨ Process with AI → Split into Focus Area + Minutes", key=f"pr_groq_{program}", type="primary"):
-            if transcript_raw.strip():
-                if GROQ_KEY:
-                    with st.spinner("Reading transcript and sorting content…"):
-                        try:
-                            _groq_client = Groq(api_key=GROQ_KEY)
-                            _prompt = f"""You are a professional minute-taker for Cowandilla Learning Centre (CLC), Learning & Behaviour Unit — an alternative education school in South Australia.
-
-A raw transcript or rough notes from a Week B 'System Lens' team meeting for the {PROGRAMS[program]['label']} program is provided below.
-
-Your job: Read the full transcript and produce TWO clearly separated sections.
-
----
-SECTION 1 — FOCUS AREA SUMMARY
-Extract anything about implementation fidelity, frameworks, staff practice, LBU priorities, or systemic/program concerns. Format as:
-
-FOCUS AREA: [topic]
-WHAT'S WORKING: [strengths observed]
-GAP IDENTIFIED: [what needs attention]
-ADJUSTMENT / NEXT STEP: [what will change and how]
-EVIDENCE TO COLLECT: [how progress will be measured]
-WHO & WHEN: [responsible person and timeline]
-
-Repeat for each distinct focus area discussed.
-
----
-SECTION 2 — MEETING MINUTES
-Everything else — general discussion, decisions, announcements, upcoming events, staff matters, reports, TAC, transitions, any other business. Format as clear professional minutes with numbered items.
-
-Rules:
-- Trauma-informed, strengths-based, plain English
-- Preserve ALL factual content — do not add or fabricate anything
-- Be concise — one sentence per point unless more detail is essential
-- Clearly label the two sections with the headings above
-
-RAW TRANSCRIPT:
-{transcript_raw[:3500]}"""
-                            _resp = _groq_client.chat.completions.create(
-                                model="llama-3.1-8b-instant",
-                                messages=[{"role": "user", "content": _prompt}],
-                                max_tokens=900
-                            )
-                            full_output = _resp.choices[0].message.content
-
-                            # Split on the SECTION 2 heading
-                            split_markers = [
-                                "SECTION 2 — MEETING MINUTES",
-                                "SECTION 2 - MEETING MINUTES",
-                                "---\nSECTION 2",
-                                "\n\nSECTION 2",
-                            ]
-                            focus_text = full_output
-                            minutes_text = ""
-                            for marker in split_markers:
-                                if marker in full_output:
-                                    parts = full_output.split(marker, 1)
-                                    focus_text = parts[0].replace("SECTION 1 — FOCUS AREA SUMMARY", "").replace("SECTION 1 - FOCUS AREA SUMMARY", "").strip()
-                                    minutes_text = parts[1].strip()
-                                    break
-
-                            # Stage results — transferred to widget keys before render
-                            st.session_state[f"_stage_pr_notes_{program}"] = focus_text
-                            st.session_state[f"_stage_pm_minutes_{program}"] = minutes_text
-                            st.rerun()
-                        except Exception as _e:
-                            st.error(f"Groq error: {_e}")
-                else:
-                    st.warning("⚠️ Groq API key not configured.")
-            else:
-                st.warning("⚠️ Paste a transcript first.")
-
-        st.markdown("---")
-
-        # ── Focus Area notes (populated by AI or typed manually) ───────────
-        st.markdown("**📝 Focus Area Summary**")
-        st.caption("AI-populated from your transcript, or type freely. Edit before saving.")
-        _stage_pn = st.session_state.pop(f"_stage_pr_notes_{program}", None)
-        if _stage_pn is not None:
-            st.session_state[f"pr_notes_{program}"] = _stage_pn
-        elif f"pr_notes_{program}" not in st.session_state:
-            st.session_state[f"pr_notes_{program}"] = priority_store.get("notes", "")
-        _focus_notes = st.text_area(
-            "Focus area notes",
-            height=200,
-            key=f"pr_notes_{program}",
-            label_visibility="collapsed",
-            placeholder=(
-                "e.g.\n"
-                "FOCUS AREA: BSEM implementation fidelity\n"
-                "WHAT'S WORKING: Morning check-ins happening consistently\n"
-                "GAP: WoT language not yet embedded in afternoon sessions\n"
-                "ADJUSTMENT: Candice to model language at next team meeting\n"
-                "EVIDENCE: Scatter Plot regulation data — Brenton by W7"
-            )
-        )
-        # Keep priority_store in sync for save
-        priority_store["notes"] = _focus_notes
-        st.session_state[priority_key] = priority_store
-
-        # priority_rows used downstream for save
-        priority_rows = [{"notes": _focus_notes}]
-        st.markdown("---")
-
-        # SMARTAR for Week B (same as Week A)
-        st.markdown("#### ⏱ SMARTAR GOAL SPOTLIGHT — 4 Students")
-        st.caption("Click student name to open Goal Builder, or add new student")
-
-        if not st.session_state.current_meeting_id:
-            st.info("💡 Save the meeting details above first — SMARTAR links will activate once the meeting has an ID.")
-
-        if student_names:
-            st.caption(f"💡 {len(student_names)} students loaded")
-
-        smartar_key = f"pm_smartar_{program}"
-        if smartar_key not in st.session_state:
-            st.session_state[smartar_key] = []
-
-        smartar = st.session_state[smartar_key]
-        
-        # Display existing students with their CURRENT SMARTAR goal + notes
-        if smartar:
-            hdr_l, hdr_r = st.columns([5, 1])
-            with hdr_r:
-                st.button("↻ Refresh goals", key=f"refresh_goals_b_{program}",
-                          on_click=fetch_student_smartar_goals.clear,
-                          help="Reload current goals from the Goal Builder")
-            for idx, student_data in enumerate(smartar):
-                student_name = student_data.get("student_name", "")
-                if not student_name:
-                    continue
-
-                col_name, col_goal_btn, col_remove = st.columns([4, 2, 0.5])
-                with col_name:
-                    st.markdown(f"**{idx + 1}. {student_name}**")
-                with col_goal_btn:
-                    if st.session_state.current_meeting_id:
-                        smartar_url = get_smartar_goal_link(
-                            student_name,
-                            st.session_state.current_meeting_id,
-                            program,
-                            pm_term or "T1",
-                            pm_week
-                        )
-                        smartar_link_button(smartar_url)
-                    else:
-                        st.caption("Save meeting first")
-                with col_remove:
-                    if st.button("✕", key=f"sm_remove_b_{program}_{idx}"):
-                        smartar.pop(idx)
-                        st.rerun()
-
-                # Show the student's CURRENT SMARTAR goal(s) inline
-                render_current_smartar_goals(student_name)
-
-                # Meeting notes recorded alongside the goal
-                student_data["notes"] = st.text_area(
-                    f"Notes for {student_name}",
-                    value=student_data.get("notes", ""),
-                    key=f"sm_notes_b_{program}_{idx}",
-                    height=80,
-                    placeholder="Notes alongside this goal — progress, evidence, adjustments, next steps…",
-                    label_visibility="collapsed"
-                )
-                st.markdown("<div style='margin-bottom:6px;'></div>", unsafe_allow_html=True)
-
-        st.markdown("---")
-        
-        # Add student section
-        st.markdown("**Add student to spotlight:**")
-        
-        col_select, col_add = st.columns([4, 1])
-        
-        with col_select:
-            new_student_name = st.selectbox(
-                "Select student",
-                options=[""] + student_names,
-                key=f"new_student_select_b_{program}",
-                label_visibility="collapsed"
-            )
-            if not new_student_name:
-                new_student_name = st.text_input(
-                    "Or type student name",
-                    key=f"new_student_manual_b_{program}",
-                    placeholder="Type student name if not in list...",
-                    label_visibility="collapsed"
-                )
-        
-        with col_add:
-            st.markdown("<div style='margin-top:1.8rem;'></div>", unsafe_allow_html=True)
-            if st.button("➕ Add to spotlight", key=f"add_student_b_{program}", type="primary"):
-                if new_student_name and new_student_name.strip():
-                    nm = new_student_name.strip()
-                    if not any(s.get("student_name") == nm for s in smartar):
-                        smartar.append({"student_name": nm, "notes": ""})
-                    st.rerun()
-                else:
-                    st.warning("⚠️ Please select or enter a student name")
-
-        if st.session_state.current_meeting_id and smartar:
-            last = smartar[-1].get("student_name", "")
-            if last:
-                _url = get_smartar_goal_link(last, st.session_state.current_meeting_id, program, pm_term or "T1", pm_week)
-                st.markdown("**Set this student's goal:**")
-                smartar_link_button(_url, f"🎯 Open Goal Builder for {last}")
-        elif not st.session_state.current_meeting_id:
-            st.info("💡 Save the meeting first (button at the bottom) — then a Goal Builder link will appear for each student.")
-
-        pm_reports = ""
-        concerns = []
-
-    st.markdown("---")
-
-    # MEETING MINUTES / NOTES SECTION
-    st.markdown("#### 📝 MEETING MINUTES / NOTES")
-    st.caption("For Week B: AI-populated from transcript above. For Week A: type manually. Edit freely before saving.")
-    
-    # Check for AI-generated minutes
-    if st.session_state.get(f'_ai_minutes_{program}'):
-        st.markdown("**🤖 AI Generated Minutes:**")
-        ai_minutes = st.session_state[f'_ai_minutes_{program}']
-        
-        edited_minutes = st.text_area(
-            "Review minutes",
-            value=ai_minutes,
-            height=200,
-            key=f"review_minutes_{program}",
-            label_visibility="collapsed"
-        )
-        
-        col_accept, col_reject = st.columns(2)
-        with col_accept:
-            if st.button("✅ Accept Minutes", key=f"accept_minutes_{program}", type="primary"):
-                st.session_state[f"pm_minutes_{program}"] = edited_minutes
-                del st.session_state[f'_ai_minutes_{program}']
-                st.success("Minutes accepted!")
-                time.sleep(0.5)
-                st.rerun()
-        with col_reject:
-            if st.button("❌ Discard", key=f"reject_minutes_{program}"):
-                del st.session_state[f'_ai_minutes_{program}']
-                st.rerun()
-    else:
-        # Regular minutes entry
-        default_minutes = selected_record.get('meeting_minutes', '') if selected_record else ''
-        _stage_min = st.session_state.pop(f"_stage_pm_minutes_{program}", None)
-        if _stage_min is not None:
-            st.session_state[f"pm_minutes_{program}"] = _stage_min
-        elif f"pm_minutes_{program}" not in st.session_state:
-            st.session_state[f"pm_minutes_{program}"] = default_minutes
-        pm_minutes = st.text_area(
-            "Meeting minutes",
-            height=200,
-            key=f"pm_minutes_{program}",
-            label_visibility="collapsed",
-            placeholder="Record comprehensive meeting minutes here - discussions, decisions, key points, follow-up items..."
-        )
-    
-    st.markdown("---")
-    
-    # ACTIONS SECTION
-    st.markdown("#### ✅ ACTIONS — Clear Ownership & Accountability")
-    st.caption("Each action must have: specific task, responsible person, and due date")
-    
-    actions_key = f"pm_actions_{program}"
-    
-    # No button needed - each meeting starts with fresh actions
-    if actions_key not in st.session_state:
-        # Only carry forward actions if NOT coming from transcript auto-fill
-        st.session_state[actions_key] = [{"action":"","who":"","by_when":"","priority":"Medium","notes":"","done":False}]
-
-    actions = st.session_state[actions_key]
-    # No more carried-forward actions - each meeting starts fresh
-    
-    # AI-suggested actions review
-    if st.session_state.get(f'_ai_actions_{program}'):
-        st.markdown("**🤖 AI Suggested Actions — Review & Add:**")
-        ai_actions = st.session_state[f'_ai_actions_{program}']
-        
-        if ai_actions:
-            for ai_idx, ai_action in enumerate(ai_actions):
-                cols = st.columns([3, 1.5, 1, 1, 0.7])
-                cols[0].text_input("Action", value=ai_action.get('action', ''), key=f"ai_act_{program}_{ai_idx}", label_visibility="collapsed")
-                cols[1].text_input("Who", value=ai_action.get('who', ''), key=f"ai_who_{program}_{ai_idx}", label_visibility="collapsed")
-                cols[2].text_input("When", value=ai_action.get('by_when', ''), key=f"ai_when_{program}_{ai_idx}", label_visibility="collapsed")
-                cols[3].selectbox("Pri", ["Low", "Medium", "High", "Urgent"], 
-                                 index=["Low", "Medium", "High", "Urgent"].index(ai_action.get('priority', 'Medium')),
-                                 key=f"ai_pri_{program}_{ai_idx}", label_visibility="collapsed")
-                if cols[4].button("✅", key=f"add_ai_{program}_{ai_idx}"):
-                    actions.append({
-                        "action": st.session_state[f"ai_act_{program}_{ai_idx}"],
-                        "who": st.session_state[f"ai_who_{program}_{ai_idx}"],
-                        "by_when": st.session_state[f"ai_when_{program}_{ai_idx}"],
-                        "priority": st.session_state[f"ai_pri_{program}_{ai_idx}"],
-                        "notes": "",
-                        "done": False
-                    })
-                    st.success("Action added!")
-                    time.sleep(0.3)
-                    st.rerun()
-        
-        col_all, col_clear = st.columns(2)
-        with col_all:
-            if st.button("✅ Accept All Actions", key=f"accept_all_actions_{program}", type="primary"):
-                for ai_action in ai_actions:
-                    actions.append({
-                        "action": ai_action.get('action', ''),
-                        "who": ai_action.get('who', ''),
-                        "by_when": ai_action.get('by_when', ''),
-                        "priority": ai_action.get('priority', 'Medium'),
-                        "notes": "",
-                        "done": False
-                    })
-                del st.session_state[f'_ai_actions_{program}']
-                st.success(f"Added {len(ai_actions)} actions!")
-                time.sleep(0.5)
-                st.rerun()
-        with col_clear:
-            if st.button("Clear Suggestions", key=f"clear_actions_{program}"):
-                del st.session_state[f'_ai_actions_{program}']
-                st.rerun()
-        
-        st.markdown("---")
-    
-    # Existing actions display
-    st.markdown("**Current Actions:**")
-
-    ah_cols = st.columns([4,1.5,1,1,0.7,0.5])
-    for h, label in zip(ah_cols, ["Action (What needs to be done)","Who (Responsible person)","By When","Priority","✓ Done",""]):
-        h.markdown(f"**{label}**" if label else "")
-
-    for idx, row in enumerate(actions):
-        a1,a2,a3,a4,a5,a6 = st.columns([4,1.5,1,1,0.7,0.5])
-        with a1: row["action"]   = st.text_input("Act", value=row.get("action",""),   key=f"act_a_{program}_{idx}",      label_visibility="collapsed", placeholder="Specific action item")
-        with a2: row["who"]      = st.text_input("Who", value=row.get("who",""),      key=f"act_w_{program}_{idx}",      label_visibility="collapsed", placeholder="Person responsible")
-        with a3: row["by_when"]  = st.text_input("By",  value=row.get("by_when",""),  key=f"act_by_{program}_{idx}",     label_visibility="collapsed", placeholder="Due date/week")
-        with a4: row["priority"] = st.selectbox("Pri",  ["Low","Medium","High","Urgent"], index=["Low","Medium","High","Urgent"].index(row.get("priority","Medium")), key=f"act_pri_{program}_{idx}", label_visibility="collapsed")
-        with a5: row["done"]     = st.checkbox("✓",     value=row.get("done",False),   key=f"act_done_{program}_{idx}")
-        with a6:
-            if len(actions) > 1:
-                if st.button("✕", key=f"act_del_{program}_{idx}"):
-                    actions.pop(idx); st.rerun()
-        
-        if row.get("action"):
-            row["notes"] = st.text_input("Additional context/notes (optional)", 
-                value=row.get("notes", ""), 
-                key=f"act_notes_{program}_{idx}",
-                placeholder="Dependencies, resources needed, background...")
-
-    if st.button("➕ Add action", key=f"act_add_{program}"):
-        actions.append({"action":"","who":"","by_when":"","priority":"Medium","notes":"","done":False})
-        st.rerun()
-    
-    # Multiple add option
-    col_add_multi, col_button = st.columns([3, 1])
-    with col_add_multi:
-        num_actions = st.number_input("Add multiple actions", min_value=1, max_value=10, value=3, 
-                                     key=f"num_add_{program}", label_visibility="collapsed")
-    with col_button:
-        if st.button(f"➕ Add {num_actions} Actions", key=f"add_multi_{program}"):
-            for _ in range(num_actions):
-                actions.append({"action":"","who":"","by_when":"","priority":"Medium","notes":"","done":False})
-            st.rerun()
-    
-    st.markdown("---")
-
-    # Prepare meeting data for save - FIXED: Use local variables instead of session state
-    smartar_data = [{"student_name": r.get("student_name",""), "notes": r.get("notes","")} for r in smartar]
-    actions_data = [{k: v for k, v in a.items() if k != "_id"} for a in actions]
-
-    # Robustly capture student concerns straight from each row's widget by its
-    # stable id — this guarantees every student typed in (including the 2nd, 3rd…)
-    # is saved, and that empty rows are dropped.
-    if is_week_a:
-        concerns_data = []
-        for r in concerns:
-            cid = r.get("_id")
-            note = st.session_state.get(f"con_notes_{program}_{cid}", r.get("notes", "")) if cid else r.get("notes", "")
-            if note and note.strip():
-                concerns_data.append({"notes": note.strip()})
-    else:
-        concerns_data = []
-    # Week B: priority_rows is [{notes: "..."}]; Week A: empty
-    if not is_week_a and priority_rows:
-        priority_data = priority_rows[0] if isinstance(priority_rows[0], dict) else {"notes": ""}
-    else:
-        priority_data = {}
-
-    meeting_data = {
-        "program": program, 
-        "meeting_date": str(pm_date),
-        "term": pm_term.strip(), 
-        "week_number": int(pm_week),
-        "week_type": "A" if is_week_a else "B",
-        "facilitator": pm_facilitator.strip(), 
-        "attendees": pm_attendees.strip(),
-        "checkin_notes": pm_checkin.strip(),
-        "student_concerns": _json.dumps(concerns_data),
-        "smartar_spotlight": _json.dumps(smartar_data),
-        "reports_tac_notes": pm_reports.strip() if is_week_a else "",
-        "priority_focus": _json.dumps(priority_data),
-        "meeting_minutes": pm_minutes.strip(),
-        "actions": _json.dumps(actions_data),
-    }
-
-    # Trigger auto-save/auto-initialization
-    trigger_autosave(program, meeting_data)
-
-    # Manual save button
-    editing_existing = bool(st.session_state.current_meeting_id) and not str(st.session_state.current_meeting_id).startswith("temp_")
-    save_button_text = "💾 Update Meeting Record" if editing_existing else "💾 Save Meeting Record"
-    if st.button(save_button_text, type="primary", use_container_width=True, key=f"pm_save_{program}"):
-        try:
-            saved_id = None
-            if editing_existing:
-                supabase.table('tm_program_meetings').update(meeting_data).eq('id', st.session_state.current_meeting_id).execute()
-                saved_id = st.session_state.current_meeting_id
-                st.success("✅ Meeting record updated!")
-            else:
-                # DUPLICATE GUARD — never create a 2nd copy of a meeting that already
-                # exists for the same date / term / week / type.
-                existing = find_existing_meetings(
-                    program, meeting_data["meeting_date"], meeting_data["week_type"],
-                    meeting_data["term"], meeting_data["week_number"]
-                )
-                if existing:
-                    saved_id = existing[0]['id']
-                    supabase.table('tm_program_meetings').update(meeting_data).eq('id', saved_id).execute()
-                    if len(existing) > 1:
-                        dup_ids = ", ".join(str(e['id']) for e in existing[1:])
-                        st.warning(
-                            f"⚠️ {len(existing)} saved copies of this meeting already exist "
-                            f"(same date / term / week / type). I updated the most recent one rather "
-                            f"than adding another. Extra copies still in the database — IDs: {dup_ids}. "
-                            f"Use the **Duplicate check** banner at the top of this tab to remove them."
-                        )
-                    else:
-                        st.success("✅ A meeting for this date already existed — updated it instead of creating a duplicate.")
-                else:
-                    result = supabase.table('tm_program_meetings').insert(meeting_data).execute()
-                    saved_id = result.data[0]['id'] if result.data else None
-                    st.success("✅ Meeting record saved!")
-
-            # Keep the just-saved meeting loaded so you can carry on editing — this is
-            # what previously made it look like a student had been 'lost'. The Select
-            # Meeting dropdown re-selects it automatically from current_meeting_id
-            # (index-driven), so no widget-key write is needed here.
-            if saved_id:
-                st.session_state.current_meeting_id = saved_id
-
-            st.session_state.last_autosave_time = None
-            st.session_state.autosave_message = ""
-            st.rerun()
-        except Exception as e:
-            st.error(f"⚠️ Database save failed: {e}")
-
-    # ── Download professional minutes (Word) ──────────────────────────────────
-    st.markdown("")
+- Attendance: names present, taken from the attendees field and the transcript. If unclear, write "See attendance record."
+- Apologies: names given as apologies. If none, write "None recorded."
+- Arising Business: matters carried over from earlier meetings. If none, write "Nil."
+- Items Discussed: if agenda items are given, write one numbered item per agenda item, in the order given. Start each with the agenda item as the bold title, then the discussion. Put any other discussion under a final numbered item titled "Other business". If no agenda items are given, number each topic discussed.
+- Under every item record EVERY point raised, update given, decision, concern and question, keeping names, dates, figures, student references and key wording from the transcript. Use as many sentences as the content needs (usually 2 to 6 per item). Do not reduce substantive points to fragments. This is the record of the meeting.
+- Actions: a markdown table with the columns | Action | Assigned To | Due | listing every action agreed. If there are none, write one row: | None identified | | |
+- Next Meeting: date and time if mentioned, otherwise "To be confirmed."
+- Do not invent anything that is not in the transcript or agenda.
+- Remove only small talk, pleasantries and off-topic chatter.
+- Professional, plain English, trauma-informed and strengths-based.
+- Output only the minutes. No preamble and no commentary."""
+
+
+def _pm_init(key, default):
+    """Seed a widget's session value once. Widgets then read from session state."""
+    if key not in st.session_state:
+        st.session_state[key] = default
+
+
+def _pm_parse_date(value):
     try:
-        _docx_buf = build_minutes_docx(meeting_data, program)
-        _fname = f"CLC_{program}_Minutes_{meeting_data['meeting_date']}_Week{meeting_data['week_type']}.docx"
-        st.download_button(
-            "📥 Download Minutes (Word) — ready to send to members",
-            data=_docx_buf,
-            file_name=_fname,
+        return datetime.date.fromisoformat(str(value)[:10])
+    except Exception:
+        return datetime.date.today()
+
+
+def _pm_label(rec):
+    tkey = _TYPE_FROM_WEEK.get(rec.get("week_type"), "")
+    tlabel = MEETING_TYPES.get(tkey, {}).get("label", "Meeting")
+    wk = f" · Week {rec.get('week_number')}" if rec.get("week_type") in ("A", "B") else ""
+    return f"{rec.get('meeting_date', '?')} · {tlabel}{wk} · {rec.get('facilitator') or 'no facilitator'}"
+
+
+def _pm_legacy_source(rec, program):
+    """The transcript/summary a record was built from. Newer records use
+    source_transcript; older ad-hoc records kept it in checkin_notes."""
+    if program == "SPECIALIST":
+        return ""
+    if rec.get("source_transcript"):
+        return rec["source_transcript"]
+    if rec.get("week_type") == "ad-hoc":
+        return rec.get("checkin_notes") or ""
+    return ""
+
+
+def _pm_legacy_extras(rec):
+    """Earlier-format fields kept on old Week A/B and Specialist records, shown
+    read-only so nothing saved before this change disappears from view."""
+    parts = []
+    checkin = rec.get("checkin_notes") or ""
+    if rec.get("week_type") != "ad-hoc" and checkin.strip():
+        if rec.get("program") == "SPECIALIST":
+            cd = _safe_json(checkin, {})
+            if isinstance(cd, dict):
+                if cd.get("monday_teacher"):
+                    parts.append(f"**Monday teacher:** {cd['monday_teacher']}")
+                if cd.get("tuefri_teacher"):
+                    parts.append(f"**Tue–Fri teacher:** {cd['tuefri_teacher']}")
+        else:
+            parts.append(f"**Check-in notes:**\n\n{checkin}")
+    sc = _safe_json(rec.get("student_concerns") or "", [])
+    if isinstance(sc, list):
+        notes = [x.get("notes", "") for x in sc if isinstance(x, dict) and (x.get("notes") or "").strip()]
+        if notes:
+            parts.append("**Student concerns:**\n\n" + "\n".join(f"- {n}" for n in notes))
+    pf = _safe_json(rec.get("priority_focus") or "", {})
+    pf_text = pf.get("notes", "") if isinstance(pf, dict) else ""
+    if pf_text and pf_text.strip():
+        parts.append(f"**Priority focus:**\n\n{pf_text}")
+    sm = _safe_json(rec.get("smartar_spotlight") or "", [])
+    if isinstance(sm, list):
+        names = [
+            s.get("student_name") + (f" — {s.get('notes')}" if s.get("notes") else "")
+            for s in sm if isinstance(s, dict) and s.get("student_name")
+        ]
+        if names:
+            parts.append("**SMARTAR spotlight:**\n\n" + "\n".join(f"- {n}" for n in names))
+    return "\n\n".join(parts)
+
+
+def _pm_read_upload(up):
+    raw = up.getvalue()
+    if up.name.lower().endswith(".docx"):
+        d = Document(io.BytesIO(raw))
+        return "\n".join(p.text for p in d.paragraphs).strip()
+    return raw.decode("utf-8", errors="replace").strip()
+
+
+def _pm_write(payload, mid):
+    """Insert or update. If the optional v2 columns are not in the database yet,
+    save everything else and report which columns were skipped."""
+    tbl = supabase.table("tm_program_meetings")
+
+    def _do(p):
+        if mid:
+            return tbl.update(p).eq("id", mid).execute()
+        return tbl.insert(p).execute()
+
+    try:
+        return _do(payload), []
+    except Exception as e:
+        msg = str(e).lower()
+        if "column" in msg and "does not exist" in msg:
+            missing = [c for c in _PM_OPTIONAL_COLS if c in msg] or list(_PM_OPTIONAL_COLS)
+            slim = {k: v for k, v in payload.items() if k not in _PM_OPTIONAL_COLS}
+            return _do(slim), missing
+        raise
+
+
+def _pm_parse_actions(md):
+    """Read the rows of the Actions table into a list the app can store."""
+    m = re.search(r"###\s*Actions\s*\n(.*?)(?=\n###\s|\Z)", md or "", re.DOTALL | re.IGNORECASE)
+    if not m:
+        return []
+    rows = []
+    for line in m.group(1).splitlines():
+        line = line.strip()
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if all(c and set(c) <= set("-: ") for c in cells):
+            continue  # separator row
+        if cells and cells[0].lower() == "action":
+            continue  # header row
+        if any(cells):
+            rows.append({
+                "action": cells[0],
+                "assigned_to": cells[1] if len(cells) > 1 else "",
+                "due": cells[2] if len(cells) > 2 else "",
+            })
+    return rows
+
+
+def _pm_generate_minutes(program, meeting_date, facilitator, attendees, agenda_text, source_text, type_label):
+    client = Groq(api_key=GROQ_KEY)
+    src, truncated = _fit_to_groq_budget(source_text, max_tokens=2000, prompt_overhead_tokens=900)
+    agenda_lines = [a.strip() for a in (agenda_text or "").splitlines() if a.strip()]
+    agenda_block = (
+        "\n".join(f"{i}. {a}" for i, a in enumerate(agenda_lines, 1))
+        if agenda_lines else "None set. Number the items from the transcript."
+    )
+    user = f"""Program: {PROGRAMS[program]['label']} ({program})
+Meeting type: {type_label}
+Date: {meeting_date}
+Facilitator: {facilitator or 'Not recorded'}
+Attendees and apologies (as recorded): {attendees or 'Not recorded'}
+
+AGENDA ITEMS (set before the meeting, in order):
+{agenda_block}
+
+TRANSCRIPT OR SUMMARY:
+{src}"""
+    resp = client.chat.completions.create(
+        model=_PM_MINUTES_MODEL,
+        messages=[
+            {"role": "system", "content": _PM_SYSTEM},
+            {"role": "user", "content": user},
+        ],
+        temperature=0.2,
+        max_tokens=2000,
+    )
+    return resp.choices[0].message.content.strip(), truncated
+
+
+# ── Word document (styled like Minutes Polisher) ─────────────────────────────
+
+def _pm_inline(par, text, size_pt=10.5, colour=INK, bold_all=False):
+    for part in re.split(r"(\*\*[^*]+\*\*)", text or ""):
+        if not part:
+            continue
+        if part.startswith("**") and part.endswith("**") and len(part) > 4:
+            _para_run(par, part[2:-2], bold=True, size_pt=size_pt, colour=colour)
+        else:
+            _para_run(par, part, bold=bold_all, size_pt=size_pt, colour=colour)
+
+
+def _pm_add_md(doc, md):
+    lines = (md or "").splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        if not line or set(line) <= set("-*_"):
+            i += 1
+            continue
+        if line.startswith("#"):
+            _doc_heading(doc, line.lstrip("#").strip().replace("**", ""),
+                         size=12.5, space_before=12, space_after=3)
+            i += 1
+            continue
+        if line.startswith("|"):
+            rows = []
+            while i < len(lines) and lines[i].strip().startswith("|"):
+                cells = [c.strip() for c in lines[i].strip().strip("|").split("|")]
+                if not all(c and set(c) <= set("-: ") for c in cells):
+                    rows.append(cells)
+                i += 1
+            if rows:
+                ncols = max(len(r) for r in rows)
+                tbl = doc.add_table(rows=len(rows), cols=ncols)
+                tbl.style = "Table Grid"
+                for r_i, r in enumerate(rows):
+                    for c_i in range(ncols):
+                        cell = tbl.rows[r_i].cells[c_i]
+                        cell.text = ""
+                        par = cell.paragraphs[0]
+                        par.paragraph_format.space_after = Pt(1)
+                        txt = r[c_i] if c_i < len(r) else ""
+                        if r_i == 0:
+                            _shade_cell(cell, "EAF5F5")
+                            _para_run(par, txt.replace("**", ""), bold=True, size_pt=9.5, colour=TEAL)
+                        else:
+                            _pm_inline(par, txt, size_pt=9.5)
+                doc.add_paragraph().paragraph_format.space_after = Pt(2)
+            continue
+        m = re.match(r"^(\d+)[\.\)]\s+(.*)$", line)
+        if m:
+            p = doc.add_paragraph()
+            p.paragraph_format.left_indent = Cm(0.6)
+            p.paragraph_format.first_line_indent = Cm(-0.6)
+            p.paragraph_format.space_after = Pt(4)
+            _para_run(p, f"{m.group(1)}.  ", bold=True, size_pt=10.5, colour=AMBER)
+            _pm_inline(p, m.group(2))
+            i += 1
+            continue
+        if line[:2] in ("- ", "* "):
+            p = doc.add_paragraph()
+            p.paragraph_format.left_indent = Cm(0.6)
+            p.paragraph_format.space_after = Pt(3)
+            _para_run(p, "•  ", bold=True, colour=AMBER)
+            _pm_inline(p, line[2:])
+            i += 1
+            continue
+        p = doc.add_paragraph()
+        p.paragraph_format.space_after = Pt(4)
+        _pm_inline(p, line)
+        i += 1
+
+
+def build_program_minutes_docx(program, meta, minutes_md):
+    from io import BytesIO
+    doc = Document()
+    normal = doc.styles["Normal"]
+    normal.font.name = "Calibri"
+    normal.font.size = Pt(10.5)
+    normal.font.color.rgb = _rgb(INK)
+    for s in doc.sections:
+        s.top_margin = Cm(1.8)
+        s.bottom_margin = Cm(1.8)
+        s.left_margin = Cm(2.0)
+        s.right_margin = Cm(2.0)
+
+    prog_label = PROGRAMS.get(program, {}).get("label", program)
+    p = doc.add_paragraph()
+    p.paragraph_format.space_after = Pt(0)
+    _para_run(p, "Cowandilla Learning Centre", bold=True, size_pt=18, colour=TEAL)
+    p = doc.add_paragraph()
+    p.paragraph_format.space_after = Pt(2)
+    _para_run(p, "Learning & Behaviour Unit", size_pt=10.5, colour=GREY)
+    p = doc.add_paragraph()
+    p.paragraph_format.space_after = Pt(6)
+    _para_run(p, f"{prog_label}  ·  {meta.get('type_label', 'Meeting')}", bold=True, size_pt=12, colour=AMBER)
+    _doc_rule(doc)
+
+    term_week = meta.get("term", "") or ""
+    if meta.get("week") not in (None, ""):
+        term_week = f"{term_week}  ·  Week {meta.get('week')}"
+    details = [
+        ("Date", meta.get("date", "") or "—"),
+        ("Term / Week", term_week or "—"),
+        ("Facilitator", meta.get("facilitator") or "—"),
+        ("Attendees", meta.get("attendees") or "Not recorded"),
+    ]
+    tbl = doc.add_table(rows=len(details), cols=2)
+    tbl.alignment = WD_TABLE_ALIGNMENT.LEFT
+    for i, (label, value) in enumerate(details):
+        c0, c1 = tbl.rows[i].cells
+        c0.width = Cm(3.5)
+        c1.width = Cm(13.0)
+        _shade_cell(c0, "F1F5F9")
+        p0 = c0.paragraphs[0]
+        p0.paragraph_format.space_after = Pt(1)
+        _para_run(p0, label, bold=True, size_pt=9.5, colour=TEAL)
+        p1 = c1.paragraphs[0]
+        p1.paragraph_format.space_after = Pt(1)
+        _para_run(p1, str(value), size_pt=10, colour=INK)
+    doc.add_paragraph().paragraph_format.space_after = Pt(2)
+
+    _pm_add_md(doc, minutes_md)
+
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def _pm_filename(program, meta):
+    kind = meta.get("type_label", "Meeting").replace(" ", "_")
+    return f"{program}_{kind}_Minutes_{meta.get('date', '')}.docx"
+
+
+# ── Meeting form (one structure for all types) ───────────────────────────────
+
+def render_program_meeting(program):
+    auto_term, auto_week = get_current_term_week()
+
+    for kind, msg in st.session_state.pop("pm2_flash", []):
+        getattr(st, kind)(msg)
+
+    past = fetch("tm_program_meetings", {"program": program}, "meeting_date")
+    by_id = {r["id"]: r for r in past}
+    st.session_state.setdefault("pm2_nonce", 0)
+
+    # ── Choose a meeting ─────────────────────────────────────────────────────
+    st.markdown("#### 📂 Choose a meeting")
+    cur = st.session_state.get("current_meeting_id")
+    if cur not in by_id:
+        cur = None
+    options = [None] + [r["id"] for r in past]
+    sel_key = f"pm2_select_{program}_{cur}"
+
+    def _on_select(k=sel_key):
+        new_val = st.session_state.get(k)
+        st.session_state.current_meeting_id = new_val
+        if new_val is None:
+            st.session_state.pm2_nonce += 1
+
+    st.selectbox(
+        "Meeting",
+        options,
+        index=options.index(cur),
+        format_func=lambda x: "➕ New meeting" if x is None else _pm_label(by_id[x]),
+        key=sel_key,
+        on_change=_on_select,
+    )
+
+    rec = by_id.get(cur) if cur else None
+    mid = cur if cur else f"new{st.session_state.pm2_nonce}"
+
+    def K(field):
+        return f"pm2_{program}_{mid}_{field}"
+
+    # Seed every field once from the record (or blank for a new meeting)
+    d_type = _TYPE_FROM_WEEK.get(rec.get("week_type"), "student") if rec else "student"
+    d_date = _pm_parse_date(rec.get("meeting_date")) if rec else datetime.date.today()
+    d_term = (rec.get("term") or auto_term) if rec else auto_term
+    try:
+        d_week = int(rec.get("week_number")) if rec and rec.get("week_number") not in (None, "") else auto_week
+    except Exception:
+        d_week = auto_week
+    _pm_init(K("type"), d_type)
+    _pm_init(K("date"), d_date)
+    _pm_init(K("term"), d_term)
+    _pm_init(K("week"), d_week)
+    _pm_init(K("facilitator"), (rec.get("facilitator") or "") if rec else "")
+    _pm_init(K("attendees"), (rec.get("attendees") or "") if rec else "")
+    _pm_init(K("agenda"), (rec.get("agenda_items") or "") if rec else "")
+    _pm_init(K("transcript"), _pm_legacy_source(rec, program) if rec else "")
+    minutes_default = (rec.get("meeting_minutes") or "") if rec else ""
+    if rec and rec.get("week_type") == "ad-hoc" and minutes_default.strip() == (rec.get("checkin_notes") or "").strip():
+        minutes_default = rec.get("reports_tac_notes") or ""  # old ad-hoc: summary lived here
+    _pm_init(K("minutes"), minutes_default)
+
+    # 1 ── Meeting details (tick the type) ─────────────────────────────────────
+    st.markdown("#### 1️⃣ Meeting details")
+    st.radio(
+        "Meeting type",
+        list(MEETING_TYPES.keys()),
+        horizontal=True,
+        key=K("type"),
+        format_func=lambda k: f"{MEETING_TYPES[k]['icon']} {MEETING_TYPES[k]['label']}",
+    )
+    c1, c2, c3, c4 = st.columns([1.2, 1, 0.8, 1.6])
+    c1.date_input("Date", key=K("date"))
+    c2.text_input("Term", key=K("term"), placeholder="T1")
+    c3.number_input("Week", min_value=1, max_value=11, step=1, key=K("week"))
+    c4.text_input("Facilitator", key=K("facilitator"))
+    st.text_area(
+        "Attendees and apologies (as recorded)",
+        key=K("attendees"),
+        height=80,
+        placeholder="Present: …\nApologies: …",
+    )
+
+    # 2 ── Agenda items (optional) ─────────────────────────────────────────────
+    st.markdown("#### 2️⃣ Agenda items (optional)")
+    st.text_area(
+        "Agenda items, one per line",
+        key=K("agenda"),
+        height=100,
+        placeholder="Leave blank if there is no agenda for this meeting.",
+    )
+
+    # 3 ── Transcript or summary ───────────────────────────────────────────────
+    st.markdown("#### 3️⃣ Transcript or summary")
+    up = st.file_uploader("Upload a transcript (.txt or .docx)", type=["txt", "docx"], key=K("upload"))
+    if up is not None:
+        sig_key = K("upload_sig")
+        sig = f"{up.name}:{up.size}"
+        if st.session_state.get(sig_key) != sig:
+            try:
+                text = _pm_read_upload(up)
+                if text:
+                    st.session_state[K("transcript")] = text
+                    st.session_state[sig_key] = sig
+            except Exception as e:
+                st.error(f"Could not read that file: {e}")
+    st.text_area(
+        "Transcript or summary (paste here, or upload above)",
+        key=K("transcript"),
+        height=260,
+    )
+    st.caption(f"{len((st.session_state.get(K('transcript')) or '').split())} words captured")
+
+    # 4 ── Minutes ─────────────────────────────────────────────────────────────
+    st.markdown("#### 4️⃣ Minutes")
+    st.caption("Generating minutes fills the box below. Review and edit before saving. Generating again replaces what is in the box.")
+    if st.button("🤖 Generate minutes from transcript", type="primary", key=K("gen"), use_container_width=True):
+        src = (st.session_state.get(K("transcript")) or "").strip()
+        if not src:
+            st.warning("Add a transcript or summary in section 3 first.")
+        elif not GROQ_KEY:
+            st.warning("GROQ_API_KEY is not configured.")
+        else:
+            with st.spinner("Writing minutes…"):
+                try:
+                    md, truncated = _pm_generate_minutes(
+                        program,
+                        str(st.session_state[K("date")]),
+                        st.session_state.get(K("facilitator"), ""),
+                        st.session_state.get(K("attendees"), ""),
+                        st.session_state.get(K("agenda"), ""),
+                        src,
+                        MEETING_TYPES[st.session_state[K("type")]]["label"],
+                    )
+                    st.session_state[K("minutes")] = md
+                    if truncated:
+                        st.warning(
+                            "This transcript is longer than the AI can read in one go "
+                            "(Groq's 8,000 tokens/minute limit). The minutes were written from the "
+                            "first part only. Check them carefully before saving."
+                        )
+                    else:
+                        st.success("Minutes written. Review and edit below before saving.")
+                except Exception as e:
+                    st.error(f"Minutes could not be generated: {e}")
+
+    st.text_area("Minutes", key=K("minutes"), height=460, label_visibility="collapsed")
+    with st.expander("👁️ Preview formatted minutes"):
+        preview = st.session_state.get(K("minutes")) or ""
+        st.markdown(preview if preview.strip() else "_No minutes yet._")
+
+    # 5 ── Save & download ─────────────────────────────────────────────────────
+    st.markdown("#### 5️⃣ Save & download")
+    b1, b2 = st.columns(2)
+    save_clicked = b1.button("💾 Save meeting", type="primary", key=K("save"), use_container_width=True)
+
+    if save_clicked:
+        week_type = MEETING_TYPES[st.session_state[K("type")]]["week_type"]
+        minutes_text = (st.session_state.get(K("minutes")) or "").strip()
+        source_text = (st.session_state.get(K("transcript")) or "").strip()
+        if not minutes_text and not source_text:
+            st.error("Add a transcript or write minutes before saving.")
+        else:
+            payload = {
+                "program": program,
+                "meeting_date": str(st.session_state[K("date")]),
+                "term": (st.session_state.get(K("term")) or "").strip(),
+                "week_number": int(st.session_state[K("week")]),
+                "week_type": week_type,
+                "facilitator": (st.session_state.get(K("facilitator")) or "").strip(),
+                "attendees": (st.session_state.get(K("attendees")) or "").strip(),
+                "agenda_items": (st.session_state.get(K("agenda")) or "").strip(),
+                "source_transcript": source_text,
+                "meeting_minutes": minutes_text,
+                "actions": json.dumps(_pm_parse_actions(minutes_text)),
+            }
+            if rec is None:
+                # New rows need the legacy columns to hold a value
+                payload.update({
+                    "checkin_notes": "",
+                    "reports_tac_notes": "",
+                    "student_concerns": json.dumps([]),
+                    "smartar_spotlight": json.dumps([]),
+                    "priority_focus": json.dumps([]),
+                })
+            ok, result, missing = True, None, []
+            try:
+                result, missing = _pm_write(payload, cur)
+            except Exception as e:
+                ok = False
+                st.error(f"Save failed: {e}")
+            if ok:
+                flash = [("success", "✅ Meeting saved." if rec is None else "✅ Meeting updated.")]
+                if rec is None and result.data:
+                    st.session_state.current_meeting_id = result.data[0]["id"]
+                if missing:
+                    flash.append((
+                        "warning",
+                        f"Saved the minutes, but the database has no '{', '.join(missing)}' column yet, "
+                        "so the agenda and/or transcript were not stored. Run "
+                        "migration_tm_program_meetings_v2.sql in Supabase, then save again."
+                    ))
+                st.session_state.pm2_flash = flash
+                st.rerun()
+
+    minutes_now = st.session_state.get(K("minutes")) or ""
+    meta_now = {
+        "date": str(st.session_state.get(K("date"), "")),
+        "term": st.session_state.get(K("term"), ""),
+        "week": st.session_state.get(K("week")) if MEETING_TYPES[st.session_state.get(K("type"), "student")]["week_type"] != "ad-hoc" else "",
+        "facilitator": st.session_state.get(K("facilitator"), ""),
+        "attendees": st.session_state.get(K("attendees"), ""),
+        "type_label": MEETING_TYPES[st.session_state.get(K("type"), "student")]["label"],
+    }
+    if minutes_now.strip():
+        b2.download_button(
+            "📥 Download minutes (.docx)",
+            data=build_program_minutes_docx(program, meta_now, minutes_now),
+            file_name=_pm_filename(program, meta_now),
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            key=K("dl"),
             use_container_width=True,
-            key=f"pm_download_{program}",
         )
-        st.caption("Tip: save first so the download matches the stored record exactly.")
-    except Exception as _e:
-        st.caption(f"Minutes document could not be generated: {_e}")
+    else:
+        b2.button("📥 Download minutes (.docx)", disabled=True, key=K("dl_off"), use_container_width=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# MEETING ARCHIVE - View and Edit Past Meetings
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Archive (one table for every meeting type) ───────────────────────────────
+
+def _pm_archive_detail(program, r):
+    mid = r["id"]
+    wk_type = r.get("week_type")
+    tkey = _TYPE_FROM_WEEK.get(wk_type, "student")
+    meta = {
+        "date": str(r.get("meeting_date", "")),
+        "term": r.get("term", ""),
+        "week": r.get("week_number") if wk_type != "ad-hoc" else "",
+        "facilitator": r.get("facilitator", ""),
+        "attendees": r.get("attendees", ""),
+        "type_label": MEETING_TYPES.get(tkey, {}).get("label", "Meeting"),
+    }
+    minutes = r.get("meeting_minutes") or ""
+    with st.container(border=True):
+        st.markdown(f"**{_pm_label(r)}**")
+        st.caption(
+            f"Term {r.get('term') or '—'} · Facilitator: {r.get('facilitator') or '—'} · "
+            f"Attendees: {r.get('attendees') or 'not recorded'}"
+        )
+        if (r.get("agenda_items") or "").strip():
+            st.markdown("**Agenda items**")
+            st.markdown("\n".join(f"- {a.strip()}" for a in r["agenda_items"].splitlines() if a.strip()))
+        st.markdown("**Minutes**")
+        st.markdown(minutes if minutes.strip() else "_No minutes recorded._")
+
+        src = _pm_legacy_source(r, r.get("program", ""))
+        if src.strip():
+            with st.expander("📄 Transcript / summary"):
+                st.text(src)
+
+        extras = _pm_legacy_extras(r)
+        if extras.strip():
+            with st.expander("🗂️ Earlier-format fields (kept from before)"):
+                st.markdown(extras)
+
+        bc1, bc2, bc3 = st.columns([1.3, 1, 1])
+        with bc1:
+            if st.button("✏️ Edit in meeting form", key=f"pm2_arch_edit_{mid}", type="primary", use_container_width=True):
+                st.session_state.current_meeting_id = mid
+                st.session_state.pm2_flash = [("success", "Opened for editing. Click the 🗒️ Program Meeting tab to continue.")]
+                st.rerun()
+        with bc2:
+            if minutes.strip():
+                st.download_button(
+                    "📥 Download minutes (.docx)",
+                    data=build_program_minutes_docx(program, meta, minutes),
+                    file_name=_pm_filename(program, meta),
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    key=f"pm2_arch_dl_{mid}",
+                    use_container_width=True,
+                )
+            else:
+                st.button("📥 Download minutes (.docx)", disabled=True, key=f"pm2_arch_dl_off_{mid}", use_container_width=True)
+        with bc3:
+            ck = f"pm2_arch_confirm_{mid}"
+            if st.session_state.get(ck):
+                yes, no = st.columns(2)
+                if yes.button("⚠️ Confirm", key=f"pm2_arch_yes_{mid}", use_container_width=True):
+                    try:
+                        supabase.table("tm_program_meetings").delete().eq("id", mid).execute()
+                        deleted = True
+                    except Exception as e:
+                        st.error(f"Could not delete: {e}")
+                        deleted = False
+                    if deleted:
+                        st.session_state[ck] = False
+                        if st.session_state.get("current_meeting_id") == mid:
+                            st.session_state.current_meeting_id = None
+                        st.session_state.pm2_flash = [("success", "Meeting deleted.")]
+                        st.rerun()
+                if no.button("Cancel", key=f"pm2_arch_no_{mid}", use_container_width=True):
+                    st.session_state[ck] = False
+                    st.rerun()
+            else:
+                if st.button("🗑️ Delete", key=f"pm2_arch_del_{mid}", use_container_width=True):
+                    st.session_state[ck] = True
+                    st.rerun()
+
 
 def render_meeting_archive(program):
-    """Display archive of past meetings with interactive table structure (like STAFF Meetings)."""
-    import json as _json
-    
     st.markdown("### 📚 Meeting Archive")
-    st.caption(f"Browse and manage past {PROGRAMS[program]['label']} meetings")
-    
-    # Fetch all meetings for this program
-    try:
-        result = supabase.table('tm_program_meetings').select("*").eq('program', program).order('meeting_date', desc=True).execute()
-        all_meetings = result.data or []
-    except Exception as e:
-        st.error(f"Could not load meetings: {e}")
+    st.caption(f"All {PROGRAMS[program]['label']} meetings. Open one to read, edit, download or delete it.")
+
+    recs = fetch("tm_program_meetings", {"program": program}, "meeting_date")
+    if not recs:
+        st.info("No meetings saved yet. Record one in the 🗒️ Program Meeting tab.")
         return
-    
-    if not all_meetings:
-        st.info("No past meetings found. Start recording meetings in the Program Meeting tab!")
-        return
-    
-    # Separate ad-hoc from scheduled meetings
-    adhoc_meetings = [m for m in all_meetings if m.get('week_type') == 'ad-hoc']
-    scheduled_meetings = [m for m in all_meetings if m.get('week_type') in ['A', 'B']]
-    
-    # ── AD-HOC MEETINGS TABLE ────────────────────────────────────────────────────
-    if adhoc_meetings:
-        st.markdown("#### 📝 Ad-Hoc Meetings")
-        
-        _archive_col_ratios = [1.2, 1.5, 1.3, 0.8, 1]
-        
-        # Header row
-        _hcols = st.columns(_archive_col_ratios, gap="small")
-        for _hc, _htext in zip(_hcols, ["Date", "Facilitator", "Attendees", "Minutes", ""]):
-            _hc.markdown(
-                f'<div style="background:#EAF5F5;padding:8px 10px;'
-                f'border-bottom:2px solid #1A7A7A;font-family:&quot;Segoe UI&quot;,Arial,sans-serif;'
-                f'font-size:13px;font-weight:700;color:#1A7A7A;">{_htext}</div>',
-                unsafe_allow_html=True
+
+    f_choice = st.selectbox(
+        "Show",
+        ["All meetings", "Student Lens", "System Lens", "Ad-Hoc"],
+        key=f"pm2_arch_filter_{program}",
+    )
+    want = {"Student Lens": "A", "System Lens": "B", "Ad-Hoc": "ad-hoc"}.get(f_choice)
+    shown = [r for r in recs if want is None or r.get("week_type") == want]
+
+    groups = {}
+    for r in shown:
+        groups.setdefault(r.get("term") or "Term not recorded", []).append(r)
+    ordered_terms = sorted([t for t in groups if t != "Term not recorded"], reverse=True)
+    if "Term not recorded" in groups:
+        ordered_terms.append("Term not recorded")
+
+    ratios = [1.5, 0.8, 1.3, 1.8, 0.9, 1.0]
+    for term in ordered_terms:
+        st.markdown(
+            f'<div style="margin-top:20px;padding:10px 14px;background:#1A7A6E;border-radius:6px 6px 0 0;'
+            f'font-size:15px;font-weight:700;color:white;font-family:Segoe UI,Arial,sans-serif;">'
+            f'🗓️ {term} &nbsp;·&nbsp; {len(groups[term])} meeting(s)</div>',
+            unsafe_allow_html=True,
+        )
+        hcols = st.columns(ratios, gap="small")
+        for hc, htext in zip(hcols, ["Type", "Week", "Date", "Facilitator", "Minutes", ""]):
+            hc.markdown(
+                f'<div style="background:#EAF5F5;padding:8px 10px;border-bottom:2px solid #1A7A6E;'
+                f'font-size:13px;font-weight:700;color:#1A7A6E;font-family:Segoe UI,Arial,sans-serif;">{htext}</div>',
+                unsafe_allow_html=True,
             )
-        
-        # Data rows
-        for _idx, meeting in enumerate(adhoc_meetings):
-            _has_min = bool((meeting.get('checkin_notes') or meeting.get('reports_tac_notes') or '').strip())
-            _open_key = f"_archive_adhoc_open_{meeting['id']}"
-            _is_open = st.session_state.get(_open_key, False)
-            
-            _row_bg = "#FAFBFC" if _idx % 2 else "white"
-            _cell = (f'background:{_row_bg};padding:10px;border-bottom:1px solid #D9DEE2;'
-                    f'font-family:&quot;Segoe UI&quot;,Arial,sans-serif;font-size:13.5px;')
-            
-            _rcols = st.columns(_archive_col_ratios, gap="small")
-            _rcols[0].markdown(f'<div style="{_cell}">{meeting.get("meeting_date", "")}</div>', unsafe_allow_html=True)
-            _rcols[1].markdown(f'<div style="{_cell}">{meeting.get("facilitator", "Unknown")}</div>', unsafe_allow_html=True)
-            _rcols[2].markdown(f'<div style="{_cell}">{meeting.get("attendees", "Not recorded")[:30]}...</div>', unsafe_allow_html=True)
-            _rcols[3].markdown(f'<div style="{_cell}text-align:center;">{"✅" if _has_min else "—"}</div>', unsafe_allow_html=True)
-            
-            with _rcols[4]:
-                if st.button("▾ Close" if _is_open else "▸ Open", key=f"toggle_adhoc_{meeting['id']}",
-                            use_container_width=True):
-                    st.session_state[_open_key] = not _is_open
+
+        rows = sorted(groups[term], key=lambda x: str(x.get("meeting_date", "")), reverse=True)
+        for idx, r in enumerate(rows):
+            mid = r["id"]
+            open_key = f"pm2_arch_open_{mid}"
+            is_open = st.session_state.get(open_key, False)
+            bg = "#FAFBFC" if idx % 2 else "white"
+            cell = f"background:{bg};padding:8px;border-bottom:1px solid #D9DEE2;font-size:13.5px;font-family:Segoe UI,Arial,sans-serif;"
+            tkey = _TYPE_FROM_WEEK.get(r.get("week_type"), "")
+            type_text = MEETING_TYPES.get(tkey, {}).get("label", "—")
+            week_text = f"W{r.get('week_number')}" if r.get("week_type") in ("A", "B") else "—"
+            has_min = "✅" if (r.get("meeting_minutes") or "").strip() else "—"
+            rc = st.columns(ratios, gap="small")
+            rc[0].markdown(f'<div style="{cell}">{type_text}</div>', unsafe_allow_html=True)
+            rc[1].markdown(f'<div style="{cell}">{week_text}</div>', unsafe_allow_html=True)
+            rc[2].markdown(f'<div style="{cell}">{r.get("meeting_date", "")}</div>', unsafe_allow_html=True)
+            rc[3].markdown(f'<div style="{cell}">{r.get("facilitator") or "—"}</div>', unsafe_allow_html=True)
+            rc[4].markdown(f'<div style="{cell}text-align:center;">{has_min}</div>', unsafe_allow_html=True)
+            with rc[5]:
+                if st.button("▾ Close" if is_open else "▸ Open", key=f"pm2_arch_btn_{mid}", use_container_width=True):
+                    st.session_state[open_key] = not is_open
                     st.rerun()
-            
-            if _is_open:
-                with st.container(border=True):
-                    st.write(f"**Facilitator:** {meeting.get('facilitator', 'Unknown')}")
-                    st.write(f"**Attendees:** {meeting.get('attendees', 'Not recorded')}")
-                    st.write(f"**Term:** {meeting.get('term', '?')}")
-                    
-                    st.markdown("---")
-                    st.write("**📋 Meeting Notes:**")
-                    notes = meeting.get('checkin_notes') or meeting.get('reports_tac_notes') or 'No notes recorded'
-                    st.markdown(notes)
-                    
-                    if meeting.get('meeting_minutes'):
-                        with st.expander("📄 Full Transcript"):
-                            st.markdown(meeting.get('meeting_minutes'))
-                    
-                    st.markdown("---")
-                    col_arc_edit, col_arc_dl, col_arc_del = st.columns([1.3, 1, 1])
-                    
-                    with col_arc_edit:
-                        if st.button("✏️ Edit", key=f"edit_adhoc_{meeting['id']}", type="primary", use_container_width=True):
-                            st.session_state.current_meeting_id = meeting['id']
-                            st.success("✅ Meeting loaded. Scroll up to edit.")
-                            st.rerun()
-                    
-                    with col_arc_dl:
-                        try:
-                            doc = generate_minutes_docx(
-                                program=program,
-                                meeting_date=meeting.get('meeting_date', ''),
-                                facilitator=meeting.get('facilitator', ''),
-                                attendees=meeting.get('attendees', ''),
-                                extracted_notes=meeting.get('checkin_notes', ''),
-                                summary_notes=meeting.get('reports_tac_notes', ''),
-                                transcript=meeting.get('meeting_minutes', '')
-                            )
-                            doc_bytes = io.BytesIO()
-                            doc.save(doc_bytes)
-                            doc_bytes.seek(0)
-                            
-                            st.download_button(
-                                "📥 Download (.docx)",
-                                data=doc_bytes,
-                                file_name=f"Minutes_{meeting.get('meeting_date', '')}_{program}.docx",
-                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                key=f"download_adhoc_{meeting['id']}",
-                                use_container_width=True
-                            )
-                        except:
-                            st.button("📥 Download (.docx)", disabled=True, use_container_width=True, 
-                                    key=f"download_adhoc_disabled_{meeting['id']}")
-                    
-                    with col_arc_del:
-                        confirm_key = f"confirm_delete_adhoc_{meeting['id']}"
-                        if st.session_state.get(confirm_key):
-                            col_yes, col_no = st.columns(2)
-                            with col_yes:
-                                if st.button("⚠️ Confirm", key=f"confirm_del_adhoc_{meeting['id']}", type="secondary", use_container_width=True):
-                                    try:
-                                        supabase.table('tm_program_meetings').delete().eq('id', meeting['id']).execute()
-                                        st.success("✅ Deleted.")
-                                        st.session_state[confirm_key] = False
-                                        st.rerun()
-                                    except Exception as e:
-                                        st.error(f"⚠️ Could not delete: {e}")
-                            with col_no:
-                                if st.button("Cancel", key=f"cancel_del_adhoc_{meeting['id']}", use_container_width=True):
-                                    st.session_state[confirm_key] = False
-                                    st.rerun()
-                        else:
-                            if st.button("🗑️ Delete", key=f"delete_adhoc_{meeting['id']}", use_container_width=True):
-                                st.session_state[confirm_key] = True
-                                st.rerun()
-        
-        st.markdown("---")
-    
-    # ── SCHEDULED MEETINGS TABLE (grouped by term) ────────────────────────────────
-    if scheduled_meetings:
-        st.markdown("#### 📅 Scheduled Meetings (Week A & B)")
-        
-        # Group by term
-        def _get_term_sort_key(meeting):
-            term = meeting.get('term', '')
-            # Extract term number for sorting (T1, T2, T3, T4)
-            import re
-            match = re.search(r'T(\d+)', term)
-            return int(match.group(1)) if match else 999
-        
-        term_groups = {}
-        for m in scheduled_meetings:
-            term = m.get('term', 'No Term')
-            if term not in term_groups:
-                term_groups[term] = []
-            term_groups[term].append(m)
-        
-        _archive_col_ratios = [0.8, 1, 1.5, 1.3, 1, 1]
-        
-        for term in sorted(term_groups.keys(), key=lambda t: _get_term_sort_key({'term': t}), reverse=True):
-            meetings = term_groups[term]
-            
-            st.markdown(
-                f'<div style="margin-top:20px;margin-bottom:0;padding:10px 14px;'
-                f'background:#1A7A7A;border-radius:6px 6px 0 0;'
-                f'font-family:&quot;Segoe UI&quot;,Arial,sans-serif;'
-                f'font-size:15px;font-weight:700;color:white;">'
-                f'🗓️ {term} &nbsp;·&nbsp; {len(meetings)} meeting(s)</div>',
-                unsafe_allow_html=True
-            )
-            
-            # Header row
-            _hcols = st.columns(_archive_col_ratios, gap="small")
-            for _hc, _htext in zip(_hcols, ["Type", "Week", "Date", "Facilitator", "Minutes", ""]):
-                _hc.markdown(
-                    f'<div style="background:#EAF5F5;padding:8px 10px;'
-                    f'border-bottom:2px solid #1A7A7A;font-family:&quot;Segoe UI&quot;,Arial,sans-serif;'
-                    f'font-size:13px;font-weight:700;color:#1A7A7A;">{_htext}</div>',
-                    unsafe_allow_html=True
-                )
-            
-            # Data rows
-            for _idx, meeting in enumerate(sorted(meetings, key=lambda m: m.get('meeting_date', ''), reverse=True)):
-                _has_min = bool((meeting.get('meeting_minutes') or '').strip())
-                _open_key = f"_archive_scheduled_open_{meeting['id']}"
-                _is_open = st.session_state.get(_open_key, False)
-                
-                _row_bg = "#FAFBFC" if _idx % 2 else "white"
-                _cell = (f'background:{_row_bg};padding:10px;border-bottom:1px solid #D9DEE2;'
-                        f'font-family:&quot;Segoe UI&quot;,Arial,sans-serif;font-size:13.5px;')
-                
-                _rcols = st.columns(_archive_col_ratios, gap="small")
-                
-                week_type = meeting.get('week_type', 'A')
-                week_badge = "🔵 Week A" if week_type == "A" else "🟡 Week B"
-                _rcols[0].markdown(f'<div style="{_cell}">{week_badge}</div>', unsafe_allow_html=True)
-                _rcols[1].markdown(f'<div style="{_cell}">W{meeting.get("week_number", "?")}</div>', unsafe_allow_html=True)
-                _rcols[2].markdown(f'<div style="{_cell}">{meeting.get("meeting_date", "")}</div>', unsafe_allow_html=True)
-                _rcols[3].markdown(f'<div style="{_cell}">{meeting.get("facilitator", "Unknown")}</div>', unsafe_allow_html=True)
-                _rcols[4].markdown(f'<div style="{_cell}text-align:center;">{"✅" if _has_min else "—"}</div>', unsafe_allow_html=True)
-                
-                with _rcols[5]:
-                    if st.button("▾ Close" if _is_open else "▸ Open", key=f"toggle_scheduled_{meeting['id']}",
-                                use_container_width=True):
-                        st.session_state[_open_key] = not _is_open
-                        st.rerun()
-                
-                if _is_open:
-                    with st.container(border=True):
-                        st.write(f"**Facilitator:** {meeting.get('facilitator', 'Unknown')} &nbsp;|&nbsp; **Attendees:** {meeting.get('attendees', 'Not recorded')}")
-                        st.write(f"**Type:** {'Week A' if meeting.get('week_type') == 'A' else 'Week B'}")
-                        
-                        st.markdown("---")
-                        
-                        # Check-in Notes
-                        if meeting.get('checkin_notes'):
-                            st.markdown("**📋 Check-in Notes:**")
-                            st.markdown(meeting.get('checkin_notes'))
-                        
-                        # Priority Focus (Week B)
-                        if meeting.get('week_type') == 'B' and meeting.get('priority_focus'):
-                            st.markdown("**🎯 Priority Focus:**")
-                            try:
-                                pf = _json.loads(meeting['priority_focus'])
-                                if isinstance(pf, dict):
-                                    st.markdown(pf.get('notes', ''))
-                                elif isinstance(pf, list):
-                                    for r in pf:
-                                        if isinstance(r, dict) and any(r.values()):
-                                            st.markdown("• " + " | ".join(v for v in r.values() if v))
-                            except:
-                                st.markdown(str(meeting.get('priority_focus', '')))
-                        
-                        # Student Concerns (Week A)
-                        if meeting.get('week_type') == 'A' and meeting.get('student_concerns'):
-                            try:
-                                sc = _json.loads(meeting['student_concerns'])
-                                if isinstance(sc, list) and sc:
-                                    st.markdown("**👥 Student Concerns:**")
-                                    for r in sc:
-                                        note = r.get('notes','') if isinstance(r, dict) else str(r)
-                                        if note:
-                                            st.markdown(f"• {note}")
-                            except:
-                                pass
-                        
-                        # Meeting Minutes
-                        if meeting.get('meeting_minutes'):
-                            st.markdown("**📝 Meeting Minutes:**")
-                            st.markdown(meeting.get('meeting_minutes'))
-                        else:
-                            st.info("No minutes recorded")
-                        
-                        # Actions
-                        if meeting.get('actions'):
-                            try:
-                                actions = _json.loads(meeting['actions'])
-                                if actions:
-                                    st.markdown("**✋ Actions:**")
-                                    for act in actions:
-                                        if isinstance(act, dict) and any(act.values()):
-                                            st.markdown("• " + " | ".join(v for v in act.values() if v))
-                            except:
-                                pass
-                        
-                        st.markdown("---")
-                        col_arc_edit, col_arc_dl, col_arc_del = st.columns([1.3, 1, 1])
-                        
-                        with col_arc_edit:
-                            if st.button("✏️ Edit", key=f"edit_scheduled_{meeting['id']}", type="primary", use_container_width=True):
-                                st.session_state.current_meeting_id = meeting['id']
-                                st.success("✅ Meeting loaded. Scroll up to edit.")
-                                st.rerun()
-                        
-                        with col_arc_dl:
-                            try:
-                                doc = generate_minutes_docx(
-                                    program=program,
-                                    meeting_date=meeting.get('meeting_date', ''),
-                                    facilitator=meeting.get('facilitator', ''),
-                                    attendees=meeting.get('attendees', ''),
-                                    extracted_notes=meeting.get('checkin_notes', ''),
-                                    summary_notes='',
-                                    transcript=meeting.get('meeting_minutes', '')
-                                )
-                                doc_bytes = io.BytesIO()
-                                doc.save(doc_bytes)
-                                doc_bytes.seek(0)
-                                
-                                st.download_button(
-                                    "📥 Download (.docx)",
-                                    data=doc_bytes,
-                                    file_name=f"Minutes_{meeting.get('meeting_date', '')}_{meeting.get('week_type', '')}_{program}.docx",
-                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                    key=f"download_scheduled_{meeting['id']}",
-                                    use_container_width=True
-                                )
-                            except:
-                                st.button("📥 Download (.docx)", disabled=True, use_container_width=True,
-                                        key=f"download_scheduled_disabled_{meeting['id']}")
-                        
-                        with col_arc_del:
-                            confirm_key = f"confirm_delete_scheduled_{meeting['id']}"
-                            if st.session_state.get(confirm_key):
-                                col_yes, col_no = st.columns(2)
-                                with col_yes:
-                                    if st.button("⚠️ Confirm", key=f"confirm_del_scheduled_{meeting['id']}", type="secondary", use_container_width=True):
-                                        try:
-                                            supabase.table('tm_program_meetings').delete().eq('id', meeting['id']).execute()
-                                            st.success("✅ Deleted.")
-                                            st.session_state[confirm_key] = False
-                                            st.rerun()
-                                        except Exception as e:
-                                            st.error(f"⚠️ Could not delete: {e}")
-                                with col_no:
-                                    if st.button("Cancel", key=f"cancel_del_scheduled_{meeting['id']}", use_container_width=True):
-                                        st.session_state[confirm_key] = False
-                                        st.rerun()
-                            else:
-                                if st.button("🗑️ Delete", key=f"delete_scheduled_{meeting['id']}", use_container_width=True):
-                                    st.session_state[confirm_key] = True
-                                    st.rerun()
+            if is_open:
+                _pm_archive_detail(program, r)
+
 
 
 def main():
