@@ -2,6 +2,7 @@ from theme import apply_clc_theme
 import streamlit as st
 from supabase import create_client
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -41,61 +42,337 @@ def _fit_to_groq_budget(text: str, max_tokens: int, prompt_overhead_tokens: int 
         return text, False
     return text[:char_budget], True
 
-# ── Meeting Minutes fixed section structure ───────────────────────────────
-# Manual entry and AI-from-transcript both produce/edit the SAME six
-# sections, in this order, so the two entry methods are interchangeable.
-MEETING_SECTIONS = [
-    ("manager_business", "Manager's Business"),
-    ("transition_coordinator", "Transition Coordinator"),
-    ("finance", "Finance"),
-    ("whs", "WHS"),
-    ("pac", "PAC"),
-    ("other_business", "Other Business"),
-]
+# ── Meeting Minutes structure ──────────────────────────────────────────────
+# Minutes are organised exactly the same way the Agenda section (further
+# down the page) already is: one block per Standing Item (the same labels as
+# STANDING_AGENDA_ITEMS), one block per THIS meeting's specific Additional
+# Agenda Items, and a dynamic "Any Other Items" block for anything raised
+# that wasn't on the agenda at all. Manual Entry and AI-from-Transcript both
+# produce/edit this same structure, so the two entry methods are
+# interchangeable and minutes always land "in the standing item box it
+# correlates to" rather than a separately-named scheme.
 _NIL_TEXT = "Nil discussed this meeting."
+_BLOCK_SEP = "\n\n---\n\n"
+
+# Before this restructure, minutes used a fixed six-section scheme with
+# slightly different names to the Agenda section's Standing Items. Kept here
+# ONLY so minutes saved under the old scheme still show something sensible
+# when a meeting is reopened for editing — new minutes never use these
+# labels. "Other Business" has no safe 1:1 mapping onto a Standing Item, so
+# it's carried over as a legacy block instead of being guessed at.
+_LEGACY_SECTION_TO_STANDING_ITEM = {
+    "Manager's Business": "Manager Info",
+    "Transition Coordinator": "Transition Coordinator Info",
+    "Finance": "Finance",
+    "WHS": "WHS (Work Health & Safety)",
+    "PAC": "PAC (Personnel Advisory Committee)",
+}
 
 
-def _parse_minutes_sections(minutes_text: str) -> dict:
-    """Split a combined minutes string back into per-section text, using the
-    '## Section Name' headers this tool writes. Missing/older-format minutes
-    return blank sections rather than erroring."""
-    result = {key: "" for key, _ in MEETING_SECTIONS}
+def _slugify(text: str) -> str:
+    """Turn a label into a stable, widget-key-safe slug."""
+    return re.sub(r'[^a-z0-9]+', '_', (text or '').lower()).strip('_') or 'item'
+
+
+def _clean_agenda_label(label: str) -> str:
+    """Strip the '📌 ' prefix and '— submitted by …' suffix some additional
+    agenda items carry, leaving just the plain topic text for use as a
+    minutes heading."""
+    text = (label or "").strip()
+    if text.startswith("📌"):
+        text = text[1:].strip()
+    text = re.split(r"\s+—\s+submitted by\s+", text)[0].strip()
+    return text or "(untitled item)"
+
+
+def _parse_minutes_blocks(minutes_text: str) -> list:
+    """Parse a combined minutes string into an ordered list of blocks:
+    [{"kind": "standing"|"additional"|"other"|"legacy", "label": str,
+      "raised_by": str, "minutes": str, "action": str, "origin": str}, …]
+
+    Recognises the current '## STANDING: x' / '## ADDITIONAL: x' /
+    '## OTHER: x | RAISED BY: y' heading convention, and falls back to
+    treating a plain '## Heading' (the old fixed six-section format) as a
+    legacy block so older saved minutes don't just vanish."""
+    blocks = []
     if not minutes_text:
-        return result
-    for key, label in MEETING_SECTIONS:
-        pattern = rf"##\s*{re.escape(label)}\s*\n(.*?)(?=\n##\s|\Z)"
-        m = re.search(pattern, minutes_text, re.DOTALL)
+        return blocks
+    for raw_block in minutes_text.split(_BLOCK_SEP):
+        raw_block = raw_block.strip()
+        if not raw_block or not raw_block.startswith("## "):
+            continue
+        heading_line, _, body = raw_block.partition("\n")
+        heading_line = heading_line[3:].strip()
+        body = body.strip()
+
+        m = re.match(r"^(STANDING|ADDITIONAL|OTHER):\s*(.*)$", heading_line, re.DOTALL)
         if m:
-            val = m.group(1).strip()
-            result[key] = "" if val == _NIL_TEXT else val
-    return result
+            kind_raw, rest = m.group(1), m.group(2).strip()
+            raised_by = ""
+            if kind_raw == "OTHER":
+                parts = re.split(r"\s*\|\s*RAISED BY:\s*", rest, maxsplit=1)
+                label = parts[0].strip()
+                raised_by = parts[1].strip() if len(parts) > 1 else ""
+            else:
+                label = rest
+            kind = {"STANDING": "standing", "ADDITIONAL": "additional", "OTHER": "other"}[kind_raw]
+        else:
+            kind, label, raised_by = "legacy", heading_line, ""
+
+        action = ""
+        action_match = re.search(r"\n?ACTION:\s*(.*)$", body, re.DOTALL)
+        if action_match:
+            action_text = action_match.group(1).strip()
+            body = body[:action_match.start()].strip()
+            if action_text and action_text.lower() != "none":
+                action = action_text
+        if body == _NIL_TEXT:
+            body = ""
+
+        blocks.append({"kind": kind, "label": label, "raised_by": raised_by,
+                        "minutes": body, "action": action, "origin": "saved"})
+    return blocks
 
 
-def _build_minutes_from_sections(section_values: dict) -> str:
-    """Combine the six section fields into one markdown document for storage,
-    in a fixed order with consistent headers so it can be parsed back later."""
+def _build_minutes_text(blocks: list) -> str:
+    """Combine minutes blocks (same shape _parse_minutes_blocks returns) back
+    into one storable markdown document."""
     parts = []
-    for key, label in MEETING_SECTIONS:
-        content = (section_values.get(key) or "").strip() or _NIL_TEXT
-        parts.append(f"## {label}\n\n{content}")
+    for b in blocks:
+        kind = b.get("kind", "additional")
+        label = (b.get("label") or "").strip() or "(untitled item)"
+        if kind == "standing":
+            heading = f"STANDING: {label}"
+        elif kind == "other":
+            raised_by = (b.get("raised_by") or "Unknown").strip() or "Unknown"
+            heading = f"OTHER: {label} | RAISED BY: {raised_by}"
+        elif kind == "legacy":
+            heading = label
+        else:
+            heading = f"ADDITIONAL: {label}"
+        body = (b.get("minutes") or "").strip() or _NIL_TEXT
+        action = (b.get("action") or "").strip()
+        content = body + "\n\nACTION: " + (action if action else "None")
+        parts.append(f"## {heading}\n\n{content}")
+    return _BLOCK_SEP.join(parts)
+
+
+def _seed_minutes_blocks(minutes_text: str, additional_item_labels: list) -> list:
+    """Build the full working set of minutes blocks for THIS meeting: one per
+    Standing Item, one per this meeting's current Additional Agenda Items,
+    plus any 'Any Other Items' / legacy blocks already saved — seeding each
+    from whatever was previously saved under that label."""
+    parsed = _parse_minutes_blocks(minutes_text)
+    by_standing, by_additional, others, legacy = {}, {}, [], []
+    for b in parsed:
+        if b["kind"] == "standing":
+            by_standing[b["label"].strip().lower()] = b
+        elif b["kind"] == "additional":
+            by_additional[b["label"].strip().lower()] = b
+        elif b["kind"] == "other":
+            others.append(b)
+        else:
+            mapped = _LEGACY_SECTION_TO_STANDING_ITEM.get(b["label"].strip())
+            if mapped and not by_standing.get(mapped.strip().lower(), {}).get("minutes"):
+                by_standing[mapped.strip().lower()] = {**b, "kind": "standing", "label": mapped}
+            else:
+                legacy.append(b)
+
+    blocks = []
+    for label in STANDING_AGENDA_ITEMS:
+        existing = by_standing.get(label.strip().lower())
+        blocks.append(existing or {"kind": "standing", "label": label, "raised_by": "",
+                                    "minutes": "", "action": "", "origin": "new"})
+
+    for raw_label in additional_item_labels or []:
+        clean = _clean_agenda_label(raw_label)
+        existing = by_additional.get(clean.strip().lower())
+        blocks.append(existing or {"kind": "additional", "label": clean, "raised_by": "",
+                                    "minutes": "", "action": "", "origin": "new"})
+
+    blocks.extend(others)
+    blocks.extend(legacy)
+    return blocks
+
+
+def _sync_additional_minutes_blocks(blocks: list, additional_item_labels: list) -> None:
+    """Add a minutes block for any Additional Agenda Item that doesn't have
+    one yet (e.g. added after the Minutes section was first opened). Never
+    removes a block, so minutes already written are never lost even if the
+    agenda item is later removed."""
+    existing = {b["label"].strip().lower() for b in blocks if b["kind"] == "additional"}
+    for raw_label in additional_item_labels or []:
+        clean = _clean_agenda_label(raw_label)
+        if clean.strip().lower() not in existing:
+            blocks.append({"kind": "additional", "label": clean, "raised_by": "",
+                            "minutes": "", "action": "", "origin": "new"})
+            existing.add(clean.strip().lower())
+
+
+def _minutes_display_markdown(minutes_text: str) -> str:
+    """Render stored minutes (new or legacy format) as clean markdown for
+    read-only display — strips the internal STANDING:/ADDITIONAL:/OTHER:
+    heading markup and bolds each item's Action line, instead of showing
+    the raw storage format. Used by the Meeting Archive card and the
+    on-screen 'Preview combined minutes' expander; the Word download goes
+    through _build_minutes_docx_bytes instead, which parses the same way."""
+    blocks = _parse_minutes_blocks(minutes_text)
+    if not blocks:
+        return minutes_text or ""
+    parts = []
+    for b in blocks:
+        label = (b.get('label') or '').strip() or '(untitled item)'
+        if b.get('kind') == 'other':
+            raised_by = (b.get('raised_by') or '').strip()
+            heading = f"Other Item: {label}" + (f" (raised by {raised_by})" if raised_by else "")
+        else:
+            heading = label
+        body = (b.get('minutes') or '').strip() or _NIL_TEXT
+        action = (b.get('action') or '').strip()
+        chunk = f"#### {heading}\n\n{body}"
+        if action:
+            chunk += f"\n\n**Action:** {action}"
+        parts.append(chunk)
     return "\n\n---\n\n".join(parts)
 
 
-def _render_minutes_section_fields(seed: dict, key_prefix: str) -> dict:
-    """Render one editable text_area per standing section, seeded from `seed`.
-    Used identically by Manual Entry and by the AI-from-Transcript review step,
-    so both methods land in the same fields."""
-    values = {}
-    for key, label in MEETING_SECTIONS:
-        values[key] = st.text_area(
-            label,
-            value=seed.get(key, ""),
-            height=140,
-            key=f"{key_prefix}_{key}",
-            placeholder=f"What was discussed under {label}? Include any decisions "
-                        f"and actions (who's responsible, due date)."
+def _minutes_block_widget_keys(block: dict, key_prefix: str, idx: int) -> tuple:
+    slug = _slugify(block.get("label", ""))
+    base = f"{key_prefix}_{block.get('kind', 'x')}_{slug}_{idx}"
+    return f"{base}_minutes", f"{base}_action"
+
+
+def _all_minutes_widget_keys(blocks: list, key_prefix: str) -> list:
+    """All (minutes, action) widget keys currently in use across `blocks`,
+    computed the SAME way _render_minutes_blocks_editor numbers them — each
+    kind (standing/additional/other/legacy) indexed separately, starting at
+    0 — so callers that need to pop stale widget state (e.g. Clear draft)
+    always match exactly what's actually on screen."""
+    keys = []
+    for kind in ("standing", "additional", "other", "legacy"):
+        for i, b in enumerate([x for x in blocks if x["kind"] == kind]):
+            keys.extend(_minutes_block_widget_keys(b, key_prefix, i))
+    return keys
+
+
+def _render_minutes_blocks_editor(blocks: list, key_prefix: str) -> None:
+    """Render one editable (minutes + action) pair per block, grouped by
+    kind, mutating `blocks` in place. Used identically by Manual Entry and
+    by the AI-from-Transcript review step, so both methods land in the same
+    fields."""
+
+    def _render_one(b, idx, allow_delete=False):
+        heading = f"**{b['label']}**"
+        if b.get("raised_by"):
+            heading += f"  \n*Raised by {b['raised_by']}*"
+        col_h, col_del = st.columns([8, 1]) if allow_delete else (st.container(), None)
+        with col_h:
+            st.markdown(heading)
+        if allow_delete:
+            with col_del:
+                if st.button("🗑️", key=f"{key_prefix}_del_{idx}", help="Remove this item"):
+                    blocks.remove(b)
+                    st.rerun()
+        m_key, a_key = _minutes_block_widget_keys(b, key_prefix, idx)
+        b["minutes"] = st.text_area(
+            f"Minutes — {b['label']}", value=b.get("minutes", ""), height=110,
+            key=m_key, label_visibility="collapsed",
+            placeholder="What was discussed, and any decisions made? Leave blank if not discussed."
         )
-    return values
+        b["action"] = st.text_input(
+            f"Action — {b['label']}", value=b.get("action", ""),
+            key=a_key, label_visibility="collapsed",
+            placeholder='Action (optional) — who\'s doing what, e.g. "Jacqui — update the WHS checklist by Friday"'
+        )
+        st.write("")
+
+    standing = [b for b in blocks if b["kind"] == "standing"]
+    additional = [b for b in blocks if b["kind"] == "additional"]
+    other = [b for b in blocks if b["kind"] == "other"]
+    legacy = [b for b in blocks if b["kind"] == "legacy"]
+
+    if standing:
+        st.markdown("##### Standing Items")
+        st.caption("Minutes here go straight into the matching Standing Item from the Agenda above.")
+        for i, b in enumerate(standing):
+            _render_one(b, i)
+
+    if additional:
+        st.markdown("##### Additional Agenda Items")
+        for i, b in enumerate(additional):
+            _render_one(b, i)
+
+    st.markdown("##### Any Other Items")
+    st.caption("Topics raised that weren't on the agenda — picked up automatically from the "
+               "transcript, or add one yourself.")
+    for i, b in enumerate(other):
+        _render_one(b, i, allow_delete=True)
+
+    _new_other_topic_key = f"{key_prefix}_new_other_topic"
+    _new_other_by_key = f"{key_prefix}_new_other_by"
+    _clear_other_flag = f"{key_prefix}_clear_new_other"
+    if st.session_state.get(_clear_other_flag):
+        st.session_state[_new_other_topic_key] = ""
+        st.session_state[_new_other_by_key] = ""
+        st.session_state[_clear_other_flag] = False
+    with st.expander("➕ Add an 'Any Other Item'", expanded=False):
+        col_o1, col_o2, col_o3 = st.columns([3, 2, 1])
+        with col_o1:
+            _new_other_topic = st.text_input("Topic", key=_new_other_topic_key,
+                                              label_visibility="collapsed",
+                                              placeholder="Topic raised")
+        with col_o2:
+            _new_other_by = st.text_input("Raised by", key=_new_other_by_key,
+                                           label_visibility="collapsed",
+                                           placeholder="Raised by (optional)")
+        with col_o3:
+            if st.button("Add", key=f"{key_prefix}_add_other_btn", use_container_width=True):
+                if _new_other_topic.strip():
+                    blocks.append({"kind": "other", "label": _new_other_topic.strip(),
+                                   "raised_by": _new_other_by.strip(), "minutes": "",
+                                   "action": "", "origin": "manual"})
+                    st.session_state[_clear_other_flag] = True
+                    st.rerun()
+
+    if legacy:
+        st.markdown("##### Other saved notes")
+        st.caption("Carried over from before this meeting's minutes were restructured.")
+        for i, b in enumerate(legacy):
+            _render_one(b, i)
+
+
+def _sync_minutes_actions_to_global(blocks: list, actions_list: list) -> None:
+    """Push each minutes block's inline Action line into the trackable
+    Actions list below, so extracted/typed actions show up there too —
+    keyed by a stable 'source' tag so re-running this doesn't duplicate
+    entries, editing the inline text updates the matching action, and
+    clearing the inline text removes it again. Owner/due date/done that the
+    user has since edited directly in the Actions list are left alone."""
+    existing_by_source = {a.get('source'): a for a in actions_list if a.get('source')}
+    active_sources = set()
+    for b in blocks:
+        action_text = (b.get('action') or '').strip()
+        if not action_text:
+            continue
+        source = f"minutes:{b['kind']}:{b['label'].strip().lower()}"
+        active_sources.add(source)
+        if '—' in action_text:
+            owner, what = action_text.split('—', 1)
+        elif ' - ' in action_text:
+            owner, what = action_text.split(' - ', 1)
+        else:
+            owner, what = '', action_text
+        owner, what = owner.strip() or 'Unassigned', what.strip() or action_text
+        if source in existing_by_source:
+            a = existing_by_source[source]
+            a['action'], a['owner'] = what, owner
+        else:
+            actions_list.append({
+                "uid": uuid.uuid4().hex, "action": what, "owner": owner,
+                "due_date": "", "done": False, "source": source,
+            })
+    actions_list[:] = [a for a in actions_list
+                        if not a.get('source') or a.get('source') in active_sources]
 
 
 # ── CLC-LBU document theme ──────────────────────────────────────────────────
@@ -258,29 +535,42 @@ def _build_minutes_docx_bytes(meeting: dict):
     doc.add_paragraph()
 
     # ── Minutes sections ─────────────────────────────────────────────────
+    # Parsed with the same generic block parser the on-screen editor uses, so
+    # a "STANDING: x" / "ADDITIONAL: x" / "OTHER: x | RAISED BY: y" heading
+    # renders as a clean section title with its Action line picked out and
+    # bolded, while minutes saved under the older fixed six-section scheme
+    # still render fine too (as plain headings, via the "legacy" fallback).
     minutes_text = meeting.get('minutes', '') or ''
-    for block in minutes_text.split('\n\n---\n\n'):
-        block = block.strip()
-        if not block:
-            continue
-        if block.startswith('## '):
-            lines = block.split('\n', 1)
-            heading = lines[0][3:].strip()
-            body = lines[1].strip() if len(lines) > 1 else ''
-            _docx_section_heading(doc, heading)
-            for para in body.split('\n'):
-                para = para.strip()
-                if not para:
-                    continue
-                bp = doc.add_paragraph()
-                bp.paragraph_format.space_after = Pt(4)
-                if para.startswith(('- ', '• ')):
-                    bp.style = doc.styles['List Bullet']
-                    bp.add_run(para[2:].strip())
-                else:
-                    bp.add_run(para)
+    for b in _parse_minutes_blocks(minutes_text):
+        label = (b.get('label') or '').strip() or '(untitled item)'
+        if b.get('kind') == 'other':
+            raised_by = (b.get('raised_by') or '').strip()
+            heading = f"Other Item: {label}" + (f" (raised by {raised_by})" if raised_by else "")
         else:
-            doc.add_paragraph(block)
+            heading = label
+        _docx_section_heading(doc, heading)
+
+        body = (b.get('minutes') or '').strip() or _NIL_TEXT
+        for para in body.split('\n'):
+            para = para.strip()
+            if not para:
+                continue
+            bp = doc.add_paragraph()
+            bp.paragraph_format.space_after = Pt(4)
+            if para.startswith(('- ', '• ')):
+                bp.style = doc.styles['List Bullet']
+                bp.add_run(para[2:].strip())
+            else:
+                bp.add_run(para)
+
+        action_text = (b.get('action') or '').strip()
+        if action_text:
+            ap = doc.add_paragraph()
+            ap.paragraph_format.space_before = Pt(2)
+            ap.paragraph_format.space_after = Pt(4)
+            ar = ap.add_run(f"Action: {action_text}")
+            ar.bold = True
+            ar.font.color.rgb = RGBColor.from_string(_CLC_TEAL)
 
     # ── Actions ───────────────────────────────────────────────────────────
     raw_actions = meeting.get('actions')
@@ -764,74 +1054,161 @@ def _meeting_week_sort_key(meeting: dict):
         return (1, meeting.get('meeting_date', '') or '')
 
 # ── BSEM Icebreakers (5-minute activities) ────────────────────────────────────
+# A larger, varied pool — picked by _bsem_icebreaker_for() below rather than a
+# plain week-number index, so Week 1 of Term 2 doesn't show the identical
+# activity as Week 1 of Term 1, 3 and 4 (which is what "week_idx = week - 1"
+# against an 11-item list used to do).
 BSEM_ICEBREAKERS = [
     {
-        "week": 1,
         "name": "Two Truths and a Lie",
         "instructions": "Each person shares three statements about themselves - two true, one false. Group guesses which is the lie.",
         "time": "5 mins"
     },
     {
-        "week": 2,
         "name": "Gratitude Round",
         "instructions": "Each person shares one thing they're grateful for this week (personal or professional).",
         "time": "5 mins"
     },
     {
-        "week": 3,
         "name": "Brain Break: Draw Your Weekend",
         "instructions": "60 seconds to draw something from your weekend. Share with the group.",
         "time": "5 mins"
     },
     {
-        "week": 4,
         "name": "Quick Check-In: Rate Your Week",
         "instructions": "Rate your week 1-10 and share one word to describe it.",
         "time": "5 mins"
     },
     {
-        "week": 5,
         "name": "Wins & Learnings",
         "instructions": "Share one win and one thing you learned this week.",
         "time": "5 mins"
     },
     {
-        "week": 6,
         "name": "Would You Rather?",
         "instructions": "Facilitator poses a 'Would you rather...' question. Quick votes and brief sharing.",
         "time": "5 mins"
     },
     {
-        "week": 7,
         "name": "Rose, Thorn, Bud",
         "instructions": "Share: Rose (highlight), Thorn (challenge), Bud (something you're looking forward to).",
         "time": "5 mins"
     },
     {
-        "week": 8,
         "name": "Quick Movement Break",
         "instructions": "Stand up stretch or brief movement activity. Can be led by different staff member each week.",
         "time": "5 mins"
     },
     {
-        "week": 9,
         "name": "Shout-Outs",
         "instructions": "Acknowledge someone who helped you this week or did something great.",
         "time": "5 mins"
     },
     {
-        "week": 10,
         "name": "What's In Your Cup?",
         "instructions": "Share what's filling your emotional cup or draining it this week.",
         "time": "5 mins"
     },
     {
-        "week": 11,
         "name": "Reflection Round",
         "instructions": "One word to describe this term. Quick round-robin.",
         "time": "5 mins"
-    }
+    },
+    {
+        "name": "Weather Report Check-In",
+        "instructions": "Describe your current mood as a weather forecast (sunny, stormy, foggy, etc.) and why.",
+        "time": "5 mins"
+    },
+    {
+        "name": "Desert Island",
+        "instructions": "If stranded on a desert island, what three items would you bring and why?",
+        "time": "5 mins"
+    },
+    {
+        "name": "High Five / Low Five",
+        "instructions": "Share one high point and one low point from the past week — no fixing, just listening.",
+        "time": "5 mins"
+    },
+    {
+        "name": "This or That",
+        "instructions": "Facilitator reads quick-fire 'this or that' pairs (tea or coffee, beach or mountains). Group calls out their pick.",
+        "time": "5 mins"
+    },
+    {
+        "name": "Name That Tune",
+        "instructions": "Play 10-second snippets of a few songs. Group guesses the title or artist.",
+        "time": "5 mins"
+    },
+    {
+        "name": "Grounding Breath",
+        "instructions": "A short guided breathing exercise (in for 4, hold for 4, out for 4) to settle the room before business starts.",
+        "time": "5 mins"
+    },
+    {
+        "name": "One Word Check-In",
+        "instructions": "Go around the room — each person offers a single word for how they're arriving today.",
+        "time": "5 mins"
+    },
+    {
+        "name": "Appreciation Pass",
+        "instructions": "Each person names one colleague (not themselves) and briefly says what they appreciate about working with them.",
+        "time": "5 mins"
+    },
+    {
+        "name": "Photo Share",
+        "instructions": "Each person shares (or describes) one photo on their phone from the past week and why it's there.",
+        "time": "5 mins"
+    },
+    {
+        "name": "Two-Minute Doodle",
+        "instructions": "Everyone doodles whatever comes to mind for two minutes, then a few volunteers show what they drew.",
+        "time": "5 mins"
+    },
+    {
+        "name": "Would You Rather: School Edition",
+        "instructions": "School-themed 'would you rather' questions (e.g. yard duty in the rain or a double photocopier queue).",
+        "time": "5 mins"
+    },
+    {
+        "name": "Three Good Things",
+        "instructions": "Each person names three small good things that happened this week, work or personal.",
+        "time": "5 mins"
+    },
+    {
+        "name": "Object Show and Tell",
+        "instructions": "Each person grabs the nearest object on their desk and shares a 10-second story about it.",
+        "time": "5 mins"
+    },
+    {
+        "name": "Energy Check",
+        "instructions": "Rate your energy 1-10 with a thumbs gesture, then one or two people briefly explain their number.",
+        "time": "5 mins"
+    },
+    {
+        "name": "Favourite Thing About This Term So Far",
+        "instructions": "Quick round-robin — one favourite moment or win from the term so far.",
+        "time": "5 mins"
+    },
 ]
+
+
+def _bsem_icebreaker_for(meeting_date, term, week_number) -> dict:
+    """Pick the BSEM activity for this specific meeting. Deterministic (same
+    meeting always suggests the same activity when reopened) but spread
+    across the whole pool using the meeting's year + term + week as the
+    seed — unlike a plain '(week - 1) % len(list)' index, this means Week 1
+    of Term 1, 2, 3 and 4 don't all land on the same activity."""
+    try:
+        wk = int(week_number)
+    except Exception:
+        wk = 1
+    try:
+        year = meeting_date.year
+    except Exception:
+        year = datetime.date.today().year
+    seed = f"{year}-{normalise_term_short(term)}-{wk}"
+    idx = int(hashlib.md5(seed.encode()).hexdigest(), 16) % len(BSEM_ICEBREAKERS)
+    return BSEM_ICEBREAKERS[idx]
 
 # ── BSEM activity field encoding ────────────────────────────────────────────────
 # The DB only has one "icebreaker" text column. Rather than add a new column,
@@ -1100,7 +1477,7 @@ with tab2:
     .clc-minutes th { background: #f0f0f0; padding: 6px 10px; border: 1px solid #ddd; }
     .clc-minutes td { padding: 6px 10px; border: 1px solid #ddd; }
     </style>''', unsafe_allow_html=True)
-                        st.markdown(f'<div class="clc-minutes">' + meeting_minutes + '</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="clc-minutes">' + _minutes_display_markdown(meeting_minutes) + '</div>', unsafe_allow_html=True)
                     else:
                         st.info("No minutes recorded for this meeting")
                 
@@ -1391,8 +1768,7 @@ with tab1:
     st.subheader("🎯 BSEM Activity (5 mins)")
 
     # Suggested icebreaker for this week
-    week_idx = (int(week_number) - 1) % len(BSEM_ICEBREAKERS)
-    icebreaker = BSEM_ICEBREAKERS[week_idx]
+    icebreaker = _bsem_icebreaker_for(meeting_date, term, week_number)
 
     _bsem_mkey = st.session_state.current_staff_meeting_id or "new"
     _bsem_raw = selected_record.get('icebreaker', '') if selected_record else ''
@@ -1597,10 +1973,12 @@ with tab1:
     st.markdown("---")
     
     # ══════════════════════════════════════════════════════════════════════════════
-    # 6. MINUTES (Manual OR AI Transcript) — both land in the same six sections:
-    # Manager's Business, Transition Coordinator, Finance, WHS, PAC, Other Business
+    # 6. MINUTES (Manual OR AI Transcript) — both land in the same blocks: one
+    # per Standing Item (matching the Agenda section above), one per this
+    # meeting's Additional Agenda Items, and a dynamic "Any Other Items" block
+    # for anything raised that wasn't on the agenda.
     # ══════════════════════════════════════════════════════════════════════════════
-    
+
     minutes = selected_record.get('minutes', '') if selected_record else ''
     has_existing_minutes = bool(minutes and minutes.strip())
 
@@ -1621,29 +1999,37 @@ with tab1:
         minutes_method = st.radio("Minutes Entry Method",
                                   options=["✍️ Manual Entry", "🤖 AI from Transcript"],
                                   horizontal=True, key=f"minutes_entry_method_{_minutes_mkey}")
-        
+
+        # One shared set of blocks — Manual Entry and AI-from-Transcript both
+        # read from and write into this SAME session-state-backed list, kept
+        # in sync with the Standing Items and this meeting's current
+        # Additional Agenda Items, so switching entry method never loses
+        # anything already typed or generated.
+        _blocks_ss_key = f"minutes_blocks_{_minutes_mkey}"
+        if _blocks_ss_key not in st.session_state:
+            st.session_state[_blocks_ss_key] = _seed_minutes_blocks(minutes, additional_items)
+        _sync_additional_minutes_blocks(st.session_state[_blocks_ss_key], additional_items)
+        blocks = st.session_state[_blocks_ss_key]
+        _minutes_editor_key_prefix = f"minutes_editor_{_minutes_mkey}"
+
+        # Always defined regardless of entry method, so the PD section further
+        # down can offer "reuse the main meeting transcript/synthesis for PD
+        # too" even when Manual Entry is selected up here.
+        transcript_text = ""
+        synthesis_for_minutes = ""
+
         if minutes_method == "✍️ Manual Entry":
-            st.caption("Enter notes for each standing item. Leave a section blank if it wasn't discussed.")
-            seed = _parse_minutes_sections(minutes)
-            # key_prefix is namespaced per meeting — Streamlit only honours a
-            # text_area's `value=` the FIRST time its key is created; on every
-            # later rerun (including switching to a completely different
-            # meeting) it silently ignores `value=` and keeps showing
-            # whatever was last typed under that key. An un-namespaced prefix
-            # here meant every meeting after the first showed the previous
-            # meeting's frozen text instead of its own — this is what made it
-            # look like the tool "wouldn't let you add" anything.
-            section_values = _render_minutes_section_fields(seed, key_prefix=f"manual_section_{_minutes_mkey}")
-            minutes = _build_minutes_from_sections(section_values)
-        
+            st.caption("Enter notes directly below. Leave an item's minutes blank if it wasn't discussed.")
+
         else:  # AI from Transcript
             st.markdown("**Paste your transcript below, or upload a file (.txt / .docx)**")
             st.caption(
                 "Two steps: Step 1 condenses the transcript into a short synthesis of what was "
-                "actually discussed — the Acknowledgement of Country and icebreaker activity are "
-                "dropped automatically, not just summarised. Step 2 sorts that short synthesis "
-                "(not the raw transcript) into the six sections below, which is what keeps each AI "
-                "call well under Groq's token limit."
+                "actually discussed — the Acknowledgement of Country, icebreaker activity and any "
+                "Professional Development content are dropped automatically, not just summarised. "
+                "Step 2 sorts that short synthesis (not the raw transcript) into the Standing Items, "
+                "this meeting's Additional Agenda Items, and anything else it picks up that wasn't "
+                "on the agenda — which is what keeps each AI call well under Groq's token limit."
             )
 
             _mkey = st.session_state.current_staff_meeting_id or "new"
@@ -1721,13 +2107,17 @@ Rules:
 2. COMPLETELY leave out the icebreaker / BSEM activity (warm-up games,
    check-ins, "two truths and a lie", wellbeing rounds, etc.) — omit it
    entirely, do not summarise it.
-3. Keep every substantive point: updates given, decisions made, concerns
+3. COMPLETELY leave out any Professional Development (PD) session content —
+   that's documented separately. If this transcript also contains a PD
+   session mixed in with the regular meeting business, leave the PD part
+   out of this synthesis entirely.
+4. Keep every substantive point: updates given, decisions made, concerns
    raised, and action items (what needs to be done, who's responsible, and
    any due date mentioned).
-4. Keep staff names, dates and figures that are mentioned.
-5. Write in tight prose or bullet points — no filler, no small talk, no
+5. Keep staff names, dates and figures that are mentioned.
+6. Write in tight prose or bullet points — no filler, no small talk, no
    repeated pleasantries.
-6. Do not invent anything that isn't in the transcript.
+7. Do not invent anything that isn't in the transcript.
 
 Return ONLY the condensed synthesis text — no preamble, no commentary.
 
@@ -1789,7 +2179,8 @@ TRANSCRIPT:
             st.markdown("---")
 
             # ══════════════════════════════════════════════════════════════════
-            # STEP 2 — Sort the (short) synthesis into the six standing sections
+            # STEP 2 — Sort the (short) synthesis into the Standing Items, this
+            # meeting's Additional Agenda Items, and anything else raised
             # ══════════════════════════════════════════════════════════════════
             st.markdown("##### Step 2 · Generate structured minutes")
 
@@ -1811,25 +2202,47 @@ TRANSCRIPT:
                                     "smaller parts at Step 1) and try again."
                                 )
 
-                            section_list = "\n".join(f"- {label}" for _, label in MEETING_SECTIONS)
-                            heading_list = "\n".join(f"## {label}" for _, label in MEETING_SECTIONS)
+                            additional_labels = [_clean_agenda_label(x) for x in additional_items]
+                            standing_list = "\n".join(f"- {label}" for label in STANDING_AGENDA_ITEMS)
+                            additional_list = ("\n".join(f"- {label}" for label in additional_labels)
+                                               if additional_labels else "(none for this meeting)")
+                            heading_lines = [f"## STANDING: {label}" for label in STANDING_AGENDA_ITEMS]
+                            heading_lines += [f"## ADDITIONAL: {label}" for label in additional_labels]
+                            heading_list = "\n".join(heading_lines)
 
-                            prompt = f"""Read the synthesis of a school staff meeting below and sort what
-was discussed into EXACTLY these six standing sections, in this order:
-{section_list}
+                            prompt = f"""Read the synthesis of a school staff meeting below.
 
-For each section, write a CONCISE summary (a few sentences at most) of what
-was discussed, any decisions made, and any action items (what needs to be
-done, who's responsible, and the due date if mentioned). If a section was
-not discussed at all, write exactly: "{_NIL_TEXT}"
+This meeting has these STANDING agenda items (discussed every meeting):
+{standing_list}
 
-Do not invent information that isn't in the synthesis. If something doesn't
-clearly belong to one of the six sections, put it under "Other Business".
+And these ADDITIONAL agenda items specific to THIS meeting:
+{additional_list}
 
-Reply in PLAIN TEXT using EXACTLY this structure — each section starts on
-its own line with "## " followed by the exact section name shown above, in
-this exact order, with nothing else before, between, or after (no JSON, no
-extra commentary, no numbering):
+For EACH standing item and EACH additional item above, write a CONCISE
+summary (a few sentences at most) of what was discussed and any decisions
+made. If an item was not discussed at all, write exactly: "{_NIL_TEXT}"
+Immediately after each item's summary, on its own line, write:
+ACTION: <who is responsible and what they need to do, including a due date
+if one was mentioned>
+or, if there is no action for that item, write exactly:
+ACTION: None
+
+Then, separately, look for anything ELSE that was raised in the synthesis
+that does NOT belong to any of the items listed above — a topic that came
+up but wasn't on the agenda. For each one you find, write its own section
+using the "## OTHER: <topic> | RAISED BY: <name>" heading format shown
+below, naming the topic and, if you can tell, who raised it (write
+"Unknown" if you can't tell). Follow it with a short summary and an ACTION
+line the same way as above. If nothing else was raised, don't write any
+OTHER section at all.
+
+Do not invent information that isn't in the synthesis.
+
+Reply in PLAIN TEXT using EXACTLY this structure — one block per item, each
+starting on its own line with the heading shown, nothing else before,
+between or after (no JSON, no extra commentary, no numbering). Use this
+exact order for the standing/additional items, then add any OTHER blocks
+after them:
 {heading_list}
 
 MEETING SYNTHESIS:
@@ -1843,42 +2256,59 @@ MEETING SYNTHESIS:
                             )
                             raw = response.choices[0].message.content.strip()
 
-                            # Parsed with the SAME "## Section Name" parser used everywhere
-                            # else in this file (Manual Entry, saved-minutes display), rather
-                            # than asking the AI for JSON — a JSON response that gets cut off
-                            # (long synthesis, verbose section) fails to parse AT ALL and loses
-                            # every section; this plain-text format degrades gracefully instead,
-                            # since each section is captured independently up to the next "## "
-                            # heading — a cut-off reply only loses whichever section(s) never
+                            # Parsed with the SAME "## Heading" parser used everywhere else in
+                            # this file (Manual Entry, saved-minutes display), rather than
+                            # asking the AI for JSON — a JSON response that gets cut off (long
+                            # synthesis, verbose item) fails to parse AT ALL and loses
+                            # everything; this plain-text format degrades gracefully instead,
+                            # since each block is captured independently up to the next "## "
+                            # heading — a cut-off reply only loses whichever block(s) never
                             # arrived, not everything already generated.
-                            parsed = _parse_minutes_sections(raw)
-                            new_sections = {key: (parsed.get(key) or "").strip() for key, _ in MEETING_SECTIONS}
+                            parsed_blocks = _parse_minutes_blocks(raw)
 
-                            if not any(new_sections.values()):
+                            if not parsed_blocks:
                                 with st.expander("Show raw AI response"):
                                     st.code(raw or "(empty response)")
                                 raise ValueError(
-                                    "The AI's reply didn't match the expected section format — see "
-                                    "the raw response above. Try trimming the synthesis and generating "
-                                    "again."
+                                    "The AI's reply didn't match the expected format — see the raw "
+                                    "response above. Try trimming the synthesis and generating again."
                                 )
 
-                            # The synthesis already merges any multi-part transcript (Step 1
-                            # appends rather than overwrites), so a single classification pass
-                            # over the whole thing can just replace the draft sections outright.
-                            # Namespaced per meeting (_mkey) — an un-namespaced key here meant
-                            # a generated draft from one meeting kept showing up (and blocking
-                            # fresh transcript entry) on every other meeting for the rest of
-                            # the session, since this dict is only ever replaced, never read
-                            # per-meeting.
-                            st.session_state[f"ai_section_values_{_mkey}"] = new_sections
-                            # Sync the edit widgets too — once a widget key exists in
-                            # session_state, its `value=` argument is ignored on rerun,
-                            # so this is what actually updates what's shown for editing.
-                            for key, _ in MEETING_SECTIONS:
-                                st.session_state[f"ai_section_manual_{_mkey}_{key}"] = new_sections[key]
+                            by_standing = {b['label'].strip().lower(): b
+                                           for b in parsed_blocks if b['kind'] == 'standing'}
+                            by_additional = {b['label'].strip().lower(): b
+                                             for b in parsed_blocks if b['kind'] == 'additional'}
+                            new_others = [b for b in parsed_blocks if b['kind'] == 'other']
+                            for b in new_others:
+                                b['origin'] = 'ai'
 
-                            st.success("✅ Minutes generated — review the sections below before saving.")
+                            # Update the shared blocks list in place, and sync the edit
+                            # widgets' own session_state too — once a widget key exists,
+                            # Streamlit ignores `value=` on rerun, so this is what actually
+                            # updates what's shown for editing.
+                            standing_in_order = [b for b in blocks if b['kind'] == 'standing']
+                            additional_in_order = [b for b in blocks if b['kind'] == 'additional']
+                            for i, b in enumerate(standing_in_order):
+                                src = by_standing.get(b['label'].strip().lower())
+                                if src:
+                                    b['minutes'], b['action'] = src['minutes'], src['action']
+                                    m_key, a_key = _minutes_block_widget_keys(b, _minutes_editor_key_prefix, i)
+                                    st.session_state[m_key] = b['minutes']
+                                    st.session_state[a_key] = b['action']
+                            for i, b in enumerate(additional_in_order):
+                                src = by_additional.get(b['label'].strip().lower())
+                                if src:
+                                    b['minutes'], b['action'] = src['minutes'], src['action']
+                                    m_key, a_key = _minutes_block_widget_keys(b, _minutes_editor_key_prefix, i)
+                                    st.session_state[m_key] = b['minutes']
+                                    st.session_state[a_key] = b['action']
+
+                            # Replace previously AI-generated "Any Other Items" with this
+                            # fresh batch; keep anything the user added manually.
+                            manual_others = [b for b in blocks if b['kind'] == 'other' and b.get('origin') != 'ai']
+                            blocks[:] = [b for b in blocks if b['kind'] != 'other'] + manual_others + new_others
+
+                            st.success("✅ Minutes generated — review below before saving.")
 
                         except Exception as e:
                             st.error(f"AI extraction failed: {e}")
@@ -1888,29 +2318,24 @@ MEETING SYNTHESIS:
             else:
                 st.caption("Complete Step 1 above to produce a synthesis, then generate structured minutes from it.")
 
-            # ── Review and edit the generated sections before saving ──────────
-            if st.session_state.get(f"ai_section_values_{_mkey}"):
-                st.markdown("---")
-                st.markdown("#### ✏️ Review and edit before saving")
-                col_edit, col_clear = st.columns([5, 1])
-                with col_clear:
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    if st.button("🗑️ Clear draft", key=f"clear_ai_sections_{_mkey}"):
-                        st.session_state[f"ai_section_values_{_mkey}"] = None
-                        for key, _ in MEETING_SECTIONS:
-                            st.session_state.pop(f"ai_section_manual_{_mkey}_{key}", None)
-                        st.rerun()
-                seed = st.session_state.get(f"ai_section_values_{_mkey}", {})
-                section_values = _render_minutes_section_fields(seed, key_prefix=f"ai_section_manual_{_mkey}")
-                minutes = _build_minutes_from_sections(section_values)
-            else:
-                st.info("Paste or upload a transcript, then run Step 1 and Step 2 above to fill in "
-                         "the sections.")
-                # minutes keeps whatever was previously saved until something is generated
+        st.markdown("---")
+        col_edit_hdr, col_clear = st.columns([5, 1])
+        with col_edit_hdr:
+            st.markdown("#### ✏️ Minutes")
+        with col_clear:
+            if st.button("🗑️ Clear draft", key=f"clear_minutes_draft_{_minutes_mkey}",
+                         help="Clear all minutes and actions below and start over"):
+                for k in _all_minutes_widget_keys(blocks, _minutes_editor_key_prefix):
+                    st.session_state.pop(k, None)
+                st.session_state[_blocks_ss_key] = _seed_minutes_blocks("", additional_items)
+                st.rerun()
+
+        _render_minutes_blocks_editor(blocks, key_prefix=_minutes_editor_key_prefix)
+        minutes = _build_minutes_text(blocks)
 
         if minutes and minutes.strip():
             with st.expander("👁️ Preview combined minutes"):
-                st.markdown(minutes)
+                st.markdown(_minutes_display_markdown(minutes))
 
     st.subheader("✅ Actions")
 
@@ -1937,6 +2362,14 @@ MEETING SYNTHESIS:
         st.session_state[_actions_ss_key] = _seed_actions
 
     actions = st.session_state[_actions_ss_key]
+
+    # Every Standing/Additional/Other Item above with an "Action" line typed
+    # or AI-extracted into it also gets pushed into this trackable Actions
+    # list automatically (tagged with a 'source' so re-running this never
+    # duplicates — editing the inline action text updates the same entry,
+    # and clearing it removes the entry again). Owner/due date/done the
+    # user has since edited directly below are left alone.
+    _sync_minutes_actions_to_global(blocks, actions)
 
     # AI Action Extraction option (if minutes exist)
     _pending_key = f"_extracted_actions_pending_{_act_mkey}"
@@ -2202,100 +2635,137 @@ MEETING SYNTHESIS:
         )
     
         st.markdown("---")
-    
+
         # PD Content Entry Method
         st.write("**PD Content Entry:**")
-    
-        # Initialize pd_notes (will be set in either manual or AI path)
-        pd_notes = selected_record.get('pd_notes', '') if selected_record else ''
-    
-        pd_method = st.radio("Choose entry method", options=["✍️ Manual Entry", "🤖 AI from Transcript"], 
-                           horizontal=True, key="pd_method")
-    
+
+        # Kept in session_state (namespaced per meeting) so the recap text
+        # survives switching between Manual Entry and AI from Transcript, and
+        # so a freshly-generated AI recap actually shows up — once a widget
+        # key exists, Streamlit ignores `value=` on rerun.
+        _pd_notes_ss_key = f"pd_notes_state_{_att_mkey}"
+        if _pd_notes_ss_key not in st.session_state:
+            st.session_state[_pd_notes_ss_key] = selected_record.get('pd_notes', '') if selected_record else ''
+
+        pd_method = st.radio("Choose entry method", options=["✍️ Manual Entry", "🤖 AI from Transcript"],
+                           horizontal=True, key=f"pd_method_{_att_mkey}")
+
+        _pd_notes_widget_key = f"pd_notes_manual_{_att_mkey}"
+
         if pd_method == "✍️ Manual Entry":
-            pd_notes = st.text_area("PD Main Points / Notes", value=pd_notes, height=300, key="pd_notes",
+            pd_notes = st.text_area("PD Main Points / Notes", value=st.session_state[_pd_notes_ss_key],
+                                   height=260, key=_pd_notes_widget_key,
                                    placeholder="Document key points from the PD session...")
-    
+            st.session_state[_pd_notes_ss_key] = pd_notes
+
         else:  # AI from Transcript
-            st.write("**Upload PD Transcript**")
-        
-            pd_transcript_file = st.file_uploader("Upload PD transcript (.txt or .docx)", 
-                                                 type=['txt', 'docx'], 
-                                                 key="pd_transcript_upload")
-        
-            if pd_transcript_file:
-                # Read transcript
-                if pd_transcript_file.name.endswith('.txt'):
-                    pd_transcript_text = pd_transcript_file.read().decode('utf-8')
-                else:  # .docx
-                    if DOCX_AVAILABLE:
-                        try:
-                            pd_doc = docx.Document(pd_transcript_file)
-                            pd_transcript_text = '\n'.join([para.text for para in pd_doc.paragraphs])
-                        except Exception as e:
-                            st.error(f"Could not read .docx file: {e}")
-                            pd_transcript_text = ""
-                    else:
-                        st.error("python-docx not installed. Please use .txt file.")
-                        pd_transcript_text = ""
-            
-                if pd_transcript_text and GROQ_KEY:
-                    if st.button("🤖 Extract PD Notes with AI", type="secondary", key="extract_pd_ai"):
-                        with st.spinner("Processing PD transcript..."):
-                            try:
-                                from groq import Groq
-                                client = Groq(api_key=GROQ_KEY)
+            st.caption(
+                "If the PD part of this meeting is in a totally separate recording, paste or "
+                "upload it below. If the main meeting transcript/synthesis above already covers "
+                "the PD discussion too, tick the box instead — the AI will pick out just the PD "
+                "part from it."
+            )
 
-                                pd_transcript_for_ai, was_truncated = _fit_to_groq_budget(
-                                    pd_transcript_text, max_tokens=3000, prompt_overhead_tokens=250
-                                )
-                                if was_truncated:
-                                    st.warning(
-                                        "⚠️ This PD transcript is longer than the AI can process in one go "
-                                        "(Groq's 8,000 tokens/minute limit on the current plan). "
-                                        "Only the first part was sent — review the extracted notes and "
-                                        "add anything from later in the session by hand, or split the "
-                                        "transcript into parts and run each separately."
-                                    )
+            _reuse_main_transcript = st.checkbox(
+                "Use the main meeting transcript/synthesis above for this PD section too",
+                key=f"pd_reuse_main_transcript_{_att_mkey}"
+            )
 
-                                prompt = f"""Extract the main points and key learnings from this professional development session transcript.
-
-    Structure the output with:
-    - Topic/Title of PD session
-    - Key points covered (bullet points)
-    - Main takeaways
-    - Any action items or next steps
-
-    Transcript:
-    {pd_transcript_for_ai}
-
-    Format as clear, structured notes."""
-
-                                response = client.chat.completions.create(
-                                    model="openai/gpt-oss-120b",
-                                    messages=[{"role": "user", "content": prompt}],
-                                    temperature=0.3,
-                                    max_tokens=3000
-                                )
-                            
-                                extracted_pd = response.choices[0].message.content
-                            
-                                st.success("✅ PD notes extracted!")
-                                pd_notes = st.text_area("Edit AI-Generated PD Notes", value=extracted_pd, 
-                                                       height=300, key="ai_pd_notes")
-                            
-                            except Exception as e:
-                                st.error(f"AI extraction failed: {e}")
-                                pd_notes = st.text_area("Manual entry (AI failed)", height=300, key="fallback_pd_notes")
-                elif not GROQ_KEY:
-                    st.warning("⚠️ GROQ_API_KEY not configured. Using manual entry.")
-                    pd_notes = st.text_area("PD Notes", height=300, key="manual_pd_notes_fallback")
-                else:
-                    pd_notes = ""
+            pd_transcript_text = ""
+            if _reuse_main_transcript:
+                pd_transcript_text = (synthesis_for_minutes or transcript_text or "").strip()
+                if not pd_transcript_text:
+                    st.info("No main meeting transcript or synthesis has been entered above yet.")
             else:
-                st.info("Upload a transcript to use AI extraction")
-                pd_notes = ""
-    
+                pd_pasted = st.text_area("Paste PD transcript or summary here", height=150,
+                                         key=f"pd_transcript_paste_{_att_mkey}",
+                                         placeholder="Paste the PD session transcript or summary…")
+                if pd_pasted.strip():
+                    pd_transcript_text = pd_pasted.strip()
+
+                pd_transcript_file = st.file_uploader("Or upload a file (.txt or .docx)",
+                                                     type=['txt', 'docx'],
+                                                     key=f"pd_transcript_upload_{_att_mkey}")
+                if pd_transcript_file and not pd_transcript_text:
+                    if pd_transcript_file.name.endswith('.txt'):
+                        pd_transcript_text = pd_transcript_file.read().decode('utf-8')
+                    else:  # .docx
+                        if DOCX_AVAILABLE:
+                            try:
+                                pd_doc = docx.Document(pd_transcript_file)
+                                pd_transcript_text = '\n'.join([para.text for para in pd_doc.paragraphs])
+                            except Exception as e:
+                                st.error(f"Could not read .docx file: {e}")
+                        else:
+                            st.error("python-docx not installed — please paste the transcript instead.")
+
+            if pd_transcript_text and GROQ_KEY:
+                if st.button("🤖 Extract PD Recap with AI", type="secondary", key=f"extract_pd_ai_{_att_mkey}"):
+                    with st.spinner("Processing PD content…"):
+                        try:
+                            from groq import Groq
+                            client = Groq(api_key=GROQ_KEY)
+
+                            pd_transcript_for_ai, was_truncated = _fit_to_groq_budget(
+                                pd_transcript_text, max_tokens=600, prompt_overhead_tokens=300
+                            )
+                            if was_truncated:
+                                st.warning(
+                                    "⚠️ This is longer than the AI can process in one go (Groq's "
+                                    "8,000 tokens/minute limit on the current plan). Only the "
+                                    "first part was sent — review the recap and add anything "
+                                    "missed by hand."
+                                )
+
+                            prompt = f"""The text below is from a school staff meeting and may contain
+BOTH general staff meeting business AND a separate Professional
+Development (PD) session. Find the part that is about the PD session and
+IGNORE anything that's general staff meeting business (standing items,
+additional agenda items, etc. — that's documented separately).
+
+Write a BRIEF recap of the PD session only: 3-5 sentences of plain,
+flowing prose covering what the session focused on and the main
+takeaway(s) — no headings, no bullet points, just a short recap someone
+could read in 15 seconds.
+
+Do not invent anything that isn't in the text. If you can't find any PD
+content at all, reply with exactly: NO_PD_CONTENT_FOUND
+
+TEXT:
+{pd_transcript_for_ai}"""
+
+                            response = client.chat.completions.create(
+                                model="openai/gpt-oss-120b",
+                                messages=[{"role": "user", "content": prompt}],
+                                temperature=0.3,
+                                max_tokens=600
+                            )
+                            extracted_pd = response.choices[0].message.content.strip()
+
+                            if extracted_pd == "NO_PD_CONTENT_FOUND":
+                                st.warning(
+                                    "Couldn't find any PD-specific content in that text — try "
+                                    "pasting just the PD part, or write the recap manually below."
+                                )
+                            else:
+                                st.session_state[_pd_notes_ss_key] = extracted_pd
+                                # Widget key may already exist once rendered, so setting it here
+                                # too is what actually updates the box below.
+                                st.session_state[_pd_notes_widget_key] = extracted_pd
+                                st.success("✅ PD recap generated — review/edit it below before saving.")
+
+                        except Exception as e:
+                            st.error(f"AI extraction failed: {e}")
+
+            elif pd_transcript_text and not GROQ_KEY:
+                st.warning("⚠️ GROQ_API_KEY not configured.")
+
+            pd_notes = st.text_area("PD Notes / Recap", value=st.session_state[_pd_notes_ss_key],
+                                    height=180, key=_pd_notes_widget_key,
+                                    placeholder="A brief recap of the PD session will appear here "
+                                                "after extraction — or type it directly.")
+            st.session_state[_pd_notes_ss_key] = pd_notes
+
         st.markdown("---")
     
         # PD Attachments
@@ -2332,8 +2802,7 @@ MEETING SYNTHESIS:
 
         # Add multiple attachments at once
         st.write("**Add New Attachments:**")
-        uploaded_files = st.file_uploader("Upload files (select multiple)",
-                                         type=['pdf', 'docx', 'pptx', 'txt', 'jpg', 'png', 'xlsx', 'mp4', 'mov'],
+        uploaded_files = st.file_uploader("Upload files (select multiple) — any file type accepted",
                                          accept_multiple_files=True,
                                          key="pd_file_upload")
 
