@@ -85,6 +85,9 @@ def _clean_agenda_label(label: str) -> str:
     return text or "(untitled item)"
 
 
+_MINUTES_HEADING_RE = re.compile(r"^## (.+?)[ \t]*$", re.MULTILINE)
+
+
 def _parse_minutes_blocks(minutes_text: str) -> list:
     """Parse a combined minutes string into an ordered list of blocks:
     [{"kind": "standing"|"additional"|"other"|"legacy", "label": str,
@@ -93,21 +96,41 @@ def _parse_minutes_blocks(minutes_text: str) -> list:
     Recognises the current '## STANDING: x' / '## ADDITIONAL: x' /
     '## OTHER: x | RAISED BY: y' heading convention, and falls back to
     treating a plain '## Heading' (the old fixed six-section format) as a
-    legacy block so older saved minutes don't just vanish."""
+    legacy block so older saved minutes don't just vanish.
+
+    Finds each block by scanning for '## ' heading LINES directly (not by
+    splitting on the '\\n\\n---\\n\\n' separator _build_minutes_text() uses
+    to join them) — a block runs from one heading line to the next. This
+    matters because the AI (Step 2's "Generate Structured Minutes") never
+    reliably reproduces that exact separator in its replies, even though
+    it does reliably start each item on its own '## ' line; splitting on
+    the separator alone silently collapsed a whole multi-item AI reply
+    into ONE block, with every later item's heading and text trapped
+    inside the first item's body as literal text instead of its own
+    block. Parsing by heading line means ANY spacing between blocks —
+    the separator, a single blank line, or none at all — parses the same
+    way, so this also still reads the separator-joined format saved minutes
+    are actually stored in."""
     blocks = []
     if not minutes_text:
         return blocks
-    for raw_block in minutes_text.split(_BLOCK_SEP):
-        raw_block = raw_block.strip()
-        if not raw_block or not raw_block.startswith("## "):
-            continue
-        heading_line, _, body = raw_block.partition("\n")
-        heading_line = heading_line[3:].strip()
-        body = body.strip()
+    text = minutes_text.strip()
+    if not text:
+        return blocks
+    matches = list(_MINUTES_HEADING_RE.finditer(text))
+    for i, m in enumerate(matches):
+        heading_line = m.group(1).strip()
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        body = text[start:end].strip()
+        # Strip a trailing "---" separator line (and the blank lines around
+        # it) left over from the stored/built format, so it never ends up
+        # inside this block's minutes/action text.
+        body = re.sub(r"\n{0,2}-{3,}\s*$", "", body).strip()
 
-        m = re.match(r"^(STANDING|ADDITIONAL|OTHER):\s*(.*)$", heading_line, re.DOTALL)
-        if m:
-            kind_raw, rest = m.group(1), m.group(2).strip()
+        m2 = re.match(r"^(STANDING|ADDITIONAL|OTHER):\s*(.*)$", heading_line, re.DOTALL)
+        if m2:
+            kind_raw, rest = m2.group(1), m2.group(2).strip()
             raised_by = ""
             if kind_raw == "OTHER":
                 parts = re.split(r"\s*\|\s*RAISED BY:\s*", rest, maxsplit=1)
