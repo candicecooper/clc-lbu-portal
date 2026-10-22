@@ -3110,26 +3110,62 @@ TEXT:
 
     with col_save:
         if st.button("💾 Save Meeting", type="primary", use_container_width=True, key="save_meeting"):
+            # A failed write to Supabase doesn't always raise an exception —
+            # depending on the client/library version, a column the database
+            # doesn't have yet, or an RLS policy blocking the row being read
+            # back, can come back as a normal 200 response with an EMPTY
+            # `result.data`, no exception at all. The old version of this
+            # code never checked that: Update always showed "Saved
+            # Successfully" regardless of what actually happened, and Insert
+            # just silently did nothing when it was empty — exactly what
+            # "worked, but doesn't show up in the Archive" looks like. Both
+            # branches below now check result.data (and result.error, if the
+            # client sets one) before claiming success, so a real failure
+            # shows a clear message instead of a false "Saved" or nothing.
+            _not_held_hint = (
+                " If you've just started using 'meeting not held', double-check the two "
+                "new columns (meeting_not_held, not_held_reason) have been added to "
+                "staff_meetings in Supabase first — see the SQL given for that."
+            )
             try:
                 if st.session_state.current_staff_meeting_id:
                     # Update existing
                     result = supabase.table('staff_meetings').update(meeting_data).eq('id', st.session_state.current_staff_meeting_id).execute()
-                    st.success("✅ **Meeting Saved Successfully!**")
-                    st.info("📄 Minutes, agenda, and actions have been saved. The Minutes section will collapse on next page load.")
-                    time.sleep(2)
-                    st.rerun()
+                    _save_error = getattr(result, 'error', None)
+                    if _save_error:
+                        st.error(f"⚠️ Could not save meeting: {_save_error}{_not_held_hint}")
+                    elif not result.data:
+                        st.error(
+                            "⚠️ The save didn't come back with a saved record, so this "
+                            "probably did **not** actually save." + _not_held_hint +
+                            " Otherwise, try again or check the Render logs."
+                        )
+                    else:
+                        st.success("✅ **Meeting Saved Successfully!**")
+                        st.info("📄 Minutes, agenda, and actions have been saved. The Minutes section will collapse on next page load.")
+                        time.sleep(2)
+                        st.rerun()
                 else:
                     # Create new
                     result = supabase.table('staff_meetings').insert(meeting_data).execute()
-                    if result.data:
+                    _save_error = getattr(result, 'error', None)
+                    if _save_error:
+                        st.error(f"⚠️ Could not save meeting: {_save_error}{_not_held_hint}")
+                    elif result.data:
                         st.session_state.current_staff_meeting_id = result.data[0]['id']
                         st.success("✅ **New Meeting Created & Saved!**")
                         st.info("📄 All meeting details saved successfully.")
                         time.sleep(2)
                         st.rerun()
+                    else:
+                        st.error(
+                            "⚠️ The save didn't come back with a saved record, so this "
+                            "probably did **not** actually create the meeting." + _not_held_hint +
+                            " Otherwise, try again or check the Render logs."
+                        )
 
             except Exception as e:
-                st.error(f"⚠️ Could not save meeting: {e}")
+                st.error(f"⚠️ Could not save meeting: {e}{_not_held_hint}")
 
 with tab3:
     st.subheader("⚙️ Manage Staff List")
