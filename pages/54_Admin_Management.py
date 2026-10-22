@@ -1454,7 +1454,7 @@ if st.session_state.show_admin_login and not st.session_state.admin_unlocked:
 if st.session_state.show_admin_panel and st.session_state.admin_unlocked:
     with st.expander("🛠️ Manage jobs", expanded=True):
         st.caption(
-            "Add a new job to any section below, or edit and remove ones already listed. "
+            "Add a new job to any section below, or edit, reorder (↑/↓), and remove ones already listed. "
             "Changes save straight to Supabase for everyone."
         )
         admin_tasks = load_tasks()
@@ -1540,8 +1540,9 @@ if st.session_state.show_admin_panel and st.session_state.admin_unlocked:
             if not cat["tasks"]:
                 continue
             st.markdown(f'<div class="sec-head">{cat["title"]}</div>', unsafe_allow_html=True)
-            for t in cat["tasks"]:
-                dr1, dr2, dr3, dr4 = st.columns([4, 1.2, 1, 1])
+            cat_task_list = cat["tasks"]
+            for idx, t in enumerate(cat_task_list):
+                dr1, dr2, dr3, dr4, dr5, dr6 = st.columns([3.3, 1.2, 1, 0.5, 0.5, 1])
                 edited_text = dr1.text_input(
                     "Job text", value=t["text"], key=f"dtext_{t['id']}", label_visibility="collapsed"
                 )
@@ -1564,14 +1565,34 @@ if st.session_state.show_admin_panel and st.session_state.admin_unlocked:
                     dr3.markdown("&nbsp;")
                     weekday_val = None
 
+                # Reorder within this section — swaps sort_order with the
+                # immediate neighbour in the currently-displayed (sorted)
+                # list, rather than trying to renumber the whole section.
+                if dr4.button("↑", key=f"up_{t['id']}", use_container_width=True,
+                              disabled=(idx == 0), help="Move up"):
+                    prev_t = cat_task_list[idx - 1]
+                    this_order = t.get("sort_order", 0)
+                    prev_order = prev_t.get("sort_order", 0)
+                    update_task(t["id"], {"sort_order": prev_order})
+                    update_task(prev_t["id"], {"sort_order": this_order})
+                    st.rerun()
+                if dr5.button("↓", key=f"down_{t['id']}", use_container_width=True,
+                              disabled=(idx == len(cat_task_list) - 1), help="Move down"):
+                    next_t = cat_task_list[idx + 1]
+                    this_order = t.get("sort_order", 0)
+                    next_order = next_t.get("sort_order", 0)
+                    update_task(t["id"], {"sort_order": next_order})
+                    update_task(next_t["id"], {"sort_order": this_order})
+                    st.rerun()
+
                 confirm_key = f"confirm_del_{t['id']}"
                 if st.session_state.get(confirm_key):
-                    if dr4.button("Confirm?", key=f"delc_{t['id']}", use_container_width=True):
+                    if dr6.button("Confirm?", key=f"delc_{t['id']}", use_container_width=True):
                         delete_task(t["id"])
                         st.session_state.pop(confirm_key, None)
                         st.rerun()
                 else:
-                    if dr4.button("Delete", key=f"del_{t['id']}", use_container_width=True):
+                    if dr6.button("Delete", key=f"del_{t['id']}", use_container_width=True):
                         st.session_state[confirm_key] = True
                         st.rerun()
 
