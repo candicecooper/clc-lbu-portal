@@ -1180,6 +1180,7 @@ def init_state():
         "show_admin_login": False,
         "show_admin_panel": False,
         "show_process": None,
+        "show_print_panel": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -1316,7 +1317,7 @@ staff = load_staff()
 
 # ── Identity ─────────────────────────────────────────────────────────────
 if st.session_state.current_user:
-    id_col1, id_col2, id_col3, id_col4, id_col5, id_col6 = st.columns([3, 1, 1, 1, 1, 1])
+    id_col1, id_col2, id_col3, id_col4, id_col5, id_col6, id_col7 = st.columns([2.6, 1, 1, 1, 1, 1, 1.3])
     with id_col1:
         st.markdown(f"Signed in as **{st.session_state.current_user}**")
     with id_col2:
@@ -1333,6 +1334,9 @@ if st.session_state.current_user:
         if st.button("📌 One-off jobs", use_container_width=True):
             st.session_state.show_adhoc_panel = not st.session_state.show_adhoc_panel
     with id_col6:
+        if st.button("🖨️ Print", use_container_width=True):
+            st.session_state.show_print_panel = not st.session_state.show_print_panel
+    with id_col7:
         if st.button("🔒 Admin", use_container_width=True):
             if st.session_state.admin_unlocked:
                 st.session_state.show_admin_panel = not st.session_state.show_admin_panel
@@ -1433,6 +1437,64 @@ if st.session_state.show_adhoc_panel:
                     add_adhoc_job(adhoc_new_staff, adhoc_new_text.strip())
                     st.session_state["_clear_adhoc_form"] = True
                     st.rerun()
+
+if st.session_state.show_print_panel:
+    with st.expander("🖨️ Download / print sections", expanded=True):
+        st.caption(
+            "Pick one or more sections below and download a printable PDF with just "
+            "those jobs — handy for things like printing the Allocation Process steps "
+            "for Leadership, without the whole checklist."
+        )
+        print_categories = load_categories()
+        print_tasks_flat = load_tasks()
+        print_cats_sorted = sorted(print_categories, key=lambda c: c.get("sort_order", 0))
+        print_cat_titles = [c["title"] for c in print_cats_sorted]
+        picked_section_titles = st.multiselect(
+            "Sections to include", print_cat_titles, key="print_section_pick",
+            placeholder="Choose one or more sections",
+        )
+        if not picked_section_titles:
+            st.caption("No sections picked yet.")
+        else:
+            picked_ids = {c["id"] for c in print_cats_sorted if c["title"] in picked_section_titles}
+            pdf_sections = []
+            for cat in print_cats_sorted:
+                if cat["id"] not in picked_ids:
+                    continue
+                cat_tasks_sorted = sorted(
+                    (t for t in print_tasks_flat if t["category_id"] == cat["id"]),
+                    key=lambda t: t.get("sort_order", 0),
+                )
+                steps = []
+                for t in cat_tasks_sorted:
+                    if t["frequency"] == "weekly" and t.get("weekday"):
+                        prefix = f"[{t['weekday']}] "
+                    elif t["frequency"] == "weekly":
+                        prefix = "[Weekly] "
+                    else:
+                        prefix = ""
+                    steps.append(prefix + t["text"])
+                if steps:
+                    pdf_sections.append((cat["title"], steps))
+            if not pdf_sections:
+                st.caption("Those sections don't have any jobs in them yet.")
+            elif not _HAS_RL:
+                st.info("PDF download needs 'reportlab' in requirements.txt — ask me to add it "
+                        "if this message shows up on the live site.")
+            else:
+                _print_pdf = _build_reference_pdf(
+                    "Admin Jobs Checklist",
+                    "Cowandilla Learning Centre (LBU) • " + ", ".join(picked_section_titles)
+                    + f" • Printed {date.today().strftime('%d %b %Y')}",
+                    pdf_sections,
+                    [],
+                )
+                _file_slug = "_".join(t.replace(" ", "") for t in picked_section_titles)[:60]
+                st.download_button(
+                    "⬇️ Download selected sections (PDF)", data=_print_pdf,
+                    file_name=f"Admin_Jobs_Checklist_{_file_slug}.pdf",
+                    mime="application/pdf", type="primary",
+                )
 
 # ── Admin: job management (password-gated, Supabase-backed) ───────────────
 # See the ADMIN_PASSWORD note above the constant — this is a "don't show
