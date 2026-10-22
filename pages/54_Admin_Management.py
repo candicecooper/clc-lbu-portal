@@ -121,7 +121,8 @@ def _build_reference_pdf(title, subtitle, sections, reminders):
     buf = BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=14*mm, rightMargin=14*mm,
                             topMargin=12*mm, bottomMargin=10*mm)
-    h1 = ParagraphStyle("h1", fontName="Helvetica-Bold", fontSize=17, textColor=_TEAL)
+    h1 = ParagraphStyle("h1", fontName="Helvetica-Bold", fontSize=17, leading=21,
+                        textColor=_TEAL, spaceAfter=3)
     sub = ParagraphStyle("sub", fontSize=8.5, textColor=_GREY, spaceAfter=4)
     boxh = ParagraphStyle("boxh", fontSize=10.5, textColor=colors.white,
                           fontName="Helvetica-Bold", leading=13)
@@ -271,6 +272,61 @@ REFERENCE_DOCS = {
             "<b>Before archiving:</b> file SMARTAR, Behaviour, Sensory &amp; Risk documents.",
             "<b>Trust the messages:</b> green = saved, red = not saved (fix it).",
             "<b>Extending ≠ archiving:</b> just change the exit date.",
+        ],
+    },
+    "allocation_process": {
+        "kind": "routine",
+        "menu": "📋 Allocation Process",
+        "title": "Allocation Process — Quick Reference",
+        "subtitle": "Cowandilla Learning Centre (LBU) • Routine guide — follow every "
+                    "Wednesday (allocation day), plus the Friday end-of-week clean-up.",
+        "sections": [
+            ("① Wednesday morning — referrals &amp; outcomes", [
+                "Print referrals that come through via email no later than <b>9:00am "
+                "Wednesday</b>.",
+                "Give a copy to the Manager and the Transition Coordinator.",
+                "Receive the Transition Coordinator's email with allocation outcomes.",
+            ]),
+            ("② Wednesday — communicate the outcome", [
+                "Send communication to referring schools, BSE and TC (using the script) "
+                "before <b>4:00pm Wednesday</b>.",
+                "Send a separate email to the allocated teacher with the student's details "
+                "(not documents).",
+            ]),
+            ("③ Wednesday — set up the student's files", [
+                "Create a OneDrive file for the student.",
+                "Upload the student's files to OneDrive.",
+            ]),
+            ("④ Wednesday — Active Student List &amp; LBU admin", [
+                "Open the <b>Active Student List</b> tool and confirm the new student(s) "
+                "from today's allocation have synced in automatically — no need to "
+                "manually add them to an Excel database any more.",
+                "Manually check the current list and confirm any students who have "
+                "finished placement have been removed.",
+                "Download the current Active Student List.",
+                "Forward the downloaded list to LBU admin.",
+                "Save a copy of the downloaded list in the admin file on the staff "
+                "OneDrive.",
+            ]),
+            ("⑤ Friday — end-of-week clean-up", [
+                "Open the Active Student List tool and check for any additional students "
+                "finishing placement at the end of this week.",
+                "Remove those students from the Active Student List — no OneDrive upload "
+                "needed for this one.",
+                "Download the updated list and print a copy in A3 for the Leadership "
+                "offices.",
+            ]),
+        ],
+        "reminders": [
+            "<b>Auto-sync:</b> the Active Student List tool now syncs new allocations "
+            "automatically — admin no longer enters new students into an Excel database.",
+            "<b>Wednesday close:</b> download → forward to LBU admin → save a copy to the "
+            "staff OneDrive admin file.",
+            "<b>Friday close:</b> remove end-of-week finishers from the Active Student "
+            "List → download → print in A3 for the Leadership offices (no OneDrive "
+            "upload needed for this one).",
+            "<b>Deadlines:</b> referrals printed by 9:00am Wednesday; outcome "
+            "communications sent by 4:00pm Wednesday.",
         ],
     },
     "admin_setup": {
