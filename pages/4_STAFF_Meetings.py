@@ -242,6 +242,23 @@ def _minutes_block_widget_keys(block: dict, key_prefix: str, idx: int) -> tuple:
     return f"{base}_minutes", f"{base}_action"
 
 
+def _sync_all_minutes_widgets_from_blocks(blocks: list, key_prefix: str) -> None:
+    """Push every block's current minutes/action values into their widget
+    session_state keys, numbered the SAME way _render_minutes_block_fields
+    does (each kind indexed separately, starting at 0). MUST be called
+    before any of those widgets are instantiated in this script run — e.g.
+    at the very top of the Agenda section, before the Standing Items loop
+    — since this is used right after something (like an AI generation step)
+    mutates `blocks` data directly, outside the normal widget flow: once a
+    widget key already exists, Streamlit ignores a fresh `value=` on rerun,
+    so this is what actually makes the new values show up."""
+    for kind in ("standing", "additional", "other", "legacy"):
+        for i, b in enumerate([x for x in blocks if x["kind"] == kind]):
+            m_key, a_key = _minutes_block_widget_keys(b, key_prefix, i)
+            st.session_state[m_key] = b.get("minutes", "")
+            st.session_state[a_key] = b.get("action", "")
+
+
 def _all_minutes_widget_keys(blocks: list, key_prefix: str) -> list:
     """All (minutes, action) widget keys currently in use across `blocks`,
     computed the SAME way _render_minutes_blocks_editor numbers them — each
@@ -255,13 +272,15 @@ def _all_minutes_widget_keys(blocks: list, key_prefix: str) -> list:
     return keys
 
 
-def _render_minutes_blocks_editor(blocks: list, key_prefix: str) -> None:
-    """Render one editable (minutes + action) pair per block, grouped by
-    kind, mutating `blocks` in place. Used identically by Manual Entry and
-    by the AI-from-Transcript review step, so both methods land in the same
-    fields."""
-
-    def _render_one(b, idx, allow_delete=False):
+def _render_minutes_block_fields(blocks: list, b: dict, idx: int, key_prefix: str,
+                                  allow_delete: bool = False, show_heading: bool = True) -> None:
+    """Render one block's heading (optional) + editable (minutes + action)
+    pair, mutating `b` in place (and, if `allow_delete` and the user removes
+    it, `blocks` too). Shared by the Agenda section's Standing Item boxes
+    (show_heading=False, since the expander title already names the item)
+    and the Minutes section's Additional/Other Items editor below, so every
+    item lands in the same style of fields."""
+    if show_heading:
         heading = f"**{b['label']}**"
         if b.get("raised_by"):
             heading += f"  \n*Raised by {b['raised_by']}*"
@@ -273,40 +292,42 @@ def _render_minutes_blocks_editor(blocks: list, key_prefix: str) -> None:
                 if st.button("🗑️", key=f"{key_prefix}_del_{idx}", help="Remove this item"):
                     blocks.remove(b)
                     st.rerun()
-        m_key, a_key = _minutes_block_widget_keys(b, key_prefix, idx)
-        b["minutes"] = st.text_area(
-            f"Minutes — {b['label']}", value=b.get("minutes", ""), height=110,
-            key=m_key, label_visibility="collapsed",
-            placeholder="What was discussed, and any decisions made? Leave blank if not discussed."
-        )
-        b["action"] = st.text_input(
-            f"Action — {b['label']}", value=b.get("action", ""),
-            key=a_key, label_visibility="collapsed",
-            placeholder='Action (optional) — who\'s doing what, e.g. "Jacqui — update the WHS checklist by Friday"'
-        )
-        st.write("")
+    m_key, a_key = _minutes_block_widget_keys(b, key_prefix, idx)
+    b["minutes"] = st.text_area(
+        f"Minutes — {b['label']}", value=b.get("minutes", ""), height=110,
+        key=m_key, label_visibility="collapsed",
+        placeholder="What was discussed, and any decisions made? Leave blank if not discussed."
+    )
+    b["action"] = st.text_input(
+        f"Action — {b['label']}", value=b.get("action", ""),
+        key=a_key, label_visibility="collapsed",
+        placeholder='Action (optional) — who\'s doing what, e.g. "Jacqui — update the WHS checklist by Friday"'
+    )
+    st.write("")
 
-    standing = [b for b in blocks if b["kind"] == "standing"]
+
+def _render_minutes_blocks_editor(blocks: list, key_prefix: str) -> None:
+    """Render one editable (minutes + action) pair per Additional/Other/
+    legacy block, mutating `blocks` in place. Used identically by Manual
+    Entry and by the AI-from-Transcript review step, so both methods land
+    in the same fields. Standing Items are NOT rendered here — they render
+    directly inside their own box in the Agenda section above instead, so
+    each item's minutes live in exactly one place rather than two."""
+
     additional = [b for b in blocks if b["kind"] == "additional"]
     other = [b for b in blocks if b["kind"] == "other"]
     legacy = [b for b in blocks if b["kind"] == "legacy"]
 
-    if standing:
-        st.markdown("##### Standing Items")
-        st.caption("Minutes here go straight into the matching Standing Item from the Agenda above.")
-        for i, b in enumerate(standing):
-            _render_one(b, i)
-
     if additional:
         st.markdown("##### Additional Agenda Items")
         for i, b in enumerate(additional):
-            _render_one(b, i)
+            _render_minutes_block_fields(blocks, b, i, key_prefix)
 
     st.markdown("##### Any Other Items")
     st.caption("Topics raised that weren't on the agenda — picked up automatically from the "
                "transcript, or add one yourself.")
     for i, b in enumerate(other):
-        _render_one(b, i, allow_delete=True)
+        _render_minutes_block_fields(blocks, b, i, key_prefix, allow_delete=True)
 
     _new_other_topic_key = f"{key_prefix}_new_other_topic"
     _new_other_by_key = f"{key_prefix}_new_other_by"
@@ -338,7 +359,7 @@ def _render_minutes_blocks_editor(blocks: list, key_prefix: str) -> None:
         st.markdown("##### Other saved notes")
         st.caption("Carried over from before this meeting's minutes were restructured.")
         for i, b in enumerate(legacy):
-            _render_one(b, i)
+            _render_minutes_block_fields(blocks, b, i, key_prefix)
 
 
 def _sync_minutes_actions_to_global(blocks: list, actions_list: list) -> None:
@@ -1809,10 +1830,7 @@ with tab1:
     # ══════════════════════════════════════════════════════════════════════════════
     
     st.subheader("📑 Meeting Agenda")
-    
-    # Standing agenda items
-    st.write("**Standing Items:**")
-    
+
     # Load agenda data
     if selected_record and selected_record.get('agenda_items'):
         try:
@@ -1821,26 +1839,6 @@ with tab1:
             agenda_data = {}
     else:
         agenda_data = {}
-
-    _agenda_mkey = st.session_state.current_staff_meeting_id or "new"
-    for item in STANDING_AGENDA_ITEMS:
-        with st.expander(f"📌 {item}"):
-            # Namespaced per meeting (_agenda_mkey) for the same reason as the
-            # Minutes section fields below: Streamlit only honours `value=`
-            # the first time a widget key is created, so an un-namespaced key
-            # here would keep showing one meeting's agenda notes on every
-            # other meeting for the rest of the session.
-            agenda_data[item] = st.text_area(
-                f"Notes for {item}",
-                value=agenda_data.get(item, ''),
-                height=100,
-                key=f"agenda_{_agenda_mkey}_{item.replace(' ', '_')}",
-                placeholder=f"Add information/updates for {item}..."
-            )
-    
-    # ── ADDITIONAL AGENDA ITEMS ───────────────────────────────────────────────
-    st.markdown("---")
-    st.markdown("#### 📋 Additional Agenda Items")
 
     # Initialise in agenda_data
     if 'additional_agenda' not in agenda_data:
@@ -1863,6 +1861,66 @@ with tab1:
         st.session_state[ss_key] = [_normalise_agenda_item(e) for e in agenda_data.get('additional_agenda', [])]
 
     additional_items = st.session_state[ss_key]
+
+    # ── Minutes blocks (shared with the "📄 Meeting Minutes" section further
+    # down the page) — seeded here, BEFORE the Standing Items loop below, so
+    # each Standing Item's minutes/action fields can render directly inside
+    # its own box right here, rather than a second, duplicate "Standing
+    # Items" block appearing again later on the page.
+    minutes = selected_record.get('minutes', '') if selected_record else ''
+    _minutes_mkey = st.session_state.current_staff_meeting_id or "new"
+    _blocks_ss_key = f"minutes_blocks_{_minutes_mkey}"
+    if _blocks_ss_key not in st.session_state:
+        st.session_state[_blocks_ss_key] = _seed_minutes_blocks(minutes, additional_items)
+    _sync_additional_minutes_blocks(st.session_state[_blocks_ss_key], additional_items)
+    blocks = st.session_state[_blocks_ss_key]
+    _minutes_editor_key_prefix = f"minutes_editor_{_minutes_mkey}"
+    _standing_blocks = [b for b in blocks if b["kind"] == "standing"]
+
+    # If an AI generation step (further down the page) just updated `blocks`
+    # directly, this resyncs every affected widget's session_state from that
+    # fresh data BEFORE any of those widgets render below — see
+    # _sync_all_minutes_widgets_from_blocks for why this has to happen here.
+    _pending_minutes_sync_key = f"_pending_minutes_widget_sync_{_minutes_mkey}"
+    if st.session_state.pop(_pending_minutes_sync_key, False):
+        _sync_all_minutes_widgets_from_blocks(blocks, _minutes_editor_key_prefix)
+
+    # Likewise for "Clear draft" below — it resets the blocks DATA immediately,
+    # but the widgets for the keys that were showing the old text still need
+    # clearing out before they render again, which can only safely happen
+    # here, before any of them are instantiated this run.
+    _pending_minutes_clear_key = f"_pending_minutes_clear_{_minutes_mkey}"
+    if st.session_state.pop(_pending_minutes_clear_key, False):
+        for _k in _all_minutes_widget_keys(blocks, _minutes_editor_key_prefix):
+            st.session_state.pop(_k, None)
+
+    # Standing agenda items
+    st.write("**Standing Items:**")
+
+    _agenda_mkey = st.session_state.current_staff_meeting_id or "new"
+    for _std_idx, item in enumerate(STANDING_AGENDA_ITEMS):
+        with st.expander(f"📌 {item}"):
+            # Namespaced per meeting (_agenda_mkey) for the same reason as the
+            # Minutes section fields below: Streamlit only honours `value=`
+            # the first time a widget key is created, so an un-namespaced key
+            # here would keep showing one meeting's agenda notes on every
+            # other meeting for the rest of the session.
+            agenda_data[item] = st.text_area(
+                f"Notes for {item}",
+                value=agenda_data.get(item, ''),
+                height=100,
+                key=f"agenda_{_agenda_mkey}_{item.replace(' ', '_')}",
+                placeholder=f"Add information/updates for {item}..."
+            )
+            st.markdown("---")
+            st.caption("📝 Minutes for this item — filled in manually, or converted from a "
+                       "transcript in the Meeting Minutes section below.")
+            _render_minutes_block_fields(blocks, _standing_blocks[_std_idx], _std_idx,
+                                          _minutes_editor_key_prefix, show_heading=False)
+
+    # ── ADDITIONAL AGENDA ITEMS ───────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 📋 Additional Agenda Items")
 
     # ── Load Staff Submissions button ─────────────────────────────────────────
     col_load1, col_load2 = st.columns([2, 3])
@@ -1979,7 +2037,11 @@ with tab1:
     # for anything raised that wasn't on the agenda.
     # ══════════════════════════════════════════════════════════════════════════════
 
-    minutes = selected_record.get('minutes', '') if selected_record else ''
+    # `minutes`, `blocks` and `_minutes_editor_key_prefix` were already
+    # seeded up in the Agenda section above (so Standing Items can render
+    # their minutes/action fields directly in their own box there) — reused
+    # as-is here rather than re-seeded, so there's one shared set of blocks
+    # regardless of where on the page they're being edited.
     has_existing_minutes = bool(minutes and minutes.strip())
 
     # ── Keep this section's open/closed state and entry-method choice pinned
@@ -1989,7 +2051,6 @@ with tab1:
     # instant something inside it — like the radio button below — triggers a
     # rerun, which is what made the section look like it "wouldn't expand" or
     # "wouldn't show" the AI transcript box after switching to it.
-    _minutes_mkey = st.session_state.current_staff_meeting_id or "new"
     _minutes_expander_key = f"_minutes_section_open_{_minutes_mkey}"
     if _minutes_expander_key not in st.session_state:
         st.session_state[_minutes_expander_key] = not has_existing_minutes
@@ -1999,18 +2060,6 @@ with tab1:
         minutes_method = st.radio("Minutes Entry Method",
                                   options=["✍️ Manual Entry", "🤖 AI from Transcript"],
                                   horizontal=True, key=f"minutes_entry_method_{_minutes_mkey}")
-
-        # One shared set of blocks — Manual Entry and AI-from-Transcript both
-        # read from and write into this SAME session-state-backed list, kept
-        # in sync with the Standing Items and this meeting's current
-        # Additional Agenda Items, so switching entry method never loses
-        # anything already typed or generated.
-        _blocks_ss_key = f"minutes_blocks_{_minutes_mkey}"
-        if _blocks_ss_key not in st.session_state:
-            st.session_state[_blocks_ss_key] = _seed_minutes_blocks(minutes, additional_items)
-        _sync_additional_minutes_blocks(st.session_state[_blocks_ss_key], additional_items)
-        blocks = st.session_state[_blocks_ss_key]
-        _minutes_editor_key_prefix = f"minutes_editor_{_minutes_mkey}"
 
         # Always defined regardless of entry method, so the PD section further
         # down can offer "reuse the main meeting transcript/synthesis for PD
@@ -2282,26 +2331,23 @@ MEETING SYNTHESIS:
                             for b in new_others:
                                 b['origin'] = 'ai'
 
-                            # Update the shared blocks list in place, and sync the edit
-                            # widgets' own session_state too — once a widget key exists,
-                            # Streamlit ignores `value=` on rerun, so this is what actually
-                            # updates what's shown for editing.
-                            standing_in_order = [b for b in blocks if b['kind'] == 'standing']
-                            additional_in_order = [b for b in blocks if b['kind'] == 'additional']
-                            for i, b in enumerate(standing_in_order):
-                                src = by_standing.get(b['label'].strip().lower())
+                            # Update the shared blocks list in place. The Standing Items
+                            # widgets live up in the Agenda section — earlier in the script
+                            # than this button — so they've already rendered this run and
+                            # can't have their session_state set directly here without
+                            # Streamlit raising StreamlitWidgetAlreadyInstantiatedError.
+                            # Instead, a pending-sync flag is set below and applied at the
+                            # very top of the Agenda section on the rerun that follows,
+                            # before any of these widgets are instantiated again.
+                            for b in blocks:
+                                if b['kind'] == 'standing':
+                                    src = by_standing.get(b['label'].strip().lower())
+                                elif b['kind'] == 'additional':
+                                    src = by_additional.get(b['label'].strip().lower())
+                                else:
+                                    src = None
                                 if src:
                                     b['minutes'], b['action'] = src['minutes'], src['action']
-                                    m_key, a_key = _minutes_block_widget_keys(b, _minutes_editor_key_prefix, i)
-                                    st.session_state[m_key] = b['minutes']
-                                    st.session_state[a_key] = b['action']
-                            for i, b in enumerate(additional_in_order):
-                                src = by_additional.get(b['label'].strip().lower())
-                                if src:
-                                    b['minutes'], b['action'] = src['minutes'], src['action']
-                                    m_key, a_key = _minutes_block_widget_keys(b, _minutes_editor_key_prefix, i)
-                                    st.session_state[m_key] = b['minutes']
-                                    st.session_state[a_key] = b['action']
 
                             # Replace previously AI-generated "Any Other Items" with this
                             # fresh batch; keep anything the user added manually.
@@ -2309,6 +2355,8 @@ MEETING SYNTHESIS:
                             blocks[:] = [b for b in blocks if b['kind'] != 'other'] + manual_others + new_others
 
                             st.success("✅ Minutes generated — review below before saving.")
+                            st.session_state[_pending_minutes_sync_key] = True
+                            st.rerun()
 
                         except Exception as e:
                             st.error(f"AI extraction failed: {e}")
@@ -2324,10 +2372,14 @@ MEETING SYNTHESIS:
             st.markdown("#### ✏️ Minutes")
         with col_clear:
             if st.button("🗑️ Clear draft", key=f"clear_minutes_draft_{_minutes_mkey}",
-                         help="Clear all minutes and actions below and start over"):
-                for k in _all_minutes_widget_keys(blocks, _minutes_editor_key_prefix):
-                    st.session_state.pop(k, None)
+                         help="Clear all minutes and actions (including the Standing Item "
+                              "boxes above) and start over"):
+                # Reset the data now; the matching widgets (some of which — the
+                # Standing Items — live up in the Agenda section, earlier in the
+                # script than this button) can only safely be cleared at the top
+                # of that section on the rerun this triggers, before they render.
                 st.session_state[_blocks_ss_key] = _seed_minutes_blocks("", additional_items)
+                st.session_state[_pending_minutes_clear_key] = True
                 st.rerun()
 
         _render_minutes_blocks_editor(blocks, key_prefix=_minutes_editor_key_prefix)
