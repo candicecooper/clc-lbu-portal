@@ -160,6 +160,74 @@ def _build_reference_pdf(title, subtitle, sections, reminders):
     return buf.getvalue()
 
 
+def _build_checklist_pdf(title, subtitle, sections):
+    """sections = [(heading, [step, ...]), ...]. A roomier, print-friendly
+    layout for handing out physical checklists (e.g. printing a section for
+    Leadership) — deliberately more spacious than the compact one-page
+    Reference Docs PDF above, and flows across as many pages as it needs
+    rather than squeezing everything onto one."""
+    if not _HAS_RL:
+        return None
+    _TEAL = colors.HexColor("#1F4E5F")
+    _LIGHT = colors.HexColor("#EAF1F3")
+    _GREY = colors.HexColor("#5b6b70")
+    _LINE = colors.HexColor("#CBD8DB")
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=18*mm, rightMargin=18*mm,
+                            topMargin=16*mm, bottomMargin=18*mm)
+    h1 = ParagraphStyle("ch1", fontName="Helvetica-Bold", fontSize=22, leading=27,
+                        textColor=_TEAL, spaceAfter=6)
+    sub = ParagraphStyle("csub", fontSize=10.5, textColor=_GREY, spaceAfter=12, leading=14)
+    boxh = ParagraphStyle("cboxh", fontName="Helvetica-Bold", fontSize=13.5,
+                          textColor=colors.white, leading=17)
+    stp = ParagraphStyle("cstp", fontSize=11.3, leading=16.5)
+    story = [Paragraph(title, h1), Paragraph(subtitle, sub),
+             HRFlowable(width="100%", thickness=1.4, color=_TEAL, spaceAfter=16)]
+
+    def _checkbox_cell():
+        # A drawn square outline, not a text glyph — "☐" isn't in the base14
+        # Helvetica font's encoding and renders as a broken tofu box.
+        box = Table([[""]], colWidths=[9], rowHeights=[9])
+        box.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 1.1, _TEAL)]))
+        return box
+
+    for heading, steps in sections:
+        # Heading + job rows are one Table (not separate flowables) with
+        # repeatRows=1, so if a long section spills onto the next page the
+        # teal heading repeats at the top instead of a page break stranding
+        # the heading away from its jobs.
+        data = [[Paragraph(heading, boxh), ""]]
+        data += [[_checkbox_cell(), Paragraph(x, stp)] for x in steps]
+        tbl = Table(data, colWidths=[10*mm, doc.width - 10*mm], repeatRows=1)
+        tbl.setStyle(TableStyle([
+            ("SPAN", (0, 0), (-1, 0)),
+            ("BACKGROUND", (0, 0), (-1, 0), _TEAL),
+            ("LEFTPADDING", (0, 0), (-1, 0), 12),
+            ("TOPPADDING", (0, 0), (-1, 0), 9),
+            ("BOTTOMPADDING", (0, 0), (-1, 0), 9),
+            ("VALIGN", (0, 1), (-1, -1), "TOP"),
+            ("BACKGROUND", (0, 1), (-1, -1), _LIGHT),
+            ("LEFTPADDING", (0, 1), (-1, -1), 9),
+            ("RIGHTPADDING", (0, 1), (-1, -1), 10),
+            ("TOPPADDING", (0, 1), (-1, -1), 8),
+            ("BOTTOMPADDING", (0, 1), (-1, -1), 8),
+            ("LINEBELOW", (0, 1), (-1, -2), 0.6, _LINE),
+        ]))
+        story += [tbl, Spacer(1, 18)]
+
+    def _footer(canvas, doc_):
+        canvas.saveState()
+        canvas.setFont("Helvetica", 8)
+        canvas.setFillColor(_GREY)
+        canvas.drawString(18*mm, 11*mm, "Cowandilla Learning Centre — Learning and Behaviour Unit")
+        canvas.drawRightString(A4[0] - 18*mm, 11*mm, f"Page {doc_.page}")
+        canvas.restoreState()
+
+    doc.build(story, onFirstPage=_footer, onLaterPages=_footer)
+    buf.seek(0)
+    return buf.getvalue()
+
+
 # ---- Reference doc definitions (edit the text here to update a guide) ----
 REFERENCE_DOCS = {
     "student_workflow": {
@@ -1468,12 +1536,15 @@ if st.session_state.show_print_panel:
                 steps = []
                 for t in cat_tasks_sorted:
                     if t["frequency"] == "weekly" and t.get("weekday"):
-                        prefix = f"[{t['weekday']}] "
+                        day_tag = t["weekday"].upper()
                     elif t["frequency"] == "weekly":
-                        prefix = "[Weekly] "
+                        day_tag = "WEEKLY"
                     else:
-                        prefix = ""
-                    steps.append(prefix + t["text"])
+                        day_tag = "DAILY"
+                    steps.append(
+                        f'<font color="#1F4E5F"><b>{day_tag}</b></font>'
+                        f'&nbsp;&nbsp;{t["text"]}'
+                    )
                 if steps:
                     pdf_sections.append((cat["title"], steps))
             if not pdf_sections:
@@ -1482,12 +1553,11 @@ if st.session_state.show_print_panel:
                 st.info("PDF download needs 'reportlab' in requirements.txt — ask me to add it "
                         "if this message shows up on the live site.")
             else:
-                _print_pdf = _build_reference_pdf(
+                _print_pdf = _build_checklist_pdf(
                     "Admin Jobs Checklist",
                     "Cowandilla Learning Centre (LBU) • " + ", ".join(picked_section_titles)
                     + f" • Printed {date.today().strftime('%d %b %Y')}",
                     pdf_sections,
-                    [],
                 )
                 _file_slug = "_".join(t.replace(" ", "") for t in picked_section_titles)[:60]
                 st.download_button(
