@@ -743,6 +743,91 @@ def _build_minutes_docx_bytes(meeting: dict):
     buf.seek(0)
     return buf.getvalue()
 
+
+def _build_not_held_docx_bytes(meeting: dict):
+    """Build a short one-page Word record for a week whose staff meeting was
+    NOT held, so there's still something downloadable for that week in the
+    Archive even though there are no real minutes. Same CLC-LBU letterhead
+    styling as _build_minutes_docx_bytes, just far shorter — date/term/week/
+    taker plus the reason it wasn't held. Returns None if python-docx isn't
+    available."""
+    if not DOCX_AVAILABLE:
+        return None
+    from io import BytesIO
+    from docx.shared import Pt, Inches, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+
+    doc = docx.Document()
+
+    normal = doc.styles['Normal']
+    normal.font.name = "Segoe UI"
+    normal.font.size = Pt(10.5)
+    normal.font.color.rgb = RGBColor.from_string(_CLC_TEXT)
+
+    section = doc.sections[0]
+    section.left_margin = Inches(0.9)
+    section.right_margin = Inches(0.9)
+    section.top_margin = Inches(0.7)
+    section.bottom_margin = Inches(0.8)
+
+    eyebrow = doc.add_paragraph()
+    eyebrow.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    er = eyebrow.add_run("COWANDILLA LEARNING CENTRE  ·  LEARNING & BEHAVIOUR UNIT")
+    er.bold = True
+    er.font.size = Pt(9)
+    er.font.color.rgb = RGBColor.from_string(_CLC_GRAY)
+    er.font.name = "Segoe UI"
+
+    title = doc.add_paragraph()
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title.paragraph_format.space_before = Pt(2)
+    title.paragraph_format.space_after = Pt(12)
+    tr = title.add_run("Staff Meeting — Not Held")
+    tr.bold = True
+    tr.font.size = Pt(24)
+    tr.font.color.rgb = RGBColor.from_string(_CLC_TEAL)
+    tr.font.name = "Segoe UI"
+    _docx_bottom_rule(title, color=_CLC_TEAL, sz=18)
+
+    details = [
+        ("Date", meeting.get('meeting_date', '') or '—'),
+        ("Term / Week", f"{meeting.get('term', '')} · Week {meeting.get('week_number', '')}"),
+        ("Recorded by", meeting.get('minute_taker', '') or '—'),
+    ]
+    dtable = doc.add_table(rows=len(details), cols=2)
+    dtable.alignment = WD_TABLE_ALIGNMENT.CENTER
+    dtable.autofit = False
+    for i, (label, value) in enumerate(details):
+        cells = dtable.rows[i].cells
+        cells[0].width = Inches(1.9)
+        cells[1].width = Inches(4.7)
+        _docx_shade_cell(cells[0], _CLC_TEAL_LIGHT)
+        _docx_set_cell_text(cells[0], label, bold=True, color=_CLC_TEAL, size=9.5)
+        _docx_set_cell_text(cells[1], str(value), size=10)
+        _docx_cell_borders(cells[0])
+        _docx_cell_borders(cells[1])
+    doc.add_paragraph()
+
+    _docx_section_heading(doc, "This meeting was not held")
+
+    reason = (meeting.get('not_held_reason') or '').strip() or "No reason recorded."
+    rp = doc.add_paragraph()
+    rp.paragraph_format.space_after = Pt(4)
+    rp.add_run(reason)
+
+    footer_p = section.footer.paragraphs[0]
+    footer_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    fr = footer_p.add_run("Cowandilla Learning Centre  ·  Learning and Behaviour Unit  ·  Staff Meeting Record")
+    fr.font.size = Pt(8)
+    fr.font.color.rgb = RGBColor.from_string(_CLC_GRAY)
+    fr.font.name = "Segoe UI"
+
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(page_title="STAFF Meetings | CLC-LBU", page_icon="👥", layout="wide")
 apply_clc_theme()
@@ -1491,7 +1576,9 @@ with tab2:
             _rcols[0].markdown(f'<div style="{_cell}">{_week_text}</div>', unsafe_allow_html=True)
             _rcols[1].markdown(f'<div style="{_cell}">{meeting.get("meeting_date", "")}</div>', unsafe_allow_html=True)
             _rcols[2].markdown(f'<div style="{_cell}">{meeting.get("minute_taker", "Unknown")}</div>', unsafe_allow_html=True)
-            _rcols[3].markdown(f'<div style="{_cell}text-align:center;">{"✅" if _has_min else "—"}</div>', unsafe_allow_html=True)
+            _not_held = bool(meeting.get('meeting_not_held'))
+            _minutes_cell_text = "⚠️ Not held" if _not_held else ("✅" if _has_min else "—")
+            _rcols[3].markdown(f'<div style="{_cell}text-align:center;">{_minutes_cell_text}</div>', unsafe_allow_html=True)
             _rcols[4].markdown(f'<div style="{_cell}text-align:center;">{_att_count if _att_count else "—"}</div>', unsafe_allow_html=True)
             with _rcols[5]:
                 st.markdown(
@@ -1506,14 +1593,21 @@ with tab2:
 
             if _is_open:
                 with st.container(border=True):
-                    st.write(f"**Attendees:** {meeting.get('attendees', 'Not recorded')}")
-                    st.write(f"**Apologies:** {meeting.get('apologies', 'None')}")
-                
-                    st.markdown("---")
-                    st.write("**📄 Minutes:**")
-                    meeting_minutes = meeting.get('minutes', 'No minutes recorded')
-                    if meeting_minutes and meeting_minutes != 'No minutes recorded':
-                        st.markdown('''<style>
+                    if _not_held:
+                        # This week's meeting was marked not held — show just
+                        # that explanation instead of attendees/minutes, which
+                        # were never filled in for a week like this.
+                        st.warning("📅 **This meeting was not held.**")
+                        st.write(f"**Reason:** {meeting.get('not_held_reason', '').strip() or 'Not recorded'}")
+                    else:
+                        st.write(f"**Attendees:** {meeting.get('attendees', 'Not recorded')}")
+                        st.write(f"**Apologies:** {meeting.get('apologies', 'None')}")
+
+                        st.markdown("---")
+                        st.write("**📄 Minutes:**")
+                        meeting_minutes = meeting.get('minutes', 'No minutes recorded')
+                        if meeting_minutes and meeting_minutes != 'No minutes recorded':
+                            st.markdown('''<style>
     .clc-minutes { font-family: "Segoe UI", Arial, sans-serif !important; font-size: 14px !important; line-height: 1.7 !important; color: #1a1a1a !important; }
     .clc-minutes p, .clc-minutes li, .clc-minutes td, .clc-minutes th, .clc-minutes strong, .clc-minutes em { font-family: "Segoe UI", Arial, sans-serif !important; font-size: 14px !important; }
     .clc-minutes h1,.clc-minutes h2,.clc-minutes h3,.clc-minutes h4 { font-family: "Segoe UI", Arial, sans-serif !important; font-size: 15px !important; font-weight: 700 !important; margin-top: 1em; }
@@ -1521,10 +1615,10 @@ with tab2:
     .clc-minutes th { background: #f0f0f0; padding: 6px 10px; border: 1px solid #ddd; }
     .clc-minutes td { padding: 6px 10px; border: 1px solid #ddd; }
     </style>''', unsafe_allow_html=True)
-                        st.markdown(f'<div class="clc-minutes">' + _minutes_display_markdown(meeting_minutes) + '</div>', unsafe_allow_html=True)
-                    else:
-                        st.info("No minutes recorded for this meeting")
-                
+                            st.markdown(f'<div class="clc-minutes">' + _minutes_display_markdown(meeting_minutes) + '</div>', unsafe_allow_html=True)
+                        else:
+                            st.info("No minutes recorded for this meeting")
+
                     # Actions / Attachments / PD are intentionally NOT duplicated here —
                     # they only ever matter in the context of editing the meeting, so
                     # click "Edit / Add to This Meeting" below to see and work with them
@@ -1548,7 +1642,16 @@ with tab2:
                             )
                             st.rerun()
                     with col_arc_dl:
-                        if DOCX_AVAILABLE and (meeting.get('minutes') or '').strip():
+                        if _not_held and DOCX_AVAILABLE:
+                            st.download_button(
+                                "📥 Download (.docx) — Not Held",
+                                data=_build_not_held_docx_bytes(meeting),
+                                file_name=f"Staff_Meeting_NOT_HELD_{meeting.get('meeting_date', '')}.docx",
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                use_container_width=True,
+                                key=f"download_archived_{meeting['id']}"
+                            )
+                        elif not _not_held and DOCX_AVAILABLE and (meeting.get('minutes') or '').strip():
                             st.download_button(
                                 "📥 Download Minutes (.docx)",
                                 data=_build_minutes_docx_bytes(meeting),
@@ -1631,7 +1734,33 @@ with tab1:
 
     default_minute_taker = selected_record.get('minute_taker', '') if selected_record else ''
     minute_taker = st.text_input("Minute Taker", value=default_minute_taker, key=f"minute_taker_{_details_mkey}")
-    
+
+    # ── Meeting not held ─────────────────────────────────────────────────────
+    # A quick alternative to filling in the whole form: tick this, give a
+    # short reason, and that's what the Archive and the downloadable record
+    # show for this week instead of attendees/agenda/minutes/etc. Everything
+    # below is still here if she wants to jot something anyway, but none of
+    # it is required, and the download/Archive view only ever show the
+    # reason once this is ticked.
+    default_not_held = bool(selected_record.get('meeting_not_held')) if selected_record else False
+    default_not_held_reason = (selected_record.get('not_held_reason') or '') if selected_record else ''
+    meeting_not_held = st.checkbox(
+        "📅 This meeting was **not held** this week",
+        value=default_not_held, key=f"not_held_{_details_mkey}",
+        help="Tick this instead of filling in the rest of the form — you'll just be "
+             "asked for a short reason. That's what the Archive and the downloadable "
+             "record show for this week instead of the usual minutes."
+    )
+    not_held_reason = ""
+    if meeting_not_held:
+        not_held_reason = st.text_area(
+            "Reason the meeting wasn't held",
+            value=default_not_held_reason, key=f"not_held_reason_{_details_mkey}", height=80,
+            placeholder="e.g. Public holiday, Term break, Staff PD day off-site, not enough staff present…"
+        )
+        st.info("This week will be saved as **not held**. The sections below are optional — "
+                "only this reason shows up in the Archive and the downloadable record.")
+
     st.markdown("---")
     # ══════════════════════════════════════════════════════════════════════════════
     # 1. STAFF BULLETIN FOR THE WEEK
@@ -2946,12 +3075,27 @@ TEXT:
         "pd_absent": pd_absent.strip(),
         "pd_notes": pd_notes.strip() if pd_notes else '',
         "pd_title": pd_title.strip() if pd_title else '',
-        "pd_attachments": json.dumps(pd_attachments) if pd_attachments else '[]'
+        "pd_attachments": json.dumps(pd_attachments) if pd_attachments else '[]',
+        "meeting_not_held": bool(meeting_not_held),
+        "not_held_reason": not_held_reason.strip() if meeting_not_held else '',
     }
 
     col_dl, col_save = st.columns([1, 2])
     with col_dl:
-        if DOCX_AVAILABLE and meeting_data["minutes"].strip():
+        if meeting_not_held:
+            if DOCX_AVAILABLE:
+                st.download_button(
+                    "📥 Download (.docx) — Not Held",
+                    data=_build_not_held_docx_bytes(meeting_data),
+                    file_name=f"Staff_Meeting_NOT_HELD_{meeting_data['meeting_date']}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True,
+                    key="download_not_held_record"
+                )
+            else:
+                st.button("📥 Download (.docx) — Not Held", disabled=True, use_container_width=True,
+                          help="python-docx not installed")
+        elif DOCX_AVAILABLE and meeting_data["minutes"].strip():
             st.download_button(
                 "📥 Download Minutes (.docx)",
                 data=_build_minutes_docx_bytes(meeting_data),
