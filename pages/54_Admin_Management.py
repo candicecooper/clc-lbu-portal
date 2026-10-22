@@ -1667,6 +1667,72 @@ if st.session_state.show_admin_panel and st.session_state.admin_unlocked:
                 st.rerun()
 
         st.markdown("---")
+        st.markdown("**⚡ Bulk assign roster**")
+        st.caption(
+            "Assign one or more people to several jobs at once, across every day each "
+            "job applies to — instead of opening each job's roster and picking a day "
+            "at a time."
+        )
+        bulk_task_options = []
+        bulk_task_lookup = {}
+        for cat in grouped_categories(admin_tasks, admin_categories):
+            for t in cat["tasks"]:
+                label = f'{cat["title"]} — {t["text"]}'
+                bulk_task_options.append(label)
+                bulk_task_lookup[label] = t
+
+        if not admin_staff:
+            st.caption("Add staff names first (Manage staff) before bulk-assigning.")
+        elif not bulk_task_options:
+            st.caption("Add some jobs first, then bulk-assign them here.")
+        else:
+            bulk_picked_labels = st.multiselect(
+                "Jobs to assign", bulk_task_options, key="bulk_assign_jobs",
+                placeholder="Choose one or more jobs",
+            )
+            bc1, bc2 = st.columns([2, 2])
+            bulk_picked_staff = bc1.multiselect(
+                "Staff to assign", admin_staff, key="bulk_assign_staff",
+                placeholder="Choose one or more people",
+            )
+            bulk_day_filter = bc2.multiselect(
+                "Only these days (optional)", WEEKDAY_COLS, key="bulk_assign_days",
+                placeholder="Leave blank = every day each job applies to",
+            )
+            bulk_replace = st.checkbox(
+                "Replace whoever's currently assigned on those days (instead of adding "
+                "alongside them)", key="bulk_assign_replace",
+            )
+            if st.button(
+                "Apply bulk assignment", key="bulk_assign_apply_btn", type="primary",
+                disabled=not (bulk_picked_labels and bulk_picked_staff),
+            ):
+                bulk_roster_now = load_roster()
+                changes = 0
+                for label in bulk_picked_labels:
+                    t = bulk_task_lookup[label]
+                    days = applicable_day_keys(t)
+                    if bulk_day_filter:
+                        # A weekly job with no fixed day (WEEKDAY_ANY) isn't
+                        # tied to a specific weekday, so a day filter never
+                        # excludes it — only filters jobs that run Mon-Fri
+                        # or on one fixed day.
+                        days = [d for d in days if d == WEEKDAY_ANY or d in bulk_day_filter]
+                    for day_key in days:
+                        current = get_responsible(bulk_roster_now, t["id"], day_key)
+                        if bulk_replace:
+                            for name in current:
+                                if name not in bulk_picked_staff:
+                                    remove_roster_entry(t["id"], day_key, name)
+                                    changes += 1
+                        for name in bulk_picked_staff:
+                            if name not in current:
+                                add_roster_entry(t["id"], day_key, name)
+                                changes += 1
+                st.toast(f"Updated {changes} roster assignment(s).", icon="✅")
+                st.rerun()
+
+        st.markdown("---")
         st.markdown("**Jobs**")
         for cat in grouped_categories(admin_tasks, admin_categories):
             if not cat["tasks"]:
