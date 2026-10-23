@@ -693,3 +693,47 @@ def bulletin_lines_for(client, d: date | None = None) -> list[str]:
             bits.append(f"({day['label'].upper()})")
         lines.append(f"{e['initials']} · {e['program']} — " + " ".join(b for b in bits if b))
     return lines
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Document Archive (uses the portal's archive_utils.py)
+# ──────────────────────────────────────────────────────────────────────────
+ARCHIVE_SOURCE_TOOL = "Transition Timetables"
+ARCHIVE_DOC_TYPE = "Transition Timetable"
+
+
+def archive_timetable(record: dict, saved_by: str, change_note: str = "") -> dict | None:
+    """File an INITIALS-ONLY Word copy in the student's Document Archive folder.
+    Replaces the student's previous timetable there (older copy goes to the
+    archive's restorable Deleted list). Never raises; returns the archive
+    record or None."""
+    try:
+        import archive_utils as au
+    except ImportError:
+        return None
+    try:
+        ini = (record.get("student_initials") or "").strip().upper()
+        weeks = record.get("weeks") or []
+        if not ini or not weeks:
+            return None
+        sens = {"full_name": ini, "preferred_name": ini, "edid": "", "dob": ""}
+        file_bytes = build_timetable_docx(record, weeks, sens)
+        tw = term_week_for(date.today())
+        term, year = (f"Term {tw[1]}", tw[0]) if tw else (None, None)
+        tags = [t for t in (record.get("program"), record.get("home_school_short")) if t]
+        return au.archive_document(
+            source_tool=ARCHIVE_SOURCE_TOOL,
+            doc_type=ARCHIVE_DOC_TYPE,
+            title=f"Transition Timetable — {ini} — v{record.get('version') or 1}",
+            file_bytes=file_bytes,
+            filename=f"Transition_Timetable_{ini}.docx",
+            student_initials=ini,
+            term=term,
+            year=year,
+            tags=tags,
+            created_by=saved_by or "unknown",
+            notes=(change_note or None),
+            supersede=True,
+        )
+    except Exception:
+        return None
