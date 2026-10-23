@@ -15,8 +15,26 @@ import io
 import uuid
 from datetime import date
 
+import os
+import sys
+
 import pandas as pd
 import streamlit as st
+
+st.set_page_config(page_title="Hazard Report", page_icon="⚠️", layout="wide")
+
+# Find hazard_utils.py whether it sits in the repo root or in /pages
+_here = os.path.dirname(os.path.abspath(__file__))
+for _p in (_here, os.path.dirname(_here)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+try:
+    import hazard_utils  # noqa: F401
+except ModuleNotFoundError:
+    st.error("**hazard_utils.py is missing from the GitHub repo.** Upload it to the main (top) folder "
+             "of clc-lbu-portal, next to confidential_auth.py, then wait for Render to redeploy.")
+    st.stop()
 
 from hazard_utils import (
     LOCATIONS, PHOTO_BUCKET, RISK_EMOJI, RISK_LABELS, RISK_SHORT, STATUSES,
@@ -24,7 +42,6 @@ from hazard_utils import (
     send_hazard_email, today_adl, _secret,
 )
 
-st.set_page_config(page_title="Hazard Report", page_icon="⚠️", layout="wide")
 
 OTHER_NAME = "Other (type name)"
 
