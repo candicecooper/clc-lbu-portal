@@ -36,6 +36,7 @@ DOC_TYPES = [
     "Interval Support Report",
     "Safety & Risk Plan",
     "Communication Log Export",
+    "Transition Timetable",
     "PDP",
     "Meeting Summary",
     "Term Report",
@@ -50,6 +51,7 @@ SOURCE_TOOLS = [
     "Interval Support Tracker",
     "Safety & Risk Plan Builder",
     "Communication Log",
+    "Transition Timetables",
     "PDP Builder",
     "LC Meeting Summariser",
     "Team Meetings",
@@ -62,7 +64,7 @@ TERMS = ["Term 1", "Term 2", "Term 3", "Term 4"]
 # Doc types where a newer report REPLACES the older one in the student's
 # folder (the older version is auto-moved to the restorable Deleted list,
 # never destroyed).
-SUPERSEDE_DOC_TYPES = {"SMARTAR Goals", "Behaviour Report"}
+SUPERSEDE_DOC_TYPES = {"SMARTAR Goals", "Behaviour Report", "Transition Timetable"}
 
 
 # ---------------------------------------------------------------------------
