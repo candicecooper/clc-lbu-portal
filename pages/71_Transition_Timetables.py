@@ -13,7 +13,9 @@ Privacy: Supabase stores INITIALS only. Full name / EDID / DOB are typed
 (or read from an uploaded Word file) at export time, kept in this browser
 session only, and never saved.
 
-Access: staff password (shared staff_auth.py). See _staff_gate() below.
+Access: open to all staff (no password).
+Archive: every save files an initials-only Word copy in the student's
+Document Archive folder via archive_utils.archive_document (supersede=True).
 Needs: transition_utils.py at repo root, SQL in sql/transition_timetables_schema.sql
 """
 
@@ -31,50 +33,6 @@ except Exception:
     pass
 
 import transition_utils as tu
-
-# ──────────────────────────────────────────────────────────────────────────
-# Staff password gate
-# ──────────────────────────────────────────────────────────────────────────
-def _staff_gate():
-    """Use the portal's shared staff_auth.py. If its function name differs from
-    the ones tried below, the page falls back to the STAFF_PASSWORD env var."""
-    try:
-        import staff_auth  # noqa
-    except ImportError:
-        staff_auth = None
-    if staff_auth:
-        for name in ("require_staff_auth", "require_staff_password", "staff_gate",
-                     "check_staff_password", "require_staff", "require_auth",
-                     "check_password", "password_gate", "gate"):
-            fn = getattr(staff_auth, name, None)
-            if callable(fn):
-                try:
-                    ok = fn()
-                except TypeError:
-                    continue
-                if ok is False:
-                    st.stop()
-                return
-    # Fallback
-    pw = tu._secret("STAFF_PASSWORD")
-    if not pw:
-        st.error("Staff password isn't configured (staff_auth.py function not found and "
-                 "no STAFF_PASSWORD set). Ask Candice to check the deploy notes.")
-        st.stop()
-    if st.session_state.get("tt_staff_ok"):
-        return
-    st.markdown("### 🔒 Staff access")
-    entered = st.text_input("Staff password", type="password", key="tt_pw")
-    if st.button("Enter", key="tt_pw_btn"):
-        if entered == pw:
-            st.session_state.tt_staff_ok = True
-            st.rerun()
-        else:
-            st.error("Incorrect password.")
-    st.stop()
-
-
-_staff_gate()
 
 # ──────────────────────────────────────────────────────────────────────────
 # Styling
@@ -121,7 +79,17 @@ OTHER_PRESET = 5
 # ──────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=60, show_spinner=False)
 def load_register() -> list[dict]:
-    """Students from the Student Register (initials only). Tries likely table names."""
+    """Students from the Student Register (initials only)."""
+    try:
+        import archive_utils as au
+        rows = au.fetch_register(None)
+        if rows:
+            out = [{"id": str(r.get("id") or ""), "initials": str(r.get("initials") or "").strip().upper(),
+                    "program": str(r.get("program") or "").upper(), "year": str(r.get("year_level") or ""),
+                    "archived": r.get("status") == "archived"} for r in rows if r.get("initials")]
+            return sorted(out, key=lambda x: (x["archived"], x["program"], x["initials"]))
+    except Exception:
+        pass
     for table in ("student_register", "students_register", "student_registry", "register_students"):
         try:
             rows = client.table(table).select("*").execute().data or []
@@ -665,8 +633,15 @@ else:
             except Exception as e:
                 st.error(f"Save failed: {e}")
             else:
-                load_into_editor(row, sensitive=ss.tt_sensitive,
-                                 flash=f"Saved {row.get('student_initials')} — version {row.get('version')}.")
+                msg = f"Saved {row.get('student_initials')} — version {row.get('version')}."
+                with st.spinner("Filing in Document Archive…"):
+                    arc = tu.archive_timetable(row, saved_by.strip(), note)
+                if arc:
+                    msg += f" 🗄️ Filed in {row.get('student_initials')}'s Document Archive folder (replaces the previous copy)."
+                else:
+                    msg += (" ⚠️ Couldn't file it in the Document Archive — the timetable is saved here, "
+                            "but check the archive and let Candice know.")
+                load_into_editor(row, sensitive=ss.tt_sensitive, flash=msg)
                 st.rerun()
 
     # ── Word export
