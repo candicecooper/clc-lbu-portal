@@ -76,7 +76,12 @@ def location_text(row: dict) -> str:
 # Secrets — tolerant of the different key names used across the portal
 # ------------------------------------------------------------------
 def _secret(*paths, default=None):
-    """Return the first secret found. Each path is 'KEY' or 'section.key'."""
+    """Return the first secret found. Each path is 'KEY' or 'section.key'.
+    Checks Streamlit secrets first, then Render environment variables."""
+    import os
+    for p in paths:
+        if "." not in p and os.environ.get(p):
+            return os.environ[p]
     for p in paths:
         try:
             node = st.secrets
