@@ -26,13 +26,18 @@ before anyone has entered the admin password.
 """
 
 import io
+import json
+import os
 import smtplib
 import time
 import urllib.request
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from html import escape
 from zoneinfo import ZoneInfo
 
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 from datetime import date, datetime
 from supabase import create_client
@@ -145,43 +150,157 @@ MANAGER_EMAIL = "candice.cooper330@schools.sa.edu.au"
 
 ALERT_EMAILS_TO = ["candice.cooper330@schools.sa.edu.au", "annette.balestrin13@schools.sa.edu.au"]
 
+# Where the portal lives — used to build the "go straight to approval" links
+# in alert emails. Override with a PORTAL_BASE_URL setting if it ever moves.
+DEFAULT_PORTAL_BASE_URL = "https://clc-lbu-portal.onrender.com"
+PAGE_SLUG = "Credit_card_return"  # from the filename 55_Credit_card_return.py
 
-def send_alert_email(subject: str, body: str):
-    """Best-effort email alert when a request/return is lodged. Reads SMTP
-    creds from secrets — if they're not set up yet, this silently does
-    nothing rather than blocking the staff member's submission.
+# ?go=<key> in the page URL opens the Admin tab on the matching section.
+DEEPLINK_SECTIONS = {
+    "requests": "Approve Requests",
+    "returns": "Approve Returns",
+}
 
-    Needs these added under [secrets] in Render (Environment > Secrets
-    Files, or Streamlit's secrets.toml):
-        SMTP_HOST      (optional, defaults to smtp.gmail.com)
-        SMTP_PORT      (optional, defaults to 587)
-        SMTP_USER      the sending account's address (e.g. the existing
-                       clc.digitalstaffmeeting@gmail.com)
-        SMTP_PASSWORD  an app password for that account (not its normal
-                       login password — Gmail: Google Account > Security >
-                       2-Step Verification > App passwords)
-        ALERT_EMAIL_TO (optional) comma-separated recipient override —
-                       defaults to ALERT_EMAILS_TO above if not set
+
+def _cfg(name: str, default: str = "") -> str:
+    """Reads a setting from Streamlit secrets first, then from environment
+    variables. Render's "Environment" tab sets environment variables, which
+    st.secrets does not see on its own — so checking both means the same
+    setting works whichever way it was added."""
+    try:
+        val = st.secrets.get(name, "")
+    except Exception:
+        val = ""
+    return str(val) if val else os.environ.get(name, default)
+
+
+def approval_link(section_key: str) -> str:
+    """Direct link to the Admin approval section (requests / returns)."""
+    base = _cfg("PORTAL_BASE_URL", DEFAULT_PORTAL_BASE_URL).rstrip("/")
+    return f"{base}/{PAGE_SLUG}?go={section_key}"
+
+
+def _alert_html(heading: str, rows: list, link: str | None, link_label: str, note: str) -> str:
+    """HTML body, same look as the Hazard Report alert (heading + table).
+    Everything staff typed is escaped so it can't inject markup."""
+    def tr(k, v):
+        return (f"<tr><td style='padding:6px 10px;color:#555;vertical-align:top'><b>{escape(str(k))}</b></td>"
+                f"<td style='padding:6px 10px'>{escape(str(v if v not in (None, '') else '—'))}</td></tr>")
+    link_html = ""
+    if link:
+        link_html = (f"<p style='margin-top:14px'><a href='{escape(link, quote=True)}' "
+                     "style='background:#1A7A7A;color:#fff;padding:10px 16px;border-radius:6px;"
+                     f"text-decoration:none;display:inline-block'>{escape(link_label)}</a></p>"
+                     f"<p style='color:#555;font-size:12px'>Or paste this into your browser: "
+                     f"{escape(link)}<br>The admin password is needed to approve.</p>")
+    note_html = f"<p>{escape(note)}</p>" if note else ""
+    return (
+        "<div style='font-family:Segoe UI,Arial,sans-serif;font-size:14px'>"
+        f"<h2 style='margin:0 0 8px'>{escape(heading)}</h2>"
+        f"<table style='border-collapse:collapse;border:1px solid #ddd'>{''.join(tr(k, v) for k, v in rows)}</table>"
+        f"{note_html}{link_html}</div>"
+    )
+
+
+def _alert_text(heading: str, rows: list, link: str | None, note: str) -> str:
+    lines = [heading, ""] + [f"{k}: {v if v not in (None, '') else '—'}" for k, v in rows]
+    if note:
+        lines += ["", note]
+    if link:
+        lines += ["", f"Review and approve (admin password needed): {link}"]
+    return "\n".join(lines)
+
+
+def _send_via_webhook(url: str, token: str, recipients: list, subject: str, html: str) -> tuple[bool, str]:
+    """Web route: posts to the Apps Script mailer (CLC_Portal_Mailer.gs) that
+    sends from clc.digitalstaffmeeting@gmail.com over HTTPS. This is the route
+    that works on Render, which blocks Gmail's email ports. Same mailer and
+    same settings the Hazard Report tool uses."""
+    body = json.dumps({"token": token, "to": ",".join(recipients), "subject": subject, "html": html}).encode()
+    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        reply = resp.read().decode(errors="ignore").strip()
+    if reply.startswith("OK"):
+        return True, f"Email sent to {len(recipients)} recipient(s)."
+    return False, f"Email failed: Apps Script replied '{reply[:150]}'"
+
+
+def _send_via_smtp(user: str, pw: str, host: str, port: int, recipients: list, msg) -> None:
+    """Backup: Gmail SMTP — tries the configured port, then 587 (STARTTLS) and
+    465 (SSL). Only works on a host that allows email ports."""
+    errors = []
+    for p in dict.fromkeys([port, 587, 465]):
+        try:
+            if p == 465:
+                with smtplib.SMTP_SSL(host, 465, timeout=20) as s:
+                    s.login(user, pw)
+                    s.sendmail(user, recipients, msg.as_string())
+            else:
+                with smtplib.SMTP(host, p, timeout=20) as s:
+                    s.starttls()
+                    s.login(user, pw)
+                    s.sendmail(user, recipients, msg.as_string())
+            return
+        except smtplib.SMTPAuthenticationError as e:
+            raise RuntimeError(f"Gmail rejected the login ({e.smtp_code}) – check the app password") from e
+        except Exception as e:
+            errors.append(f"port {p}: {e or type(e).__name__}")
+    raise RuntimeError("; ".join(errors) + ". Your host is probably blocking email ports – "
+                                           "set EMAIL_WEBHOOK_URL / EMAIL_WEBHOOK_TOKEN (see the Hazard Report setup).")
+
+
+def send_alert_email(subject: str, heading: str, rows: list, link: str | None = None,
+                     link_label: str = "Review & approve", note: str = "") -> tuple[bool, str]:
+    """Email alert when a request/return is lodged. Never raises — an alert
+    failure must not block a staff member's submission. Returns (sent, message)
+    so the admin "Send test alert" button can show what actually went wrong.
+
+    Sends the same way as the Hazard Report tool: web route first, Gmail SMTP
+    only as a backup.
+
+    Settings (Render > Environment, or Streamlit secrets):
+        EMAIL_WEBHOOK_URL    the Apps Script /exec URL      (same as Hazard Report)
+        EMAIL_WEBHOOK_TOKEN  the mailer's SECRET_TOKEN phrase (same as Hazard Report)
+        SMTP_USER / SMTP_PASSWORD   optional backup — Gmail address + app password
+        SMTP_HOST / SMTP_PORT       optional, default smtp.gmail.com / 587
+        ALERT_EMAIL_TO       optional comma-separated recipient override —
+                             defaults to ALERT_EMAILS_TO above
+        PORTAL_BASE_URL      optional, defaults to DEFAULT_PORTAL_BASE_URL
     """
     try:
-        host = st.secrets.get("SMTP_HOST", "smtp.gmail.com")
-        port = int(st.secrets.get("SMTP_PORT", 587))
-        user = st.secrets.get("SMTP_USER", "")
-        password = st.secrets.get("SMTP_PASSWORD", "")
-        override = st.secrets.get("ALERT_EMAIL_TO", "")
+        override = _cfg("ALERT_EMAIL_TO")
         to_addrs = [a.strip() for a in override.split(",") if a.strip()] if override else ALERT_EMAILS_TO
-        if not user or not password or not to_addrs:
-            return
-        msg = MIMEText(body)
+        if not to_addrs:
+            return False, "No alert recipients configured."
+
+        webhook = _cfg("EMAIL_WEBHOOK_URL")
+        webhook_token = _cfg("EMAIL_WEBHOOK_TOKEN")
+        user = _cfg("SMTP_USER")
+        pw = _cfg("SMTP_PASSWORD")
+        if not webhook and not (user and pw):
+            return False, ("No email route is set up — add EMAIL_WEBHOOK_URL and EMAIL_WEBHOOK_TOKEN "
+                           "(same ones the Hazard Report tool uses) in Render > Environment.")
+
+        html = _alert_html(heading, rows, link, link_label, note)
+
+        # 1. Web route (works on Render) if it has been set up
+        if webhook:
+            try:
+                return _send_via_webhook(webhook, webhook_token, to_addrs, subject, html)
+            except Exception as e:
+                if not (user and pw):
+                    return False, f"Email failed: {e}"
+        # 2. Gmail SMTP backup (needs a host that allows email ports)
+        msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
-        msg["From"] = user
+        msg["From"] = f"CLC Portal <{user}>"
         msg["To"] = ", ".join(to_addrs)
-        with smtplib.SMTP(host, port, timeout=10) as server:
-            server.starttls()
-            server.login(user, password)
-            server.sendmail(user, to_addrs, msg.as_string())
-    except Exception:
-        pass  # an alert failure should never block a staff submission
+        msg.attach(MIMEText(_alert_text(heading, rows, link, note), "plain"))
+        msg.attach(MIMEText(html, "html"))
+        _send_via_smtp(user, pw, _cfg("SMTP_HOST", "smtp.gmail.com"), int(_cfg("SMTP_PORT", "587")), to_addrs, msg)
+        return True, f"Email sent to {len(to_addrs)} recipient(s)."
+    except Exception as e:
+        return False, f"Email failed: {e}"
 
 
 def _retry(fn, tries: int = 3, base_delay: float = 0.6):
@@ -544,6 +663,33 @@ st.caption("Electronic Form 1 (Requesting) and Form 2 (Returning)")
 STAFF_LIST = fetch_names(STAFF_TABLE)
 CARD_LIST = fetch_names(CARD_TABLE)
 
+# ---- deep link from alert emails (?go=requests / ?go=returns) -------------
+# Pre-selects the matching Admin section. Streamlit has no built-in way to
+# open a tab from a URL, so we also (a) show a banner pointing at the Admin
+# tab, and (b) once per session, best-effort click the Admin tab with a
+# small script. If the script is blocked the banner still covers it.
+_go = st.query_params.get("go")
+if _go in DEEPLINK_SECTIONS:
+    if "cc_deeplink_applied" not in st.session_state:
+        st.session_state["cc_admin_section"] = DEEPLINK_SECTIONS[_go]
+        st.session_state["cc_deeplink_applied"] = True
+        components.html(
+            """
+            <script>
+            setTimeout(function () {
+              try {
+                var tabs = window.parent.document.querySelectorAll('button[role="tab"]');
+                for (var i = 0; i < tabs.length; i++) {
+                  if (tabs[i].innerText.indexOf('Admin') !== -1) { tabs[i].click(); break; }
+                }
+              } catch (e) {}
+            }, 400);
+            </script>
+            """,
+            height=0,
+        )
+    st.info(f"📬 You followed an approval link — open the **🔒 Admin** tab to review ({DEEPLINK_SECTIONS[_go]}).")
+
 tab_request, tab_return, tab_funding, tab_spend, tab_register, tab_admin = st.tabs(
     ["1️⃣ Request Card", "2️⃣ Return Card", "💰 Additional Funding", "📊 Funding Spent", "📋 Register", "🔒 Admin"]
 )
@@ -593,11 +739,17 @@ with tab_request:
                 }
             )
             send_alert_email(
+                f"💳 Card request – {req_staff} – {req_budget} – ${req_cost:.2f}",
                 "Credit Card Request — awaiting approval",
-                f"{req_staff} has requested {', '.join(req_cards)} (budget: {req_budget}) "
-                f"— approx ${req_cost:.2f}.\n\nReason given: {req_reason.strip()}\n\n"
-                "Open the portal's Credit Card Request & Return tool, Admin tab, "
-                "to approve or decline.",
+                [
+                    ("Staff member", req_staff),
+                    ("Card(s)", ", ".join(req_cards)),
+                    ("Budget", req_budget),
+                    ("Approx. cost", f"${req_cost:.2f}"),
+                    ("Explanation", req_reason.strip()),
+                ],
+                link=approval_link("requests"),
+                link_label="Review & approve this request",
             )
             st.success(f"Request submitted for {req_staff} — awaiting admin approval.")
 
@@ -683,11 +835,17 @@ with tab_return:
                     }
                 )
             send_alert_email(
+                f"💳 Card return – {ret_staff} – ${total_amount:.2f}",
                 "Credit Card Return — awaiting approval",
-                f"{ret_staff} has submitted a return for {', '.join(linked_request.get('card_names') or [])} "
-                f"— ${total_amount:.2f} (receipt dated {format_date(receipt_date.isoformat())}).\n\n"
-                "Open the portal's Credit Card Request & Return tool, Admin tab, "
-                "to sight the receipt and approve.",
+                [
+                    ("Staff member", ret_staff),
+                    ("Card(s)", ", ".join(linked_request.get("card_names") or [])),
+                    ("Receipt date", format_date(receipt_date.isoformat())),
+                    ("Total on receipt", f"${total_amount:.2f}"),
+                    ("Receipts attached", len(receipt_urls)),
+                ],
+                link=approval_link("returns"),
+                link_label="Sight the receipt & approve",
             )
             st.success(f"Return submitted for {ret_staff} — awaiting admin sign-off.")
 
@@ -896,6 +1054,7 @@ with tab_admin:
         ["Approve Requests", "Approve Returns", "Edit Entries", "View & Download Forms",
          "Log Funding Spend", "Manage Staff & Cards"],
         horizontal=True,
+        key="cc_admin_section",
     )
 
     if admin_section == "Approve Requests":
@@ -1217,3 +1376,22 @@ with tab_admin:
             if st.button("➕ Add card") and new_card.strip():
                 add_name(CARD_TABLE, new_card)
                 st.rerun()
+
+        st.divider()
+        st.markdown("**Email alerts**")
+        st.caption(
+            "Alerts go to: " + ", ".join(_cfg("ALERT_EMAIL_TO").split(",") if _cfg("ALERT_EMAIL_TO") else ALERT_EMAILS_TO)
+        )
+        if st.button("📧 Send test alert"):
+            ok, detail = send_alert_email(
+                "💳 Credit Card tool – test alert",
+                "Credit Card tool — test alert",
+                [("Result", "If you can read this, alerts are working.")],
+                link=approval_link("requests"),
+                link_label="Open the approval section",
+                note="This is a test from the Credit Card Request & Return tool.",
+            )
+            if ok:
+                st.success(detail + " (Check Junk/Quarantine the first time.)")
+            else:
+                st.error(f"Test alert not sent — {detail}")
