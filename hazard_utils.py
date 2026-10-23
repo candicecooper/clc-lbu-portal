@@ -132,11 +132,51 @@ def _smtp_settings():
     return user, pw, host, port
 
 
+def _send_via_webhook(url: str, token: str, recipients: list[str], subject: str, html: str) -> tuple[bool, str]:
+    """Send through a Google Apps Script web app on the CLC Gmail account (plain HTTPS,
+    so it works on Render's free plan, which blocks email ports)."""
+    import json
+    import urllib.request
+
+    body = json.dumps({"token": token, "to": ",".join(recipients), "subject": subject, "html": html}).encode()
+    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        reply = resp.read().decode(errors="ignore").strip()
+    if reply.startswith("OK"):
+        return True, f"Email sent to {len(recipients)} recipient(s)."
+    return False, f"Email failed: Apps Script replied '{reply[:150]}'"
+
+
+def _send_via_smtp(user, pw, host, port, recipients, msg) -> None:
+    """Try the configured port first, then the other Gmail port (587 STARTTLS / 465 SSL)."""
+    errors = []
+    for p in dict.fromkeys([port, 587, 465]):
+        try:
+            if p == 465:
+                with smtplib.SMTP_SSL(host, 465, timeout=20) as s:
+                    s.login(user, pw)
+                    s.sendmail(user, recipients, msg.as_string())
+            else:
+                with smtplib.SMTP(host, p, timeout=20) as s:
+                    s.starttls()
+                    s.login(user, pw)
+                    s.sendmail(user, recipients, msg.as_string())
+            return
+        except smtplib.SMTPAuthenticationError as e:
+            raise RuntimeError(f"Gmail rejected the login ({e.smtp_code}) – check the app password") from e
+        except Exception as e:
+            errors.append(f"port {p}: {e or type(e).__name__}")
+    raise RuntimeError("; ".join(errors) + ". If this keeps happening, your host is blocking email ports – "
+                                           "set up EMAIL_WEBHOOK_URL (see setup notes).")
+
+
 def send_hazard_email(row: dict, recipients: list[str], portal_url: str | None = None) -> tuple[bool, str]:
     if not recipients:
         return False, "No active email recipients are set up (Manage → Settings)."
     user, pw, host, port = _smtp_settings()
-    if not pw:
+    webhook = _secret("EMAIL_WEBHOOK_URL", "email.webhook_url", "gmail.webhook_url")
+    webhook_token = _secret("EMAIL_WEBHOOK_TOKEN", "email.webhook_token", "gmail.webhook_token", default="")
+    if not pw and not webhook:
         return False, "Email password not found in Streamlit secrets."
 
     risk = row.get("risk_level", "")
@@ -183,11 +223,16 @@ def send_hazard_email(row: dict, recipients: list[str], portal_url: str | None =
         msg["Importance"] = "High"
     msg.attach(MIMEText(html, "html"))
 
+    # 1. Web route (works on Render free plan) if it has been set up
+    if webhook:
+        try:
+            return _send_via_webhook(webhook, webhook_token, recipients, subject, html)
+        except Exception as e:
+            if not pw:
+                return False, f"Email failed: {e}"
+    # 2. Gmail SMTP (needs a host that allows email ports)
     try:
-        with smtplib.SMTP(host, port, timeout=20) as s:
-            s.starttls()
-            s.login(user, pw)
-            s.sendmail(user, recipients, msg.as_string())
+        _send_via_smtp(user, pw, host, port, recipients, msg)
         return True, f"Email sent to {len(recipients)} recipient(s)."
     except Exception as e:  # keep the report saved even if email fails
         return False, f"Email failed: {e}"
