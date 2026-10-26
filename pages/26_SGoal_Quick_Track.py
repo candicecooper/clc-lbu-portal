@@ -5,12 +5,22 @@ Page 26. Sessions filtered by each goal's tracking period.
 
 import streamlit as st
 from datetime import date, datetime
+from zoneinfo import ZoneInfo
 from supabase import create_client
 
 st.set_page_config(page_title="SGoal Quick Track", page_icon="⚡", layout="wide")
 
 TEAL  = "#1A7A6E"
 AMBER = "#C8760A"
+
+# The portal's host (Render) runs its server clock in UTC, not Adelaide time.
+# Using date.today() there rolls the "day" over at UTC midnight, which is
+# ~10:30am in Adelaide during daylight saving (10am standard time) — so staff
+# opening the page first thing in the morning were still being shown
+# "yesterday", and the morning session (and its tracking counts) wouldn't
+# appear until the UTC date caught up. Anchoring to Australia/Adelaide makes
+# the rollover happen at actual local midnight regardless of server timezone.
+ADELAIDE_TZ = ZoneInfo("Australia/Adelaide")
 
 # 4 tracking levels — matches Goal Builder (BELOW not tracked daily)
 PERF_LEVELS = ["EXCEEDING", "ABOVE", "EXPECTED", "NOT YET"]
@@ -178,7 +188,9 @@ st.markdown(
     "Sessions shown are tailored to each goal's tracking period."
 )
 
-today     = date.today()
+# Anchor "today" to Adelaide local time (not the server's own timezone) so the
+# day rolls over at local midnight — see ADELAIDE_TZ note above.
+today     = datetime.now(ADELAIDE_TZ).date()
 today_str = today.isoformat()
 today_fmt = today.strftime("%A, %d %B %Y")
 
@@ -281,7 +293,6 @@ for g_idx, goal in enumerate(active_goals):
                 if st.button(label, key=btn_key, use_container_width=True,
                              type="primary" if n > 0 else "secondary"):
                     if save_session(goal_id, student, session, perf, today_str):
-                        get_session_counts.cache_clear() if hasattr(get_session_counts, "cache_clear") else None
                         st.toast(f"✅ {session} → {perf}")
                         st.rerun()
 
