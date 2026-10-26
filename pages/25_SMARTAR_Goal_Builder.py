@@ -271,6 +271,12 @@ Use "All Day" unless the goal text CLEARLY references a specific time context (e
 
 # ── Supabase helpers ───────────────────────────────────────────────────────────
 def get_students(include_archived=False):
+    """By default returns only students who are on placement right now —
+    excludes both goal-archived students and students whose placement has
+    ended, so they drop off every student picker/report once marked done.
+    The placement_ended check is done in Python (not as a DB .eq filter) so
+    older rows that predate that column (NULL rather than False) aren't
+    accidentally hidden."""
     def _fn(c):
         q = c.table("smartar_students").select("*").order("student_name")
         if not include_archived:
@@ -278,6 +284,8 @@ def get_students(include_archived=False):
         return q.execute().data or []
     try:
         result = _q(_fn)
+        if not include_archived:
+            result = [s for s in result if not s.get("placement_ended")]
         return result
     except Exception as e:
         st.error(f"DB error loading students: {e}")
@@ -516,6 +524,86 @@ def _short(text: str, n: int = 65) -> str:
     return text[:n] + "…" if len(text) > n else text
 
 
+# ── Tracking-frequency helpers (powers Program Snapshot) ───────────────────────
+def count_school_days(start: date, end: date) -> int:
+    """Weekdays (Mon–Fri) from start to end, inclusive. 0 if start > end."""
+    if start > end:
+        return 0
+    total_days = (end - start).days + 1
+    full_weeks, extra = divmod(total_days, 7)
+    count = full_weeks * 5
+    for i in range(extra):
+        d = start + timedelta(days=full_weeks * 7 + i)
+        if d.weekday() < 5:
+            count += 1
+    return count
+
+
+def most_recent_school_day(ref: date) -> date:
+    """ref, or the Friday before it if ref falls on a weekend."""
+    d = ref
+    while d.weekday() >= 5:  # Sat=5, Sun=6
+        d -= timedelta(days=1)
+    return d
+
+
+def school_days_since(last_entry: date, as_of: date) -> int:
+    """School days strictly after last_entry, up to and including as_of."""
+    if last_entry >= as_of:
+        return 0
+    return count_school_days(last_entry + timedelta(days=1), as_of)
+
+
+def goal_tracking_frequency(goal_id, goal_start, recent_window_days: int = 14) -> dict:
+    """
+    How consistently a goal is being tracked, assuming an entry is expected
+    every school day (Mon–Fri).
+
+    Returns:
+        status: "not_started" | "needs_increase" | "on_track"
+        last_entry: date of the most recent observation, or None
+        consistency_pct: % of expected school days (last `recent_window_days`
+            calendar days, or since the goal started if more recent) that
+            have at least one observation
+        days_behind: school days elapsed since the last observation, measured
+            against the last COMPLETED school day (so today isn't flagged
+            before the day is even over)
+        expected_days / actual_days: the raw counts behind consistency_pct
+    """
+    today = date.today()
+    try:
+        start_d = date.fromisoformat(str(goal_start)[:10]) if goal_start else today
+    except Exception:
+        start_d = today
+
+    all_rows = get_tracking_range(goal_id, start_d.isoformat(), today.isoformat())
+    if not all_rows:
+        return {
+            "status": "not_started", "last_entry": None, "consistency_pct": 0,
+            "expected_days": count_school_days(start_d, today), "actual_days": 0,
+            "days_behind": None,
+        }
+
+    tracked_dates = sorted({r["session_date"] for r in all_rows})
+    last_entry = date.fromisoformat(tracked_dates[-1][:10])
+
+    window_from     = max(start_d, today - timedelta(days=recent_window_days))
+    recent_tracked  = {d for d in tracked_dates if d >= window_from.isoformat()}
+    expected_days   = count_school_days(window_from, today) or 1
+    actual_days     = len(recent_tracked)
+    consistency_pct = min(round(actual_days / expected_days * 100), 100)
+
+    last_completed_school_day = most_recent_school_day(today - timedelta(days=1))
+    days_behind = school_days_since(last_entry, last_completed_school_day)
+
+    status = "needs_increase" if (days_behind >= 1 or consistency_pct < 60) else "on_track"
+
+    return {
+        "status": status, "last_entry": last_entry, "consistency_pct": consistency_pct,
+        "expected_days": expected_days, "actual_days": actual_days, "days_behind": days_behind,
+    }
+
+
 # ── Chart helpers (matplotlib — no clipping, named titles) ────────────────────
 def make_goal_chart_mpl(tracking_data, goal_text: str, from_date: str,
                         to_date: str, student_name: str = "") -> bytes | None:
@@ -737,7 +825,8 @@ if integration["active"]:
 view = st.sidebar.radio(
     "View",
     ["🏫 Class Dashboard", "📋 Goal Builder",
-     "📊 Daily Tracking", "📈 Progress Report", "⚙️ Admin Panel"],
+     "📊 Daily Tracking", "📈 Progress Report",
+     "🗺️ Program Snapshot", "⚙️ Admin Panel"],
 )
 st.sidebar.markdown("---")
 st.sidebar.caption("SMARTAR + GAS Goal Tracking · CLC LBU")
@@ -2056,7 +2145,137 @@ Use trauma-informed, strengths-based language referencing the BSEM framework (Re
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 5. ADMIN PANEL
+# 5. PROGRAM SNAPSHOT
+# ══════════════════════════════════════════════════════════════════════════════
+elif view == "🗺️ Program Snapshot":
+    st.title("🗺️ Program Snapshot")
+    st.caption(
+        "A cross-program view of every active student's SMARTAR goal(s) and how "
+        "consistently tracking is being entered. Expected frequency: an observation "
+        "on every school day (Mon–Fri)."
+    )
+
+    STATUS_META = {
+        "on_track":       ("✅", "On Track",       "#16a34a"),
+        "needs_increase": ("⚠️", "Needs Increase", "#d97706"),
+        "not_started":    ("🔴", "Not Started",    "#c0392b"),
+        "no_goal":        ("⚪", "No Goal Set",     "#9ca3af"),
+    }
+
+    students = get_students()  # active, on-placement students only
+    if not students:
+        st.info("No active students set up yet.")
+        st.stop()
+
+    prog_filter = st.selectbox("Filter by Program", ["All"] + PROGRAMS, index=0,
+                               key="snap_prog_filter")
+    if prog_filter != "All":
+        students = [s for s in students if s.get("program") == prog_filter]
+    if not students:
+        st.warning("No active students found for this program.")
+        st.stop()
+
+    with st.spinner("Building snapshot…"):
+        snapshot_rows = []
+        for s in sorted(students, key=lambda x: (x.get("program", ""), x["student_name"])):
+            s_goals = get_goals(s["student_name"])  # active goals only
+            if not s_goals:
+                snapshot_rows.append({
+                    "student": s["student_name"], "program": s.get("program", "?"),
+                    "goal": None, "status": "no_goal", "freq": None,
+                })
+                continue
+            for g in s_goals:
+                freq = goal_tracking_frequency(g["id"], g.get("start_date"))
+                snapshot_rows.append({
+                    "student": s["student_name"], "program": s.get("program", "?"),
+                    "goal": g, "status": freq["status"], "freq": freq,
+                })
+
+    # ── Summary metrics ─────────────────────────────────────────────────────
+    counts_by_status = {k: 0 for k in STATUS_META}
+    for row in snapshot_rows:
+        counts_by_status[row["status"]] += 1
+
+    mcols = st.columns(4)
+    for i, key in enumerate(["on_track", "needs_increase", "not_started", "no_goal"]):
+        emoji, label, _ = STATUS_META[key]
+        mcols[i].metric(f"{emoji} {label}", counts_by_status[key])
+
+    st.markdown("---")
+
+    status_filter = st.multiselect(
+        "Show only",
+        options=list(STATUS_META.keys()),
+        default=list(STATUS_META.keys()),
+        format_func=lambda k: f"{STATUS_META[k][0]} {STATUS_META[k][1]}",
+        key="snap_status_filter",
+    )
+
+    visible_rows = [r for r in snapshot_rows if r["status"] in status_filter]
+    if not visible_rows:
+        st.info("No students match the selected filters.")
+        st.stop()
+
+    current_program = None
+    for row in visible_rows:
+        if row["program"] != current_program:
+            current_program = row["program"]
+            st.markdown(f"### {current_program} Program")
+
+        emoji, label, color = STATUS_META[row["status"]]
+
+        if row["goal"] is None:
+            st.markdown(
+                f'<div style="border-left:4px solid {color};padding:8px 14px;margin-bottom:8px;'
+                f'background:#fafafa;border-radius:0 8px 8px 0;">'
+                f'<b>{row["student"]}</b> — {emoji} {label}'
+                f'<div style="font-size:0.82rem;color:#666;">'
+                f'No SMARTAR goal has been created for this student yet.</div></div>',
+                unsafe_allow_html=True,
+            )
+            continue
+
+        g    = row["goal"]
+        freq = row["freq"]
+        last_entry_str = freq["last_entry"].strftime("%d %b") if freq["last_entry"] else "Never"
+
+        tracking_21          = get_tracking(g["id"], days=21)
+        _, total_21, pcts_21 = calc_percentages(tracking_21)
+        perf_summary = (
+            "  ".join(f"{LEVEL_EMOJI[l]} {pcts_21.get(l,0):.0f}%"
+                      for l in TRACK_LEVELS if pcts_21.get(l, 0) > 0)
+            if total_21 else "No performance data yet"
+        )
+
+        with st.expander(
+            f"{emoji} **{row['student']}** — {_short(g.get('smartar_goal',''), 60)}  ·  {label}"
+        ):
+            st.markdown(
+                f'<div class="smartar-box">🎯 {g.get("smartar_goal","No goal text")}</div>',
+                unsafe_allow_html=True,
+            )
+            fc1, fc2, fc3 = st.columns(3)
+            fc1.metric("Last entry", last_entry_str)
+            fc2.metric("Consistency (14 days)", f"{freq['consistency_pct']}%")
+            fc3.metric("Tracking period", g.get("tracking_period", "All Day"))
+            st.caption(f"Performance (last 21 days): {perf_summary}")
+
+            if row["status"] == "needs_increase":
+                st.markdown(
+                    '<div class="alert-box">⚠️ Tracking has fallen behind — an entry is expected '
+                    'every school day. Please follow up with the staff recording for this student.</div>',
+                    unsafe_allow_html=True,
+                )
+            elif row["status"] == "not_started":
+                st.markdown(
+                    '<div class="alert-box">🔴 No tracking has been entered for this goal yet.</div>',
+                    unsafe_allow_html=True,
+                )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 6. ADMIN PANEL
 # ══════════════════════════════════════════════════════════════════════════════
 elif view == "⚙️ Admin Panel":
     st.title("⚙️ Admin Panel")
