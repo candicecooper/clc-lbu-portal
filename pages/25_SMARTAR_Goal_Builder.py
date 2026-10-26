@@ -21,6 +21,7 @@ import matplotlib.patches as mpatches
 from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 from datetime import date, datetime, timedelta
 from io import BytesIO
 from supabase import create_client
@@ -673,6 +674,150 @@ def render_snapshot_card(snap: dict) -> str:
         f"<div style='font-size:0.72rem;font-weight:700;color:{color};white-space:nowrap;'>{emoji} {label}</div>"
         f"</div>{body}</div>"
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PROGRAM SNAPSHOT — analytics-dashboard helpers (KPI tiles, trend charts,
+# engagement funnel, drill-down). All numbers below come from real tracking
+# rows — no figure here is simulated or estimated.
+# ══════════════════════════════════════════════════════════════════════════════
+PROGRAM_SCORE_MAP = {"EXCEEDING": 5, "ABOVE": 4, "EXPECTED": 3, "BELOW": 2, "NOT YET": 1}
+
+
+def get_tracking_for_goals(goal_ids: list, from_date: str, to_date: str) -> list:
+    """Bulk-fetch tracking rows for several goals at once (one query per
+    program tab instead of one per goal) — powers the dashboard charts/table."""
+    if not goal_ids:
+        return []
+    try:
+        return (
+            sb.table("smartar_tracking").select("goal_id, session_date, performance_level")
+            .in_("goal_id", goal_ids)
+            .gte("session_date", from_date)
+            .lte("session_date", to_date)
+            .execute().data or []
+        )
+    except Exception:
+        return []
+
+
+def program_time_series(tracking_rows: list, from_d: date, to_d: date) -> pd.DataFrame:
+    """Daily entry count + average performance score across a program's goals,
+    with every calendar day in the window present (0 entries on gaps)."""
+    idx = pd.date_range(from_d, to_d, freq="D")
+    if not tracking_rows:
+        return pd.DataFrame({"date": idx, "entries": 0.0, "avg_score": None})
+    df = pd.DataFrame(tracking_rows)
+    df["score"] = df["performance_level"].map(PROGRAM_SCORE_MAP)
+    daily = df.groupby("session_date").agg(entries=("performance_level", "count"),
+                                           avg_score=("score", "mean"))
+    daily.index = pd.to_datetime(daily.index)
+    out = pd.DataFrame(index=idx).join(daily)
+    out["entries"] = out["entries"].fillna(0)
+    return out.reset_index().rename(columns={"index": "date"})
+
+
+def program_funnel_counts(prog_snaps: list) -> dict:
+    total = len(prog_snaps)
+    with_goal     = sum(1 for sn in prog_snaps if sn["goal_count"] > 0)
+    with_tracking = sum(1 for sn in prog_snaps if sn["status"] in ("needs_increase", "on_track"))
+    on_track      = sum(1 for sn in prog_snaps if sn["status"] == "on_track")
+    return {"total": total, "with_goal": with_goal,
+            "with_tracking": with_tracking, "on_track": on_track}
+
+
+def render_kpi_tile(label: str, value: str, sublabel: str, color1: str, color2: str) -> str:
+    """One gradient KPI tile, matching the brief/funnel-dashboard reference look."""
+    return (
+        f"<div style='background:linear-gradient(135deg,{color1},{color2});color:white;"
+        f"border-radius:12px;padding:14px 16px;min-height:88px;'>"
+        f"<div style='font-size:0.72rem;font-weight:600;opacity:0.9;letter-spacing:.03em;'>{label}</div>"
+        f"<div style='font-size:1.55rem;font-weight:700;margin-top:4px;'>{value}</div>"
+        f"<div style='font-size:0.72rem;opacity:0.85;margin-top:2px;'>{sublabel}</div>"
+        f"</div>"
+    )
+
+
+def fig_entries_line(ts_df: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=ts_df["date"], y=ts_df["entries"], mode="lines", name="Entries",
+        line=dict(color="#1A7A6E", width=2.5), fill="tozeroy", fillcolor="rgba(26,122,110,0.12)",
+    ))
+    fig.update_layout(
+        title=dict(text="Tracking Entries / Day", font=dict(size=14)),
+        height=260, margin=dict(l=10, r=10, t=36, b=10),
+        plot_bgcolor="white", paper_bgcolor="white", showlegend=False,
+        xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor="#f0f0f0", rangemode="tozero"),
+    )
+    return fig
+
+
+def fig_score_line(ts_df: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=ts_df["date"], y=ts_df["avg_score"], mode="lines+markers", name="Avg performance",
+        line=dict(color="#1d6fa4", width=2.5), marker=dict(size=5), connectgaps=True,
+    ))
+    fig.update_layout(
+        title=dict(text="Average Performance Level / Day", font=dict(size=14)),
+        height=260, margin=dict(l=10, r=10, t=36, b=10),
+        plot_bgcolor="white", paper_bgcolor="white", showlegend=False,
+        xaxis=dict(showgrid=False),
+        yaxis=dict(range=[0.5, 5.5], tickmode="array", tickvals=[1, 2, 3, 4, 5],
+                   ticktext=["NOT YET", "BELOW", "EXPECTED", "ABOVE", "EXCEEDING"],
+                   showgrid=True, gridcolor="#f0f0f0"),
+    )
+    return fig
+
+
+def fig_engagement_funnel(counts: dict) -> go.Figure:
+    fig = go.Figure(go.Funnel(
+        y=["Active Students", "Have a Goal", "Being Tracked", "On Track"],
+        x=[counts["total"], counts["with_goal"], counts["with_tracking"], counts["on_track"]],
+        textinfo="value+percent initial",
+        marker=dict(color=["#1d6fa4", "#2980b9", "#16a34a", "#15803d"]),
+        connector=dict(line=dict(color="#e5e7eb", width=1)),
+    ))
+    fig.update_layout(
+        title=dict(text="Engagement Funnel", font=dict(size=14)),
+        height=280, margin=dict(l=10, r=10, t=36, b=10),
+        paper_bgcolor="white",
+    )
+    return fig
+
+
+def fig_goal_detail_chart(tracking_rows: list) -> go.Figure | None:
+    """Drill-down chart for one student's goal — every observation plotted by
+    date and coloured by performance level."""
+    if not tracking_rows:
+        return None
+    df = pd.DataFrame(tracking_rows)
+    df["score"] = df["performance_level"].map(PROGRAM_SCORE_MAP)
+    df["date"]  = pd.to_datetime(df["session_date"])
+    fig = go.Figure()
+    daily_avg = df.groupby("date")["score"].mean().reset_index()
+    fig.add_trace(go.Scatter(x=daily_avg["date"], y=daily_avg["score"], mode="lines",
+                             line=dict(color="#94a3b8", width=1.5), name="Daily average",
+                             hoverinfo="skip"))
+    for lvl in LEVEL_ORDER:
+        sub = df[df["performance_level"] == lvl]
+        if sub.empty:
+            continue
+        fig.add_trace(go.Scatter(
+            x=sub["date"], y=sub["score"], mode="markers", name=lvl,
+            marker=dict(color=MPL_COLOR.get(lvl, "#888"), size=9, line=dict(color="white", width=1)),
+        ))
+    fig.update_layout(
+        height=300, margin=dict(l=10, r=10, t=20, b=10),
+        plot_bgcolor="white", paper_bgcolor="white",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, font=dict(size=10)),
+        yaxis=dict(range=[0.5, 5.5], tickmode="array", tickvals=[1, 2, 3, 4, 5],
+                   ticktext=["NOT YET", "BELOW", "EXPECTED", "ABOVE", "EXCEEDING"],
+                   showgrid=True, gridcolor="#f0f0f0"),
+        xaxis=dict(showgrid=False),
+    )
+    return fig
 
 
 # ── Chart helpers (matplotlib — no clipping, named titles) ────────────────────
@@ -2252,7 +2397,8 @@ elif view == "🗺️ Program Snapshot":
     st.markdown("---")
 
     if display_mode.startswith("📇"):
-        # ── DASHBOARD — one tab per program, every student visible at once ──
+        # ── DASHBOARD — KPI tiles, trend charts, engagement funnel, table,
+        # and a drill-down panel, one tab per program ─────────────────────
         tabs = st.tabs(PROGRAMS)
         for tab, prog in zip(tabs, PROGRAMS):
             with tab:
@@ -2263,15 +2409,136 @@ elif view == "🗺️ Program Snapshot":
                 if not prog_snaps:
                     st.info(f"No active students in {prog}.")
                     continue
-                st.caption(f"{len(prog_snaps)} active student(s) in {prog} "
-                           "— most urgent first.")
-                n_cols = 3
-                for row_start in range(0, len(prog_snaps), n_cols):
-                    row_items = prog_snaps[row_start: row_start + n_cols]
-                    cols = st.columns(n_cols)
-                    for col, snap in zip(cols, row_items):
-                        with col:
-                            st.markdown(render_snapshot_card(snap), unsafe_allow_html=True)
+
+                # One bulk query for every goal in this program, instead of
+                # one query per goal.
+                prog_goal_ids = [gi["goal"]["id"] for sn in prog_snaps for gi in sn["goals"]]
+                window_to     = date.today()
+                window_from   = window_to - timedelta(days=27)  # ~4 weeks of chart history
+                prog_tracking = get_tracking_for_goals(
+                    prog_goal_ids, window_from.isoformat(), window_to.isoformat()
+                )
+
+                # ── KPI tiles ────────────────────────────────────────────
+                total_students  = len(prog_snaps)
+                goals_tracked   = sum(sn["goal_count"] for sn in prog_snaps)
+                on_track_n      = sum(1 for sn in prog_snaps if sn["status"] == "on_track")
+                attention_n     = total_students - on_track_n
+                all_consistency = [gi["freq"]["consistency_pct"]
+                                   for sn in prog_snaps for gi in sn["goals"]]
+                avg_consistency = round(sum(all_consistency) / len(all_consistency)) if all_consistency else 0
+
+                this_week_from = (window_to - timedelta(days=6)).isoformat()
+                last_week_from = (window_to - timedelta(days=13)).isoformat()
+                last_week_to   = (window_to - timedelta(days=7)).isoformat()
+                entries_this_week = sum(1 for r in prog_tracking if r["session_date"] >= this_week_from)
+                entries_last_week = sum(1 for r in prog_tracking
+                                        if last_week_from <= r["session_date"] <= last_week_to)
+                if entries_last_week:
+                    wow = round((entries_this_week - entries_last_week) / entries_last_week * 100)
+                    wow_str = f"{'+' if wow >= 0 else ''}{wow}% vs last week"
+                else:
+                    wow_str = "No data last week"
+
+                kpis = [
+                    ("ACTIVE STUDENTS",   str(total_students),            f"in {prog}",
+                     "#1d6fa4", "#134e7a"),
+                    ("GOALS TRACKED",     str(goals_tracked),             "active SMARTAR goals",
+                     "#7c3aed", "#5b21b6"),
+                    ("ENTRIES THIS WEEK", str(entries_this_week),         wow_str,
+                     "#0891b2", "#0e7490"),
+                    ("AVG CONSISTENCY",   f"{avg_consistency}%",          "last 14 school days",
+                     "#16a34a", "#166534"),
+                    ("ON TRACK",          f"{on_track_n}/{total_students}", "meeting expected frequency",
+                     "#ca8a04", "#92400e"),
+                    ("NEEDS ATTENTION",   str(attention_n),               "below expected / not started",
+                     "#dc2626", "#991b1b"),
+                ]
+                kpi_cols = st.columns(6)
+                for col, (label, value, sub, c1, c2) in zip(kpi_cols, kpis):
+                    with col:
+                        st.markdown(render_kpi_tile(label, value, sub, c1, c2), unsafe_allow_html=True)
+
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # ── Trend charts ─────────────────────────────────────────
+                ts_df = program_time_series(prog_tracking, window_from, window_to)
+                cchart1, cchart2 = st.columns(2)
+                with cchart1:
+                    st.plotly_chart(fig_entries_line(ts_df), use_container_width=True,
+                                    key=f"entries_chart_{prog}")
+                with cchart2:
+                    st.plotly_chart(fig_score_line(ts_df), use_container_width=True,
+                                    key=f"score_chart_{prog}")
+
+                # ── Engagement funnel ────────────────────────────────────
+                funnel_counts = program_funnel_counts(prog_snaps)
+                st.plotly_chart(fig_engagement_funnel(funnel_counts), use_container_width=True,
+                                key=f"funnel_chart_{prog}")
+
+                # ── Student summary table ────────────────────────────────
+                st.markdown("#### Student Summary")
+                table_rows = []
+                for sn in prog_snaps:
+                    emoji, label, _ = SNAPSHOT_STATUS_META[sn["status"]]
+                    if sn["goals"]:
+                        rep = next((gi for gi in sn["goals"] if gi["freq"]["status"] == sn["status"]),
+                                  sn["goals"][0])
+                        last_entry  = (rep["freq"]["last_entry"].strftime("%d %b")
+                                       if rep["freq"]["last_entry"] else "Never")
+                        consistency = rep["freq"]["consistency_pct"]
+                        goal_title  = _short(rep["goal"].get("smartar_goal", ""), 50)
+                    else:
+                        last_entry, consistency, goal_title = "—", 0, "No goal set"
+                    table_rows.append({
+                        "Student": sn["student"], "Status": f"{emoji} {label}",
+                        "Goal": goal_title, "Goals": sn["goal_count"],
+                        "Last Entry": last_entry, "Consistency %": consistency,
+                    })
+                st.dataframe(
+                    pd.DataFrame(table_rows), use_container_width=True, hide_index=True,
+                    column_config={
+                        "Consistency %": st.column_config.ProgressColumn(
+                            "Consistency %", min_value=0, max_value=100, format="%d%%",
+                        ),
+                    },
+                )
+
+                # ── Drill-down ────────────────────────────────────────────
+                st.markdown("#### 🔍 Drill Down")
+                drill_name = st.selectbox(
+                    "Select a student for full detail",
+                    [sn["student"] for sn in prog_snaps], key=f"drill_select_{prog}",
+                )
+                drill_snap = next(sn for sn in prog_snaps if sn["student"] == drill_name)
+
+                if not drill_snap["goals"]:
+                    st.info(f"{drill_name} doesn't have a SMARTAR goal yet. "
+                            "Go to **Goal Builder** to create one.")
+                else:
+                    for gi in drill_snap["goals"]:
+                        g, freq = gi["goal"], gi["freq"]
+                        g_emoji, g_label, g_color = SNAPSHOT_STATUS_META[freq["status"]]
+                        with st.container(border=True):
+                            st.markdown(
+                                f'<div class="smartar-box">🎯 {g.get("smartar_goal","No goal text")} '
+                                f'<span style="float:right;color:{g_color};font-weight:700;font-size:0.8rem;">'
+                                f'{g_emoji} {g_label}</span></div>',
+                                unsafe_allow_html=True,
+                            )
+                            dc1, dc2, dc3 = st.columns(3)
+                            dc1.metric("Last entry",
+                                      freq["last_entry"].strftime("%d %b") if freq["last_entry"] else "Never")
+                            dc2.metric("Consistency (14 days)", f"{freq['consistency_pct']}%")
+                            dc3.metric("Tracking period", g.get("tracking_period", "All Day"))
+
+                            goal_rows  = get_tracking(g["id"], days=30)
+                            detail_fig = fig_goal_detail_chart(goal_rows)
+                            if detail_fig:
+                                st.plotly_chart(detail_fig, use_container_width=True,
+                                                key=f"detail_chart_{g['id']}")
+                            else:
+                                st.caption("No observations recorded yet for this goal.")
 
     else:
         # ── DETAILED LIST — same data, drill into each goal ─────────────────
