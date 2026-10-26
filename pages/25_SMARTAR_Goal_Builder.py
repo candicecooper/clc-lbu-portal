@@ -604,6 +604,77 @@ def goal_tracking_frequency(goal_id, goal_start, recent_window_days: int = 14) -
     }
 
 
+# ── Program Snapshot — status meta + per-student aggregation ───────────────────
+SNAPSHOT_STATUS_META = {
+    # key: (emoji, label, colour)
+    "on_track":       ("✅", "On Track",       "#16a34a"),
+    "needs_increase": ("⚠️", "Needs Increase", "#d97706"),
+    "not_started":    ("🔴", "Not Started",    "#c0392b"),
+    "no_goal":        ("⚪", "No Goal Set",     "#9ca3af"),
+}
+# Lower number = more urgent — used to pick the "worst" status across a
+# student's goals, and to sort the dashboard so what needs attention floats up.
+SNAPSHOT_SEVERITY = {"no_goal": 0, "not_started": 1, "needs_increase": 2, "on_track": 3}
+
+
+def build_student_snapshot(student: dict) -> dict:
+    """Aggregates one student's active goal(s) into a single Program Snapshot
+    row: student, program, overall status (the worst status across their
+    goals), goal_count, and the per-goal detail (goal + its frequency info)."""
+    s_goals = get_goals(student["student_name"])
+    if not s_goals:
+        return {
+            "student": student["student_name"], "program": student.get("program", "?"),
+            "status": "no_goal", "goal_count": 0, "goals": [],
+        }
+    goals_info = []
+    worst_status = "on_track"
+    for g in s_goals:
+        freq = goal_tracking_frequency(g["id"], g.get("start_date"))
+        goals_info.append({"goal": g, "freq": freq})
+        if SNAPSHOT_SEVERITY[freq["status"]] < SNAPSHOT_SEVERITY[worst_status]:
+            worst_status = freq["status"]
+    return {
+        "student": student["student_name"], "program": student.get("program", "?"),
+        "status": worst_status, "goal_count": len(s_goals), "goals": goals_info,
+    }
+
+
+def render_snapshot_card(snap: dict) -> str:
+    """Compact HTML card for the Program Snapshot dashboard grid — everything
+    visible at a glance, no click-through needed."""
+    emoji, label, color = SNAPSHOT_STATUS_META[snap["status"]]
+    student = snap["student"]
+
+    if not snap["goals"]:
+        body = (
+            "<div style='font-size:0.78rem;color:#888;margin-top:4px;'>"
+            "No SMARTAR goal has been created yet.</div>"
+        )
+    else:
+        # Show the goal driving the overall status (falls back to the first goal).
+        rep = next((gi for gi in snap["goals"] if gi["freq"]["status"] == snap["status"]),
+                   snap["goals"][0])
+        g, freq = rep["goal"], rep["freq"]
+        goal_title = _short(g.get("smartar_goal", ""), 55)
+        last_entry = freq["last_entry"].strftime("%d %b") if freq["last_entry"] else "Never"
+        extra = f" · +{snap['goal_count']-1} more goal(s)" if snap["goal_count"] > 1 else ""
+        body = (
+            f"<div style='font-size:0.78rem;color:#555;margin-top:4px;'>🎯 {goal_title}</div>"
+            f"<div style='font-size:0.72rem;color:#888;margin-top:6px;'>"
+            f"Last entry: {last_entry} · Consistency: {freq['consistency_pct']}%{extra}</div>"
+        )
+
+    return (
+        f"<div style='border:1px solid #e5e7eb;border-left:5px solid {color};border-radius:10px;"
+        f"padding:12px 14px;margin-bottom:14px;background:#ffffff;min-height:96px;'>"
+        f"<div style='display:flex;justify-content:space-between;align-items:baseline;gap:8px;'>"
+        f"<div style='font-weight:700;font-size:0.95rem;color:#1f2937;'>{student}</div>"
+        f"<div style='font-size:0.72rem;font-weight:700;color:{color};white-space:nowrap;'>{emoji} {label}</div>"
+        f"</div>{body}</div>"
+    )
+
+
 # ── Chart helpers (matplotlib — no clipping, named titles) ────────────────────
 def make_goal_chart_mpl(tracking_data, goal_text: str, from_date: str,
                         to_date: str, student_name: str = "") -> bytes | None:
@@ -2150,128 +2221,142 @@ Use trauma-informed, strengths-based language referencing the BSEM framework (Re
 elif view == "🗺️ Program Snapshot":
     st.title("🗺️ Program Snapshot")
     st.caption(
-        "A cross-program view of every active student's SMARTAR goal(s) and how "
-        "consistently tracking is being entered. Expected frequency: an observation "
-        "on every school day (Mon–Fri)."
+        "Every active student's SMARTAR goal(s) and how consistently tracking is "
+        "being entered. Expected frequency: an observation on every school day (Mon–Fri)."
     )
-
-    STATUS_META = {
-        "on_track":       ("✅", "On Track",       "#16a34a"),
-        "needs_increase": ("⚠️", "Needs Increase", "#d97706"),
-        "not_started":    ("🔴", "Not Started",    "#c0392b"),
-        "no_goal":        ("⚪", "No Goal Set",     "#9ca3af"),
-    }
 
     students = get_students()  # active, on-placement students only
     if not students:
         st.info("No active students set up yet.")
         st.stop()
 
-    prog_filter = st.selectbox("Filter by Program", ["All"] + PROGRAMS, index=0,
-                               key="snap_prog_filter")
-    if prog_filter != "All":
-        students = [s for s in students if s.get("program") == prog_filter]
-    if not students:
-        st.warning("No active students found for this program.")
-        st.stop()
+    display_mode = st.radio(
+        "Display",
+        ["📇 Dashboard — all students at a glance", "📋 Detailed list"],
+        horizontal=True, key="snap_display_mode",
+    )
 
     with st.spinner("Building snapshot…"):
-        snapshot_rows = []
-        for s in sorted(students, key=lambda x: (x.get("program", ""), x["student_name"])):
-            s_goals = get_goals(s["student_name"])  # active goals only
-            if not s_goals:
-                snapshot_rows.append({
-                    "student": s["student_name"], "program": s.get("program", "?"),
-                    "goal": None, "status": "no_goal", "freq": None,
-                })
-                continue
-            for g in s_goals:
-                freq = goal_tracking_frequency(g["id"], g.get("start_date"))
-                snapshot_rows.append({
-                    "student": s["student_name"], "program": s.get("program", "?"),
-                    "goal": g, "status": freq["status"], "freq": freq,
-                })
+        all_snapshots = [build_student_snapshot(s) for s in students]
 
-    # ── Summary metrics ─────────────────────────────────────────────────────
-    counts_by_status = {k: 0 for k in STATUS_META}
-    for row in snapshot_rows:
-        counts_by_status[row["status"]] += 1
+    # ── Summary metrics (one row per student, by their worst-case status) ──
+    counts_by_status = {k: 0 for k in SNAPSHOT_STATUS_META}
+    for snap in all_snapshots:
+        counts_by_status[snap["status"]] += 1
 
     mcols = st.columns(4)
     for i, key in enumerate(["on_track", "needs_increase", "not_started", "no_goal"]):
-        emoji, label, _ = STATUS_META[key]
+        emoji, label, _ = SNAPSHOT_STATUS_META[key]
         mcols[i].metric(f"{emoji} {label}", counts_by_status[key])
 
     st.markdown("---")
 
-    status_filter = st.multiselect(
-        "Show only",
-        options=list(STATUS_META.keys()),
-        default=list(STATUS_META.keys()),
-        format_func=lambda k: f"{STATUS_META[k][0]} {STATUS_META[k][1]}",
-        key="snap_status_filter",
-    )
+    if display_mode.startswith("📇"):
+        # ── DASHBOARD — one tab per program, every student visible at once ──
+        tabs = st.tabs(PROGRAMS)
+        for tab, prog in zip(tabs, PROGRAMS):
+            with tab:
+                prog_snaps = sorted(
+                    [sn for sn in all_snapshots if sn["program"] == prog],
+                    key=lambda sn: (SNAPSHOT_SEVERITY[sn["status"]], sn["student"]),
+                )
+                if not prog_snaps:
+                    st.info(f"No active students in {prog}.")
+                    continue
+                st.caption(f"{len(prog_snaps)} active student(s) in {prog} "
+                           "— most urgent first.")
+                n_cols = 3
+                for row_start in range(0, len(prog_snaps), n_cols):
+                    row_items = prog_snaps[row_start: row_start + n_cols]
+                    cols = st.columns(n_cols)
+                    for col, snap in zip(cols, row_items):
+                        with col:
+                            st.markdown(render_snapshot_card(snap), unsafe_allow_html=True)
 
-    visible_rows = [r for r in snapshot_rows if r["status"] in status_filter]
-    if not visible_rows:
-        st.info("No students match the selected filters.")
-        st.stop()
-
-    current_program = None
-    for row in visible_rows:
-        if row["program"] != current_program:
-            current_program = row["program"]
-            st.markdown(f"### {current_program} Program")
-
-        emoji, label, color = STATUS_META[row["status"]]
-
-        if row["goal"] is None:
-            st.markdown(
-                f'<div style="border-left:4px solid {color};padding:8px 14px;margin-bottom:8px;'
-                f'background:#fafafa;border-radius:0 8px 8px 0;">'
-                f'<b>{row["student"]}</b> — {emoji} {label}'
-                f'<div style="font-size:0.82rem;color:#666;">'
-                f'No SMARTAR goal has been created for this student yet.</div></div>',
-                unsafe_allow_html=True,
-            )
-            continue
-
-        g    = row["goal"]
-        freq = row["freq"]
-        last_entry_str = freq["last_entry"].strftime("%d %b") if freq["last_entry"] else "Never"
-
-        tracking_21          = get_tracking(g["id"], days=21)
-        _, total_21, pcts_21 = calc_percentages(tracking_21)
-        perf_summary = (
-            "  ".join(f"{LEVEL_EMOJI[l]} {pcts_21.get(l,0):.0f}%"
-                      for l in TRACK_LEVELS if pcts_21.get(l, 0) > 0)
-            if total_21 else "No performance data yet"
+    else:
+        # ── DETAILED LIST — same data, drill into each goal ─────────────────
+        prog_filter = st.selectbox("Filter by Program", ["All"] + PROGRAMS, index=0,
+                                   key="snap_prog_filter")
+        status_filter = st.multiselect(
+            "Show only",
+            options=list(SNAPSHOT_STATUS_META.keys()),
+            default=list(SNAPSHOT_STATUS_META.keys()),
+            format_func=lambda k: f"{SNAPSHOT_STATUS_META[k][0]} {SNAPSHOT_STATUS_META[k][1]}",
+            key="snap_status_filter",
         )
 
-        with st.expander(
-            f"{emoji} **{row['student']}** — {_short(g.get('smartar_goal',''), 60)}  ·  {label}"
-        ):
-            st.markdown(
-                f'<div class="smartar-box">🎯 {g.get("smartar_goal","No goal text")}</div>',
-                unsafe_allow_html=True,
-            )
-            fc1, fc2, fc3 = st.columns(3)
-            fc1.metric("Last entry", last_entry_str)
-            fc2.metric("Consistency (14 days)", f"{freq['consistency_pct']}%")
-            fc3.metric("Tracking period", g.get("tracking_period", "All Day"))
-            st.caption(f"Performance (last 21 days): {perf_summary}")
+        visible = sorted(
+            [sn for sn in all_snapshots
+             if (prog_filter == "All" or sn["program"] == prog_filter)
+             and sn["status"] in status_filter],
+            key=lambda sn: (sn["program"], sn["student"]),
+        )
+        if not visible:
+            st.info("No students match the selected filters.")
+            st.stop()
 
-            if row["status"] == "needs_increase":
+        current_program = None
+        for snap in visible:
+            if snap["program"] != current_program:
+                current_program = snap["program"]
+                st.markdown(f"### {current_program} Program")
+
+            emoji, label, color = SNAPSHOT_STATUS_META[snap["status"]]
+
+            if not snap["goals"]:
                 st.markdown(
-                    '<div class="alert-box">⚠️ Tracking has fallen behind — an entry is expected '
-                    'every school day. Please follow up with the staff recording for this student.</div>',
+                    f'<div style="border-left:4px solid {color};padding:8px 14px;margin-bottom:8px;'
+                    f'background:#fafafa;border-radius:0 8px 8px 0;">'
+                    f'<b>{snap["student"]}</b> — {emoji} {label}'
+                    f'<div style="font-size:0.82rem;color:#666;">'
+                    f'No SMARTAR goal has been created for this student yet.</div></div>',
                     unsafe_allow_html=True,
                 )
-            elif row["status"] == "not_started":
-                st.markdown(
-                    '<div class="alert-box">🔴 No tracking has been entered for this goal yet.</div>',
-                    unsafe_allow_html=True,
-                )
+                continue
+
+            with st.expander(
+                f"{emoji} **{snap['student']}** — {label}  ·  "
+                f"{snap['goal_count']} goal{'s' if snap['goal_count'] != 1 else ''}"
+            ):
+                for gi in snap["goals"]:
+                    g, freq = gi["goal"], gi["freq"]
+                    g_emoji, g_label, g_color = SNAPSHOT_STATUS_META[freq["status"]]
+                    last_entry_str = freq["last_entry"].strftime("%d %b") if freq["last_entry"] else "Never"
+
+                    tracking_21          = get_tracking(g["id"], days=21)
+                    _, total_21, pcts_21 = calc_percentages(tracking_21)
+                    perf_summary = (
+                        "  ".join(f"{LEVEL_EMOJI[l]} {pcts_21.get(l,0):.0f}%"
+                                  for l in TRACK_LEVELS if pcts_21.get(l, 0) > 0)
+                        if total_21 else "No performance data yet"
+                    )
+
+                    st.markdown(
+                        f'<div class="smartar-box">🎯 {g.get("smartar_goal","No goal text")} '
+                        f'<span style="float:right;color:{g_color};font-weight:700;font-size:0.8rem;">'
+                        f'{g_emoji} {g_label}</span></div>',
+                        unsafe_allow_html=True,
+                    )
+                    fc1, fc2, fc3 = st.columns(3)
+                    fc1.metric("Last entry", last_entry_str)
+                    fc2.metric("Consistency (14 days)", f"{freq['consistency_pct']}%")
+                    fc3.metric("Tracking period", g.get("tracking_period", "All Day"))
+                    st.caption(f"Performance (last 21 days): {perf_summary}")
+
+                    if freq["status"] == "needs_increase":
+                        st.markdown(
+                            '<div class="alert-box">⚠️ Tracking has fallen behind — an entry is '
+                            'expected every school day. Please follow up with the staff recording '
+                            'for this student.</div>',
+                            unsafe_allow_html=True,
+                        )
+                    elif freq["status"] == "not_started":
+                        st.markdown(
+                            '<div class="alert-box">🔴 No tracking has been entered for this goal yet.</div>',
+                            unsafe_allow_html=True,
+                        )
+                    st.markdown("<hr style='margin:8px 0;border:none;border-top:1px solid #eee;'>",
+                               unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2306,6 +2391,81 @@ elif view == "⚙️ Admin Panel":
                     st.error(f"Error: {e}")
             else:
                 st.warning("Please enter a student name.")
+
+        st.markdown("---")
+        st.subheader("🗑️ Bulk Archive / End Placement")
+        st.caption(
+            "Select several students at once — handy when a term ends and a batch "
+            "of placements finish together. This only changes the student's status; "
+            "their goals and tracking history are kept."
+        )
+
+        bulk_candidates = [
+            s for s in get_students(include_archived=True)
+            if s.get("active", True) and not s.get("placement_ended", False)
+        ]
+        if not bulk_candidates:
+            st.caption("No active students available to archive.")
+        else:
+            bulk_prog_filter = st.selectbox(
+                "Filter by program (optional)", ["All"] + PROGRAMS, key="bulk_prog_filter"
+            )
+            bulk_pool = bulk_candidates
+            if bulk_prog_filter != "All":
+                bulk_pool = [s for s in bulk_pool if s.get("program") == bulk_prog_filter]
+
+            bulk_names = sorted(s["student_name"] for s in bulk_pool)
+            selected_bulk = st.multiselect(
+                "Select students", bulk_names, key="bulk_select_students",
+                help="Only currently active (on-placement) students are listed here.",
+            )
+
+            bulk_action = st.radio(
+                "Action to apply",
+                ["Archive (goal archived — still accessible in Admin)",
+                 "End Placement (student has left CLC — hidden everywhere, data kept)"],
+                key="bulk_action_choice",
+            )
+            is_end_action = bulk_action.startswith("End")
+
+            if selected_bulk:
+                if not st.session_state.get("confirm_bulk_action"):
+                    if st.button(f"⚙️ Apply to {len(selected_bulk)} student(s)",
+                                 type="primary", key="bulk_apply_btn"):
+                        st.session_state["confirm_bulk_action"] = True
+                        st.rerun()
+                else:
+                    st.warning(
+                        f"This will set **{len(selected_bulk)}** student(s) to "
+                        f"**{'Placement Ended' if is_end_action else 'Archived'}**: "
+                        f"{', '.join(selected_bulk)}. Continue?"
+                    )
+                    cc1, cc2 = st.columns(2)
+                    with cc1:
+                        if st.button("✅ Confirm", type="primary", key="bulk_confirm_btn",
+                                     use_container_width=True):
+                            target_ids = [s["id"] for s in bulk_pool
+                                          if s["student_name"] in selected_bulk]
+                            update = {"active": False}
+                            if is_end_action:
+                                update["placement_ended"] = True
+                            ok_count, fail_count = 0, 0
+                            for sid in target_ids:
+                                try:
+                                    sb.table("smartar_students").update(update).eq("id", sid).execute()
+                                    ok_count += 1
+                                except Exception:
+                                    fail_count += 1
+                            st.session_state.pop("confirm_bulk_action", None)
+                            if fail_count:
+                                st.warning(f"Updated {ok_count} student(s) — {fail_count} failed.")
+                            else:
+                                st.success(f"✅ Updated {ok_count} student(s).")
+                            st.rerun()
+                    with cc2:
+                        if st.button("Cancel", key="bulk_cancel_btn", use_container_width=True):
+                            st.session_state.pop("confirm_bulk_action", None)
+                            st.rerun()
 
         st.markdown("---")
         st.caption("Active = on placement. Archived = goal archived, student still accessible. Placement Ended = student left CLC, hidden from tools but data preserved.")
