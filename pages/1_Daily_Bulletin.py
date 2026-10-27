@@ -221,7 +221,7 @@ def _get_staff_password():
 
 ADMIN_PASSWORD = _get_staff_password()
 
-TRANSPORT_OPTIONS = ["Taxi","Parent/Carer","Other"]
+TRANSPORT_OPTIONS = ["Taxi","Parent/Carer","Parent/Taxi","Taxi/Parent","Other"]
 CHANGE_TYPE_OPTIONS = ["Early Departure","Late Arrival","No Show","Alternative Pickup","Alternative Drop-off","Absent - not attending","Other"]
 VISITOR_REASON_OPTIONS = ["Student Observation","Meeting with Leadership","Meeting with Teacher","TAC","Review/Transition Meeting","Support","Other"]
 
