@@ -717,41 +717,146 @@ def _get_alert_log() -> dict:
         return {}
 
 
-# ── Outbound email (SMTP) — configure via st.secrets / env vars ───────────────
-def _smtp_config():
-    get = lambda k, d="": st.secrets.get(k, os.environ.get(k, d))
-    host = get("SMTP_HOST")
-    port = int(get("SMTP_PORT", "587") or "587")
-    user = get("SMTP_USER")
-    pwd  = get("SMTP_PASSWORD")
-    sender = get("SMTP_FROM", user)
-    return host, port, user, pwd, sender
+# ══════════════════════════════════════════════════════════════════════════════
+# OUTBOUND EMAIL — same route as the Hazard Report / Credit Card tools: a
+# Google Apps Script webhook on the CLC Gmail account (works on Render's free
+# plan, which blocks outbound SMTP ports), falling back to direct Gmail SMTP
+# if no webhook is configured. Uses the SAME secret names those tools use, so
+# if email already works there, it works here with nothing extra to set up.
+# ══════════════════════════════════════════════════════════════════════════════
+def _secret(*paths, default=None):
+    """Return the first secret found. Each path is 'KEY' or 'section.key'.
+    Checks Render/host environment variables first, then Streamlit secrets —
+    identical lookup order to hazard_utils._secret()."""
+    for p in paths:
+        if "." not in p and os.environ.get(p):
+            return os.environ[p]
+    for p in paths:
+        try:
+            node = st.secrets
+            for part in p.split("."):
+                node = node[part]
+            if node:
+                return node
+        except Exception:
+            continue
+    return default
+
+
+def _smtp_settings():
+    user = _secret("GMAIL_USER", "SMTP_USER", "EMAIL_USER", "EMAIL_SENDER", "gmail.user",
+                   "gmail.address", "smtp.user", "smtp.username", "email.user", "email.sender",
+                   default="clc.digitalstaffmeeting@gmail.com")
+    pwd = _secret("GMAIL_APP_PASSWORD", "GMAIL_PASSWORD", "SMTP_PASSWORD", "EMAIL_PASSWORD",
+                 "gmail.app_password", "gmail.password", "smtp.password", "email.password")
+    host = _secret("SMTP_HOST", "smtp.host", "smtp.server", default="smtp.gmail.com")
+    port = int(_secret("SMTP_PORT", "smtp.port", default=587))
+    return user, pwd, host, port
 
 
 def email_is_configured() -> bool:
-    host, _port, user, pwd, _sender = _smtp_config()
-    return bool(host and user and pwd)
+    _user, pwd, _host, _port = _smtp_settings()
+    webhook = _secret("EMAIL_WEBHOOK_URL", "email.webhook_url", "gmail.webhook_url")
+    return bool(webhook or pwd)
 
 
-def send_email(to_addr: str, subject: str, body: str):
-    """Returns (ok: bool, message: str)."""
-    host, port, user, pwd, sender = _smtp_config()
-    if not (host and user and pwd and to_addr):
-        return False, "Email isn't configured yet (SMTP_HOST / SMTP_USER / SMTP_PASSWORD missing from secrets)."
+def _send_via_webhook(url: str, token: str, recipients: list, subject: str, html: str):
+    """Send through the Google Apps Script web app on the CLC Gmail account
+    (plain HTTPS, so it works on Render's free plan) — identical request
+    shape to hazard_utils._send_via_webhook()."""
+    import json
+    import urllib.request
+    body = json.dumps({
+        "token": token, "to": ",".join(recipients), "subject": subject, "html": html,
+    }).encode()
+    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        reply = resp.read().decode(errors="ignore").strip()
+    if reply.startswith("OK"):
+        return True, f"Email sent to {len(recipients)} recipient(s)."
+    return False, f"Email failed: Apps Script replied '{reply[:150]}'"
+
+
+def _send_via_smtp(user, pwd, host, port, recipients, msg):
+    """Try the configured port first, then the other Gmail port (587 STARTTLS
+    / 465 SSL) — identical fallback order to hazard_utils._send_via_smtp()."""
+    import smtplib
+    errors = []
+    for p in dict.fromkeys([port, 587, 465]):
+        try:
+            if p == 465:
+                with smtplib.SMTP_SSL(host, 465, timeout=20) as s:
+                    s.login(user, pwd)
+                    s.sendmail(user, recipients, msg.as_string())
+            else:
+                with smtplib.SMTP(host, p, timeout=20) as s:
+                    s.starttls()
+                    s.login(user, pwd)
+                    s.sendmail(user, recipients, msg.as_string())
+            return
+        except smtplib.SMTPAuthenticationError as e:
+            raise RuntimeError(f"Gmail rejected the login ({e.smtp_code}) – check the app password") from e
+        except Exception as e:
+            errors.append(f"port {p}: {e or type(e).__name__}")
+    raise RuntimeError("; ".join(errors) + ". If this keeps happening, set up EMAIL_WEBHOOK_URL "
+                                           "(same as the Hazard Report tool).")
+
+
+def smartar_portal_url() -> str | None:
+    base = _secret("PORTAL_URL", "portal.url", default="https://clc-lbu-portal.onrender.com")
+    return f"{base.rstrip('/')}/SMARTAR_Goal_Builder" if base else None
+
+
+def send_teacher_alert_email(student_name: str, program: str, days_silent: int, to_addr: str):
+    """Returns (ok, msg). Recipient comes from the teacher-email-per-program
+    mapping Candice fills in on the Admin Panel's Teacher Alerts tab — unlike
+    the Hazard Report's fixed Admin/Leadership recipient list, here SHE sets
+    who gets alerted for each program. The send mechanism itself (webhook
+    first, SMTP fallback) is identical to send_hazard_email()."""
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    from html import escape
+
+    if not to_addr:
+        return False, "No teacher email set for this program."
+    user, pwd, host, port = _smtp_settings()
+    webhook = _secret("EMAIL_WEBHOOK_URL", "email.webhook_url", "gmail.webhook_url")
+    webhook_token = _secret("EMAIL_WEBHOOK_TOKEN", "email.webhook_token", "gmail.webhook_token", default="")
+    if not pwd and not webhook:
+        return False, ("Email isn't set up for the portal yet — this needs the same "
+                       "EMAIL_WEBHOOK_URL (or Gmail app password) the Hazard Report tool uses.")
+
+    subject = f"🔔 SMARTAR tracking reminder: {student_name} — {days_silent} school day(s) with no data"
+    portal_url = smartar_portal_url()
+    html = f"""
+    <div style='font-family:Segoe UI,Arial,sans-serif;font-size:14px'>
+      <h2 style='margin:0 0 8px'>SMARTAR Tracking Reminder</h2>
+      <p>No SMARTAR tracking has been recorded for <b>{escape(student_name)}</b> ({escape(program)})
+      for the last <b>{days_silent}</b> school day(s).</p>
+      <p>Please record an observation in the <b>Daily Tracking</b> tab when you're next able to.</p>
+      <p style='margin-top:14px;color:#888;font-size:0.85em'>This is an automated reminder from the
+      SMARTAR Goal Builder{f" — <a href='{portal_url}'>open the tool</a>" if portal_url else ""}.</p>
+    </div>"""
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = f"CLC Portal <{user}>"
+    msg["To"] = to_addr
+    msg.attach(MIMEText(html, "html"))
+
+    # 1. Web route (works on Render free plan) if it has been set up
+    if webhook:
+        try:
+            return _send_via_webhook(webhook, webhook_token, [to_addr], subject, html)
+        except Exception as e:
+            if not pwd:
+                return False, f"Email failed: {e}"
+    # 2. Gmail SMTP (needs a host that allows email ports)
     try:
-        import smtplib
-        from email.mime.text import MIMEText
-        msg = MIMEText(body)
-        msg["Subject"] = subject
-        msg["From"] = sender or user
-        msg["To"] = to_addr
-        with smtplib.SMTP(host, port, timeout=15) as server:
-            server.starttls()
-            server.login(user, pwd)
-            server.sendmail(sender or user, [to_addr], msg.as_string())
-        return True, "sent"
+        _send_via_smtp(user, pwd, host, port, [to_addr], msg)
+        return True, "Email sent."
     except Exception as e:
-        return False, str(e)
+        return False, f"Email failed: {e}"
 
 
 def student_school_days_silent(student_name: str) -> int | None:
@@ -802,13 +907,7 @@ def run_teacher_alert_check(students: list, min_days_silent: int = 2, dry_run: b
         elif dry_run:
             row["note"] = "Would send now."
         else:
-            ok, msg = send_email(
-                teacher_email,
-                f"SMARTAR reminder: {s['student_name']} — {days_silent} school day(s) with no tracking",
-                f"Hi,\n\nNo SMARTAR tracking has been recorded for {s['student_name']} ({prog}) "
-                f"for the last {days_silent} school day(s). Please record an observation when you "
-                f"next can.\n\nThis is an automated reminder from the SMARTAR Goal Builder.",
-            )
+            ok, msg = send_teacher_alert_email(s["student_name"], prog, days_silent, teacher_email)
             row["sent"] = ok
             row["note"] = "✅ Email sent." if ok else f"❌ Send failed: {msg}"
             if ok:
@@ -887,6 +986,37 @@ def render_snapshot_card(snap: dict) -> str:
         f"<div style='font-weight:700;font-size:0.95rem;color:#1f2937;'>{student}</div>"
         f"<div style='font-size:0.72rem;font-weight:700;color:{color};white-space:nowrap;'>{emoji} {label}</div>"
         f"</div>{body}</div>"
+    )
+
+
+def render_student_tile(snap: dict) -> str:
+    """Bigger, bolder tile for the Program Snapshot grid — one per active
+    student, coloured as a tracking-consistency alert (green/amber/red/grey)
+    so the whole program's status reads at a glance. Pair with a button
+    underneath (Streamlit can't make arbitrary HTML clickable) that opens
+    that student's goal charts."""
+    emoji, label, color = SNAPSHOT_STATUS_META[snap["status"]]
+    student = snap["student"]
+
+    if snap["goals"]:
+        rep = next((gi for gi in snap["goals"] if gi["freq"]["status"] == snap["status"]),
+                   snap["goals"][0])
+        freq = rep["freq"]
+        last_entry = freq["last_entry"].strftime("%d %b") if freq["last_entry"] else "Never"
+        goal_line = f"{snap['goal_count']} goal{'s' if snap['goal_count'] != 1 else ''} · Last entry: {last_entry}"
+        pct_line = f"{freq['consistency_pct']}% consistency (14 school days)"
+    else:
+        goal_line = "No SMARTAR goal set yet"
+        pct_line = ""
+
+    return (
+        f"<div style='background:{color}1a;border:2px solid {color};border-radius:14px;"
+        f"padding:14px 16px 10px;min-height:122px;'>"
+        f"<div style='font-weight:700;font-size:1.0rem;color:#1f2937;'>{student}</div>"
+        f"<div style='font-size:0.74rem;font-weight:700;color:{color};margin-top:3px;'>{emoji} {label}</div>"
+        f"<div style='font-size:0.76rem;color:#555;margin-top:10px;'>{goal_line}</div>"
+        f"<div style='font-size:0.76rem;color:#555;'>{pct_line}</div>"
+        f"</div>"
     )
 
 
@@ -2706,74 +2836,109 @@ elif view == "🗺️ Program Snapshot":
 
                 st.markdown("<br>", unsafe_allow_html=True)
 
-                # ── Trend charts ─────────────────────────────────────────
-                ts_df = program_time_series(prog_tracking, window_from, window_to)
-                cchart1, cchart2 = st.columns(2)
-                with cchart1:
-                    st.plotly_chart(fig_entries_line(ts_df), use_container_width=True,
-                                    key=f"entries_chart_{prog}")
-                with cchart2:
-                    st.plotly_chart(fig_score_line(ts_df), use_container_width=True,
-                                    key=f"score_chart_{prog}")
+                # ── Program trends — tucked into an expander so the student
+                # tiles below are the main focus of the page ───────────────
+                with st.expander("📈 Program Trends & Engagement Funnel"):
+                    ts_df = program_time_series(prog_tracking, window_from, window_to)
+                    cchart1, cchart2 = st.columns(2)
+                    with cchart1:
+                        st.plotly_chart(fig_entries_line(ts_df), use_container_width=True,
+                                        key=f"entries_chart_{prog}")
+                    with cchart2:
+                        st.plotly_chart(fig_score_line(ts_df), use_container_width=True,
+                                        key=f"score_chart_{prog}")
+                    funnel_counts = program_funnel_counts(prog_snaps)
+                    st.plotly_chart(fig_engagement_funnel(funnel_counts), use_container_width=True,
+                                    key=f"funnel_chart_{prog}")
 
-                # ── Engagement funnel ────────────────────────────────────
-                funnel_counts = program_funnel_counts(prog_snaps)
-                st.plotly_chart(fig_engagement_funnel(funnel_counts), use_container_width=True,
-                                key=f"funnel_chart_{prog}")
-
-                # ── All students, all goals, chart underneath each — every ──
-                # student visible at once, no selectbox needed to see a chart.
-                st.markdown("#### 👥 Every Student & Goal")
                 tracking_by_goal = defaultdict(list)
                 for r in prog_tracking:
                     tracking_by_goal[r["goal_id"]].append(r)
 
-                for sn in prog_snaps:
-                    s_emoji, s_label, s_color = SNAPSHOT_STATUS_META[sn["status"]]
-                    st.markdown(
-                        f'<div style="display:flex;justify-content:space-between;align-items:baseline;'
-                        f'border-bottom:2px solid {s_color};padding:6px 2px;margin-top:20px;">'
-                        f'<div style="font-size:1.05rem;font-weight:700;color:#1f2937;">{sn["student"]}</div>'
-                        f'<div style="font-size:0.78rem;font-weight:700;color:{s_color};">{s_emoji} {s_label}</div>'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
-                    if not sn["goals"]:
-                        st.caption("No SMARTAR goal has been created yet — go to **Goal Builder** to add one.")
-                        continue
+                # ── Student tile grid — one tile per active student, coloured ──
+                # as a tracking-consistency alert (green/amber/red/grey). Click
+                # a tile's button to open that student's goal charts below,
+                # side by side.
+                st.markdown("#### 👥 Active Students")
+                st.caption(
+                    "🟢 On track · 🟠 Needs increase · 🔴 Not started · ⚪ No goal set — "
+                    "click a tile to view that student's goal charts."
+                )
 
-                    for gi in sn["goals"]:
-                        g, freq = gi["goal"], gi["freq"]
-                        g_emoji, g_label, g_color = SNAPSHOT_STATUS_META[freq["status"]]
-                        streak_type, streak_days = check_goal_streak(g["id"])
-                        with st.container(border=True):
-                            st.markdown(
-                                f'<div class="smartar-box">🎯 {g.get("smartar_goal","No goal text")} '
-                                f'<span style="float:right;color:{g_color};font-weight:700;font-size:0.8rem;">'
-                                f'{g_emoji} {g_label}</span></div>',
-                                unsafe_allow_html=True,
-                            )
-                            if streak_type:
-                                st.markdown(render_streak_alert(streak_type, streak_days),
-                                           unsafe_allow_html=True)
-                                if st.button("✏️ Edit this goal in Goal Builder",
-                                            key=f"streak_jump_snap_{g['id']}"):
-                                    jump_to_edit_goal(sn["student"], g["id"])
+                selected_key = f"snap_selected_{prog}"
+                TILE_COLS = 4
+                for row_start in range(0, len(prog_snaps), TILE_COLS):
+                    row = prog_snaps[row_start:row_start + TILE_COLS]
+                    tile_cols = st.columns(TILE_COLS)
+                    for col, sn in zip(tile_cols, row):
+                        with col:
+                            st.markdown(render_student_tile(sn), unsafe_allow_html=True)
+                            is_open = st.session_state.get(selected_key) == sn["student"]
+                            if st.button(
+                                "✖ Close" if is_open else "🔍 View Goals",
+                                key=f"tile_btn_{prog}_{sn['student']}",
+                                use_container_width=True,
+                                type="primary" if is_open else "secondary",
+                            ):
+                                st.session_state[selected_key] = None if is_open else sn["student"]
+                                st.rerun()
 
-                            dc1, dc2, dc3 = st.columns(3)
-                            dc1.metric("Last entry",
-                                      freq["last_entry"].strftime("%d %b") if freq["last_entry"] else "Never")
-                            dc2.metric("Consistency (14 days)", f"{freq['consistency_pct']}%")
-                            dc3.metric("Tracking period", g.get("tracking_period", "All Day"))
+                # ── Detail panel for the selected student — every one of their
+                # goals, charts side by side ────────────────────────────────
+                selected_student = st.session_state.get(selected_key)
+                if selected_student:
+                    sel_snap = next((sn for sn in prog_snaps if sn["student"] == selected_student), None)
+                    if sel_snap:
+                        st.markdown("---")
+                        sel_emoji, sel_label, sel_color = SNAPSHOT_STATUS_META[sel_snap["status"]]
+                        st.markdown(
+                            f'<div style="font-size:1.25rem;font-weight:700;color:#1f2937;">'
+                            f'📂 {selected_student} '
+                            f'<span style="color:{sel_color};font-size:0.8rem;font-weight:700;">'
+                            f'{sel_emoji} {sel_label}</span></div>',
+                            unsafe_allow_html=True,
+                        )
+                        if not sel_snap["goals"]:
+                            st.info(f"{selected_student} doesn't have a SMARTAR goal yet. "
+                                    "Go to **Goal Builder** to create one.")
+                        else:
+                            MAX_DETAIL_COLS = 3
+                            goal_list = sel_snap["goals"]
+                            for gchunk_start in range(0, len(goal_list), MAX_DETAIL_COLS):
+                                gchunk = goal_list[gchunk_start:gchunk_start + MAX_DETAIL_COLS]
+                                detail_cols = st.columns(len(gchunk))
+                                for col, gi in zip(detail_cols, gchunk):
+                                    g, freq = gi["goal"], gi["freq"]
+                                    g_emoji, g_label, g_color = SNAPSHOT_STATUS_META[freq["status"]]
+                                    streak_type, streak_days = check_goal_streak(g["id"])
+                                    with col:
+                                        with st.container(border=True):
+                                            st.markdown(
+                                                f'<div class="smartar-box">🎯 {g.get("smartar_goal","No goal text")} '
+                                                f'<span style="float:right;color:{g_color};font-weight:700;'
+                                                f'font-size:0.8rem;">{g_emoji} {g_label}</span></div>',
+                                                unsafe_allow_html=True,
+                                            )
+                                            if streak_type:
+                                                st.markdown(render_streak_alert(streak_type, streak_days),
+                                                           unsafe_allow_html=True)
+                                                if st.button("✏️ Edit this goal",
+                                                            key=f"streak_jump_tile_{g['id']}"):
+                                                    jump_to_edit_goal(selected_student, g["id"])
 
-                            # Reuses the bulk program-wide query already fetched
-                            # above — no extra per-goal DB round trip.
-                            detail_fig = fig_goal_detail_chart(tracking_by_goal.get(g["id"], []))
-                            if detail_fig:
-                                st.plotly_chart(detail_fig, use_container_width=True,
-                                                key=f"detail_chart_{g['id']}")
-                            else:
-                                st.caption("No observations recorded yet for this goal.")
+                                            mc1, mc2 = st.columns(2)
+                                            mc1.metric("Last entry", freq["last_entry"].strftime("%d %b")
+                                                      if freq["last_entry"] else "Never")
+                                            mc2.metric("Consistency", f"{freq['consistency_pct']}%")
+
+                                            # Reuses the bulk program-wide query
+                                            # fetched above — no extra DB round trip.
+                                            detail_fig = fig_goal_detail_chart(tracking_by_goal.get(g["id"], []))
+                                            if detail_fig:
+                                                st.plotly_chart(detail_fig, use_container_width=True,
+                                                                key=f"detail_chart_{g['id']}")
+                                            else:
+                                                st.caption("No observations recorded yet for this goal.")
 
     else:
         # ── DETAILED LIST — same data, drill into each goal ─────────────────
@@ -3252,12 +3417,16 @@ elif view == "⚙️ Admin Panel":
 
         if not email_is_configured():
             st.warning(
-                "📪 Email isn't set up yet. Add `SMTP_HOST`, `SMTP_PORT` (optional — "
-                "defaults to 587), `SMTP_USER`, `SMTP_PASSWORD`, and optionally "
-                "`SMTP_FROM` to this app's secrets (e.g. your school's Office 365 or "
-                "Google Workspace SMTP credentials — not this file). Until then, "
-                "checks below will run but nothing will actually be emailed."
+                "📪 Email isn't set up yet on this deployment. This uses the same sending "
+                "route as the **Hazard Report** and **Credit Card** tools — the CLC Gmail "
+                "account (`clc.digitalstaffmeeting@gmail.com`) via the `EMAIL_WEBHOOK_URL` "
+                "Apps Script route (or Gmail SMTP as a fallback). If those tools' email "
+                "alerts already work, this should too with nothing extra to configure — "
+                "if not, it needs the same Render secrets they use. Until then, checks "
+                "below will run but nothing will actually be emailed."
             )
+        else:
+            st.caption("✅ Email is configured — using the same CLC Gmail route as Hazard Report / Credit Card.")
 
         with st.expander("⚙️ One-time setup — database table"):
             st.caption(
