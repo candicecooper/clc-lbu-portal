@@ -508,6 +508,63 @@ def check_goal_needs_refinement(goal_id, threshold=3):
     return low >= threshold, low
 
 
+# ── Consecutive-day streak detector → "consider revising this goal" nudges ────
+STREAK_POSITIVE_LEVELS = {"EXCEEDING", "ABOVE"}
+STREAK_NEGATIVE_LEVELS = {"BELOW", "NOT YET"}
+
+
+def check_goal_streak(goal_id, days=5):
+    """Looks at the most recent `days` DISTINCT school days that have at least
+    one tracking entry for this goal (pulled from tracking rows directly, so a
+    day isn't counted twice for multiple sessions).
+
+    Returns (streak_type, day_count):
+      - ("positive", days) if every entry on each of those days is
+        EXCEEDING/ABOVE — the student may be ready for a harder goal.
+      - ("negative", days) if every entry on each of those days is
+        BELOW/NOT YET — the goal may need easing.
+      - (None, 0) if there aren't yet `days` distinct tracked days, or the
+        days are mixed.
+    """
+    rows = get_tracking(goal_id, days=45)
+    if not rows:
+        return None, 0
+    by_day = defaultdict(set)
+    for r in rows:
+        by_day[str(r.get("session_date", ""))[:10]].add(r.get("performance_level"))
+    recent_days = sorted(by_day.keys(), reverse=True)[:days]
+    if len(recent_days) < days:
+        return None, 0
+    if all(by_day[d] and by_day[d] <= STREAK_POSITIVE_LEVELS for d in recent_days):
+        return "positive", days
+    if all(by_day[d] and by_day[d] <= STREAK_NEGATIVE_LEVELS for d in recent_days):
+        return "negative", days
+    return None, 0
+
+
+def render_streak_alert(streak_type: str, days: int = 5) -> str:
+    if streak_type == "positive":
+        return (
+            f'<div class="success-box">🚀 <b>{days} consecutive days of EXCEEDING/ABOVE.</b> '
+            f'This student may be ready for a more challenging goal — consider revising it upward.</div>'
+        )
+    return (
+        f'<div class="alert-box">📉 <b>{days} consecutive days of BELOW/NOT YET.</b> '
+        f'This goal may be too difficult right now — consider revising it to better support this student.</div>'
+    )
+
+
+def jump_to_edit_goal(student_name: str, goal_id):
+    """Navigates to Goal Builder, selects the given student, and flags that
+    goal's edit form to auto-open and auto-expand — used by the streak nudges
+    (and anywhere else) so staff can act on an alert in one click instead of
+    hunting for the right student/goal themselves."""
+    st.session_state["nav_view"] = "📋 Goal Builder"
+    st.session_state["gb_student_select"] = student_name
+    st.session_state[f"editgoal_open_{goal_id}"] = True
+    st.rerun()
+
+
 def analyze_trend(tracking_data):
     if len(tracking_data) < 4:
         return "insufficient_data"
@@ -603,6 +660,163 @@ def goal_tracking_frequency(goal_id, goal_start, recent_window_days: int = 14) -
         "status": status, "last_entry": last_entry, "consistency_pct": consistency_pct,
         "expected_days": expected_days, "actual_days": actual_days, "days_behind": days_behind,
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SETTINGS (generic key/value) — powers the teacher-email-per-program mapping
+# and the daily alert dedupe log. Needs a `smartar_settings` table:
+#   create table smartar_settings (key text primary key, value text);
+# Every call fails soft (returns default / False) if the table doesn't exist
+# yet, so the rest of the app keeps working even before it's created.
+# ══════════════════════════════════════════════════════════════════════════════
+SMARTAR_SETTINGS_SQL = (
+    "create table if not exists smartar_settings (\n"
+    "    key   text primary key,\n"
+    "    value text\n"
+    ");"
+)
+
+
+def get_setting(key: str, default=None):
+    try:
+        r = sb.table("smartar_settings").select("value").eq("key", key).execute().data
+        if r:
+            return r[0]["value"]
+    except Exception:
+        pass
+    return default
+
+
+def set_setting(key: str, value: str) -> bool:
+    try:
+        sb.table("smartar_settings").upsert({"key": key, "value": value}).execute()
+        return True
+    except Exception as e:
+        st.error(f"Couldn't save setting — has the `smartar_settings` table been created? ({e})")
+        return False
+
+
+def get_teacher_emails() -> dict:
+    """{"JP": "teacher@school...", "PY": "...", "SY": "..."}"""
+    raw = get_setting("teacher_emails", "{}")
+    try:
+        return json.loads(raw) if isinstance(raw, str) else (raw or {})
+    except Exception:
+        return {}
+
+
+def set_teacher_emails(mapping: dict) -> bool:
+    return set_setting("teacher_emails", json.dumps(mapping))
+
+
+def _get_alert_log() -> dict:
+    raw = get_setting("teacher_alert_log", "{}")
+    try:
+        return json.loads(raw) if isinstance(raw, str) else (raw or {})
+    except Exception:
+        return {}
+
+
+# ── Outbound email (SMTP) — configure via st.secrets / env vars ───────────────
+def _smtp_config():
+    get = lambda k, d="": st.secrets.get(k, os.environ.get(k, d))
+    host = get("SMTP_HOST")
+    port = int(get("SMTP_PORT", "587") or "587")
+    user = get("SMTP_USER")
+    pwd  = get("SMTP_PASSWORD")
+    sender = get("SMTP_FROM", user)
+    return host, port, user, pwd, sender
+
+
+def email_is_configured() -> bool:
+    host, _port, user, pwd, _sender = _smtp_config()
+    return bool(host and user and pwd)
+
+
+def send_email(to_addr: str, subject: str, body: str):
+    """Returns (ok: bool, message: str)."""
+    host, port, user, pwd, sender = _smtp_config()
+    if not (host and user and pwd and to_addr):
+        return False, "Email isn't configured yet (SMTP_HOST / SMTP_USER / SMTP_PASSWORD missing from secrets)."
+    try:
+        import smtplib
+        from email.mime.text import MIMEText
+        msg = MIMEText(body)
+        msg["Subject"] = subject
+        msg["From"] = sender or user
+        msg["To"] = to_addr
+        with smtplib.SMTP(host, port, timeout=15) as server:
+            server.starttls()
+            server.login(user, pwd)
+            server.sendmail(sender or user, [to_addr], msg.as_string())
+        return True, "sent"
+    except Exception as e:
+        return False, str(e)
+
+
+def student_school_days_silent(student_name: str) -> int | None:
+    """School days since this student's most recent tracking entry, counting
+    ANY of their active goals (not just one) — used for the 'hasn't had data
+    entered for two straight days' teacher reminder. Returns None if the
+    student has no active goal, or has never had anything tracked yet (that
+    case is already covered by the 'Not Started' status elsewhere)."""
+    goals = get_goals(student_name)
+    if not goals:
+        return None
+    goal_ids = [g["id"] for g in goals]
+    rows = get_tracking_for_goals(
+        goal_ids, (date.today() - timedelta(days=60)).isoformat(), date.today().isoformat()
+    )
+    if not rows:
+        return None
+    last_date = max(date.fromisoformat(str(r["session_date"])[:10]) for r in rows)
+    last_completed = most_recent_school_day(date.today() - timedelta(days=1))
+    return school_days_since(last_date, last_completed)
+
+
+def run_teacher_alert_check(students: list, min_days_silent: int = 2, dry_run: bool = False) -> list:
+    """For every active student who has gone >= min_days_silent school days
+    without any tracking entry, emails that program's teacher (deduped to
+    once per calendar day per student via the settings-backed alert log).
+    Returns a list of result rows for display: {student, program,
+    days_silent, teacher_email, sent, note}."""
+    teacher_emails = get_teacher_emails()
+    log = _get_alert_log()
+    today_str = date.today().isoformat()
+    results = []
+    for s in students:
+        days_silent = student_school_days_silent(s["student_name"])
+        if days_silent is None or days_silent < min_days_silent:
+            continue
+        prog = s.get("program", "?")
+        teacher_email = teacher_emails.get(prog, "")
+        already_today = log.get(s["student_name"]) == today_str
+        row = {
+            "student": s["student_name"], "program": prog, "days_silent": days_silent,
+            "teacher_email": teacher_email, "sent": False, "note": "",
+        }
+        if not teacher_email:
+            row["note"] = f"No teacher email set for {prog} — add one below."
+        elif already_today:
+            row["note"] = "Already alerted today."
+        elif dry_run:
+            row["note"] = "Would send now."
+        else:
+            ok, msg = send_email(
+                teacher_email,
+                f"SMARTAR reminder: {s['student_name']} — {days_silent} school day(s) with no tracking",
+                f"Hi,\n\nNo SMARTAR tracking has been recorded for {s['student_name']} ({prog}) "
+                f"for the last {days_silent} school day(s). Please record an observation when you "
+                f"next can.\n\nThis is an automated reminder from the SMARTAR Goal Builder.",
+            )
+            row["sent"] = ok
+            row["note"] = "✅ Email sent." if ok else f"❌ Send failed: {msg}"
+            if ok:
+                log[s["student_name"]] = today_str
+        results.append(row)
+    if not dry_run:
+        set_setting("teacher_alert_log", json.dumps(log))
+    return results
 
 
 # ── Program Snapshot — status meta + per-student aggregation ───────────────────
@@ -1043,6 +1257,7 @@ view = st.sidebar.radio(
     ["🏫 Class Dashboard", "📋 Goal Builder",
      "📊 Daily Tracking", "📈 Progress Report",
      "🗺️ Program Snapshot", "⚙️ Admin Panel"],
+    key="nav_view",
 )
 st.sidebar.markdown("---")
 st.sidebar.caption("SMARTAR + GAS Goal Tracking · CLC LBU")
@@ -1060,6 +1275,20 @@ if st.session_state.get("_gb_last_date") != _today_str:
 if st.sidebar.button("🔄 Refresh Data", key="sb_refresh_gb", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
+
+# ── Automatic daily teacher-alert check ────────────────────────────────────────
+# Runs quietly once per browser session per day (whenever anyone first opens
+# the app that day) so reminder emails go out without staff needing to visit
+# Admin Panel. Sending itself is deduped globally via the Supabase-backed
+# alert log, so it's harmless even if several people trigger this on the
+# same day — only the first actually-due alert per student per day sends.
+if st.session_state.get("_teacher_alert_checked_date") != _today_str:
+    st.session_state["_teacher_alert_checked_date"] = _today_str
+    if email_is_configured() and any(get_teacher_emails().values()):
+        try:
+            run_teacher_alert_check(get_students())
+        except Exception:
+            pass  # never let the background alert check break the app
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1211,6 +1440,11 @@ elif view == "📋 Goal Builder":
 
         student_options = {s["student_name"]: s for s in students}
 
+        # A stale deep-link (e.g. jump_to_edit_goal targeting an archived
+        # student) shouldn't crash the selectbox — just drop it.
+        if st.session_state.get("gb_student_select") not in student_options:
+            st.session_state.pop("gb_student_select", None)
+
         # Pre-select from Team Meetings integration
         if integration["active"] and integration["student"]:
             default_idx = list(student_options.keys()).index(integration["student"]) \
@@ -1219,7 +1453,7 @@ elif view == "📋 Goal Builder":
             default_idx = 0
 
         selected_name  = st.selectbox("Select student", list(student_options.keys()),
-                                      index=default_idx)
+                                      index=default_idx, key="gb_student_select")
         student        = student_options[selected_name]
         existing_goals  = get_goals(selected_name, active_only=True)
         archived_goals  = get_goals(selected_name, active_only=False)
@@ -1237,11 +1471,17 @@ elif view == "📋 Goal Builder":
             for idx, g in enumerate(existing_goals, 1):
                 goal_text    = g.get("smartar_goal", "No goal text")
                 needs_ref, low_c = check_goal_needs_refinement(g["id"])
+                streak_type, streak_days = check_goal_streak(g["id"])
                 period       = g.get("tracking_period", "All Day")
+                editing_goal = st.session_state.get(f"editgoal_open_{g['id']}", False)
 
+                title_flag = " ⚠️ NEEDS REFINEMENT" if needs_ref else (
+                    " 🚀 CONSIDER RAISING" if streak_type == "positive" else
+                    " 📉 CONSIDER REVISING" if streak_type == "negative" else ""
+                )
                 with st.expander(
-                    f"Goal {idx} — {_short(goal_text, 80)}"
-                    + (" ⚠️ NEEDS REFINEMENT" if needs_ref else ""),
+                    f"Goal {idx} — {_short(goal_text, 80)}" + title_flag,
+                    expanded=editing_goal,
                 ):
                     if needs_ref:
                         st.markdown(
@@ -1249,8 +1489,8 @@ elif view == "📋 Goal Builder":
                             f'sessions show NOT YET. Please refine this goal.</div>',
                             unsafe_allow_html=True,
                         )
-
-                    editing_goal = st.session_state.get(f"editgoal_open_{g['id']}", False)
+                    if streak_type:
+                        st.markdown(render_streak_alert(streak_type, streak_days), unsafe_allow_html=True)
 
                     if not editing_goal:
                         # ── READ-ONLY DISPLAY ─────────────────────────────────
@@ -1987,6 +2227,7 @@ elif view == "📊 Daily Tracking":
         # today_sessions not used for display — get_session_counts handles counts
         gas            = get_gas_dict(goal)
         needs_ref, low_c = check_goal_needs_refinement(goal["id"])
+        streak_type, streak_days = check_goal_streak(goal["id"])
 
         # Determine which sessions to show based on tracking period
         period   = goal.get("tracking_period", "All Day")
@@ -1999,6 +2240,10 @@ elif view == "📊 Daily Tracking":
                 f'NOT YET. Please refine this goal to make it more achievable.</div>',
                 unsafe_allow_html=True,
             )
+        if streak_type:
+            st.markdown(render_streak_alert(streak_type, streak_days), unsafe_allow_html=True)
+            if st.button("✏️ Edit this goal in Goal Builder", key=f"streak_jump_track_{goal['id']}"):
+                jump_to_edit_goal(selected_name, goal["id"])
         st.markdown(
             f'<div class="smartar-box">🎯 {goal.get("smartar_goal","No goal")}</div>',
             unsafe_allow_html=True,
@@ -2476,49 +2721,31 @@ elif view == "🗺️ Program Snapshot":
                 st.plotly_chart(fig_engagement_funnel(funnel_counts), use_container_width=True,
                                 key=f"funnel_chart_{prog}")
 
-                # ── Student summary table ────────────────────────────────
-                st.markdown("#### Student Summary")
-                table_rows = []
+                # ── All students, all goals, chart underneath each — every ──
+                # student visible at once, no selectbox needed to see a chart.
+                st.markdown("#### 👥 Every Student & Goal")
+                tracking_by_goal = defaultdict(list)
+                for r in prog_tracking:
+                    tracking_by_goal[r["goal_id"]].append(r)
+
                 for sn in prog_snaps:
-                    emoji, label, _ = SNAPSHOT_STATUS_META[sn["status"]]
-                    if sn["goals"]:
-                        rep = next((gi for gi in sn["goals"] if gi["freq"]["status"] == sn["status"]),
-                                  sn["goals"][0])
-                        last_entry  = (rep["freq"]["last_entry"].strftime("%d %b")
-                                       if rep["freq"]["last_entry"] else "Never")
-                        consistency = rep["freq"]["consistency_pct"]
-                        goal_title  = _short(rep["goal"].get("smartar_goal", ""), 50)
-                    else:
-                        last_entry, consistency, goal_title = "—", 0, "No goal set"
-                    table_rows.append({
-                        "Student": sn["student"], "Status": f"{emoji} {label}",
-                        "Goal": goal_title, "Goals": sn["goal_count"],
-                        "Last Entry": last_entry, "Consistency %": consistency,
-                    })
-                st.dataframe(
-                    pd.DataFrame(table_rows), use_container_width=True, hide_index=True,
-                    column_config={
-                        "Consistency %": st.column_config.ProgressColumn(
-                            "Consistency %", min_value=0, max_value=100, format="%d%%",
-                        ),
-                    },
-                )
+                    s_emoji, s_label, s_color = SNAPSHOT_STATUS_META[sn["status"]]
+                    st.markdown(
+                        f'<div style="display:flex;justify-content:space-between;align-items:baseline;'
+                        f'border-bottom:2px solid {s_color};padding:6px 2px;margin-top:20px;">'
+                        f'<div style="font-size:1.05rem;font-weight:700;color:#1f2937;">{sn["student"]}</div>'
+                        f'<div style="font-size:0.78rem;font-weight:700;color:{s_color};">{s_emoji} {s_label}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                    if not sn["goals"]:
+                        st.caption("No SMARTAR goal has been created yet — go to **Goal Builder** to add one.")
+                        continue
 
-                # ── Drill-down ────────────────────────────────────────────
-                st.markdown("#### 🔍 Drill Down")
-                drill_name = st.selectbox(
-                    "Select a student for full detail",
-                    [sn["student"] for sn in prog_snaps], key=f"drill_select_{prog}",
-                )
-                drill_snap = next(sn for sn in prog_snaps if sn["student"] == drill_name)
-
-                if not drill_snap["goals"]:
-                    st.info(f"{drill_name} doesn't have a SMARTAR goal yet. "
-                            "Go to **Goal Builder** to create one.")
-                else:
-                    for gi in drill_snap["goals"]:
+                    for gi in sn["goals"]:
                         g, freq = gi["goal"], gi["freq"]
                         g_emoji, g_label, g_color = SNAPSHOT_STATUS_META[freq["status"]]
+                        streak_type, streak_days = check_goal_streak(g["id"])
                         with st.container(border=True):
                             st.markdown(
                                 f'<div class="smartar-box">🎯 {g.get("smartar_goal","No goal text")} '
@@ -2526,14 +2753,22 @@ elif view == "🗺️ Program Snapshot":
                                 f'{g_emoji} {g_label}</span></div>',
                                 unsafe_allow_html=True,
                             )
+                            if streak_type:
+                                st.markdown(render_streak_alert(streak_type, streak_days),
+                                           unsafe_allow_html=True)
+                                if st.button("✏️ Edit this goal in Goal Builder",
+                                            key=f"streak_jump_snap_{g['id']}"):
+                                    jump_to_edit_goal(sn["student"], g["id"])
+
                             dc1, dc2, dc3 = st.columns(3)
                             dc1.metric("Last entry",
                                       freq["last_entry"].strftime("%d %b") if freq["last_entry"] else "Never")
                             dc2.metric("Consistency (14 days)", f"{freq['consistency_pct']}%")
                             dc3.metric("Tracking period", g.get("tracking_period", "All Day"))
 
-                            goal_rows  = get_tracking(g["id"], days=30)
-                            detail_fig = fig_goal_detail_chart(goal_rows)
+                            # Reuses the bulk program-wide query already fetched
+                            # above — no extra per-goal DB round trip.
+                            detail_fig = fig_goal_detail_chart(tracking_by_goal.get(g["id"], []))
                             if detail_fig:
                                 st.plotly_chart(detail_fig, use_container_width=True,
                                                 key=f"detail_chart_{g['id']}")
@@ -2622,6 +2857,14 @@ elif view == "🗺️ Program Snapshot":
                             '<div class="alert-box">🔴 No tracking has been entered for this goal yet.</div>',
                             unsafe_allow_html=True,
                         )
+
+                    streak_type, streak_days = check_goal_streak(g["id"])
+                    if streak_type:
+                        st.markdown(render_streak_alert(streak_type, streak_days), unsafe_allow_html=True)
+                        if st.button("✏️ Edit this goal in Goal Builder",
+                                    key=f"streak_jump_snaplist_{g['id']}"):
+                            jump_to_edit_goal(snap["student"], g["id"])
+
                     st.markdown("<hr style='margin:8px 0;border:none;border-top:1px solid #eee;'>",
                                unsafe_allow_html=True)
 
@@ -2633,8 +2876,8 @@ elif view == "⚙️ Admin Panel":
     st.title("⚙️ Admin Panel")
     st.caption("Manage students · Pre-populate goals from entry meetings · Edit existing goals")
 
-    tab_students, tab_edit, tab_prepop = st.tabs([
-        "👥 Manage Students", "📝 Edit Goals", "➕ Pre-populate Goals",
+    tab_students, tab_edit, tab_prepop, tab_alerts = st.tabs([
+        "👥 Manage Students", "📝 Edit Goals", "➕ Pre-populate Goals", "✉️ Teacher Alerts",
     ])
 
     # -- Manage Students --------------------------------------------------------
@@ -2997,3 +3240,78 @@ elif view == "⚙️ Admin Panel":
                     st.rerun()
                 else:
                     st.warning("Please enter a SMARTAR goal.")
+
+    # -- Teacher Alerts -----------------------------------------------------
+    with tab_alerts:
+        st.subheader("✉️ Teacher Email Reminders")
+        st.caption(
+            "If an active student has gone 2+ school days with no tracking data "
+            "entered for any of their goals, a reminder email goes to the teacher "
+            "mapped to that student's program."
+        )
+
+        if not email_is_configured():
+            st.warning(
+                "📪 Email isn't set up yet. Add `SMTP_HOST`, `SMTP_PORT` (optional — "
+                "defaults to 587), `SMTP_USER`, `SMTP_PASSWORD`, and optionally "
+                "`SMTP_FROM` to this app's secrets (e.g. your school's Office 365 or "
+                "Google Workspace SMTP credentials — not this file). Until then, "
+                "checks below will run but nothing will actually be emailed."
+            )
+
+        with st.expander("⚙️ One-time setup — database table"):
+            st.caption(
+                "Teacher emails and the daily alert log are stored in Supabase. "
+                "If this is the first time using this tab, run this once in your "
+                "Supabase SQL editor:"
+            )
+            st.code(SMARTAR_SETTINGS_SQL, language="sql")
+
+        st.markdown("---")
+        st.markdown("**Teacher email per program**")
+        current_emails = get_teacher_emails()
+        ecols = st.columns(3)
+        new_emails = {}
+        for ecol, prog in zip(ecols, PROGRAMS):
+            new_emails[prog] = ecol.text_input(
+                f"{prog} teacher email", value=current_emails.get(prog, ""),
+                key=f"teacher_email_{prog}", placeholder="name@school...",
+            )
+        if st.button("💾 Save teacher emails", key="save_teacher_emails"):
+            if set_teacher_emails(new_emails):
+                st.success("✅ Teacher emails saved.")
+                st.rerun()
+
+        st.markdown("---")
+        st.markdown("**Check now**")
+        st.caption(
+            "This also runs automatically once a day — the first time anyone opens "
+            "this app that day — so reminders still go out even if no one visits "
+            "this tab. Use the buttons below to check on demand or confirm it's working. "
+            "A student is only ever emailed about once per calendar day."
+        )
+
+        students_a = get_students()
+        acol1, acol2 = st.columns(2)
+        with acol1:
+            if st.button("🔍 Preview (no emails sent)", key="alert_preview"):
+                st.session_state["alert_check_results"] = run_teacher_alert_check(students_a, dry_run=True)
+        with acol2:
+            if st.button("📧 Check & Send Reminders Now", type="primary", key="alert_send_now"):
+                st.session_state["alert_check_results"] = run_teacher_alert_check(students_a, dry_run=False)
+
+        alert_results = st.session_state.get("alert_check_results")
+        if alert_results is not None:
+            if not alert_results:
+                st.success("✅ No active students currently have 2+ school days of silence.")
+            else:
+                st.dataframe(
+                    pd.DataFrame(alert_results)[
+                        ["student", "program", "days_silent", "teacher_email", "sent", "note"]
+                    ].rename(columns={
+                        "student": "Student", "program": "Program",
+                        "days_silent": "School days silent", "teacher_email": "Teacher email",
+                        "sent": "Sent", "note": "Note",
+                    }),
+                    use_container_width=True, hide_index=True,
+                )
