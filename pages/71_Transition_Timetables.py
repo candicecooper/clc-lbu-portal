@@ -14,8 +14,12 @@ Privacy: Supabase stores INITIALS only. Full name / EDID / DOB are typed
 session only, and never saved.
 
 Access: open to all staff (no password).
-Archive: every save files an initials-only Word copy in the student's
-Document Archive folder via archive_utils.archive_document (supersede=True).
+Workflow: new timetables are DRAFTS (save as often as needed, share with
+colleagues). PUBLISH makes it live (This Week / Bulletin), emails the program
+teacher(s) + Admin + Leadership, and files an initials-only Word copy in the
+student's Document Archive folder. Edits after publishing stay unpublished
+until published again ("UPDATED" email).
+Email settings view is behind the confidential password.
 Needs: transition_utils.py at repo root, SQL in sql/transition_timetables_schema.sql
 """
 
@@ -131,7 +135,8 @@ HEADER_FIELDS = ["student_initials", "program", "home_school", "home_school_shor
 def blank_draft() -> dict:
     return {"id": None, "version": 0, "register_id": None, "student_initials": "", "program": "PY",
             "home_school": "", "home_school_short": "", "home_school_contact": "", "bsc": "",
-            "year_level": "", "recommencement_date": None, "status": "active", "notes": "", "weeks": []}
+            "year_level": "", "recommencement_date": None, "status": "draft", "notes": "", "weeks": [],
+            "published_version": None}
 
 
 ss = st.session_state
@@ -248,6 +253,42 @@ def cb_new():
     load_into_editor(None)
 
 
+def do_publish(row: dict, by: str, note: str) -> str:
+    """Publish + build the message shown after rerun."""
+    with st.spinner("Publishing — emailing staff and filing in the Document Archive…"):
+        res = tu.publish_timetable(client, row, by, note)
+    ini = row.get("student_initials")
+    msg = f"🚀 Published {ini} (v{row.get('version')}). It now shows in This Week and the Bulletin lines."
+    msg += (f"  📧 {res['email_msg']}" if res["email_ok"]
+            else f"  ⚠️ {res['email_msg']} Use **Resend email** in Timetables once fixed.")
+    msg += (f"  🗄️ Filed in {ini}'s Document Archive folder." if res["archive_ok"]
+            else "  ⚠️ Couldn't file it in the Document Archive — please check the archive.")
+    return msg
+
+
+def confidential_gate() -> bool:
+    """Admin & Leadership only — uses the portal's shared confidential_auth.py."""
+    try:
+        import confidential_auth as ca
+        for fn_name in ("require_confidential_auth", "require_confidential", "confidential_gate",
+                        "check_confidential_password", "check_password"):
+            fn = getattr(ca, fn_name, None)
+            if callable(fn):
+                return fn() is not False
+    except Exception:
+        pass
+    if ss.get("tt_conf_ok"):
+        return True
+    pw_secret = tu._secret("CONFIDENTIAL_PASSWORD", "confidential_password", "ADMIN_PASSWORD")
+    pw = st.text_input("Admin / Leadership password", type="password", key="tt_conf_pw")
+    if pw and pw_secret and pw == pw_secret:
+        ss.tt_conf_ok = True
+        st.rerun()
+    elif pw:
+        st.error("Incorrect password.")
+    return False
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Shared renderers
 # ──────────────────────────────────────────────────────────────────────────
@@ -302,7 +343,7 @@ def stepdown_sentence(weeks: list[dict]) -> str:
 # ──────────────────────────────────────────────────────────────────────────
 # Navigation
 # ──────────────────────────────────────────────────────────────────────────
-VIEWS = ["📅 This Week", "🗂️ Timetables", "✏️ Create / Edit"]
+VIEWS = ["📅 This Week", "🗂️ Timetables", "✏️ Create / Edit", "⚙️ Email settings"]
 if "tt_goto" in ss:
     ss.tt_view = ss.pop("tt_goto")
 if k("program") not in ss:
@@ -325,7 +366,9 @@ if view == VIEWS[0]:
     tw = tu.term_week_for(mon)
     st.subheader(f"Week of {mon.strftime('%d/%m/%Y')}" + (f" — Term {tw[1]} Week {tw[2]}" if tw else " — school holidays"))
 
-    tts = [t for t in load_all(include_complete=False)]
+    all_open = load_all(include_complete=False)
+    tts = [v for v in (tu.live_view(t) for t in all_open) if v]   # published versions only
+    n_drafts = sum(1 for t in all_open if t.get("status") == tu.DRAFT)
     rows = []
     for tt in tts:
         wk = tt.get("weeks") or []
@@ -347,7 +390,9 @@ if view == VIEWS[0]:
                      f'{html.escape(tt.get("program", ""))}<br><small>{html.escape(short)}</small></td>{cells}</tr>')
         st.markdown(f'<table class="tt-grid"><tr><th>Student</th>{head}</tr>{body}</table>',
                     unsafe_allow_html=True)
-        st.caption("Yellow = at home school. Green = at CLC.")
+        st.caption("Yellow = at home school. Green = at CLC. Published timetables only.")
+    if n_drafts:
+        st.caption(f"📝 {n_drafts} draft timetable(s) not shown — they appear here once published.")
 
     # Daily Bulletin preview
     with st.expander("📰 Daily Bulletin lines for a day", expanded=False):
@@ -391,7 +436,9 @@ elif view == VIEWS[1]:
 
     tts = load_all(include_complete=True)
     if not show_done:
-        tts = [t for t in tts if t.get("status") == "active"]
+        tts = [t for t in tts if t.get("status") != tu.COMPLETE]
+    order = {tu.DRAFT: 0, tu.PUBLISHED: 1, "active": 1, tu.COMPLETE: 2}
+    tts.sort(key=lambda t: (order.get(t.get("status"), 1), t.get("program", ""), t.get("student_initials", "")))
     if search:
         s = search.lower()
         tts = [t for t in tts if s in (t.get("student_initials", "") + " " + t.get("home_school", "")).lower()]
@@ -402,8 +449,7 @@ elif view == VIEWS[1]:
     for tt in tts:
         wk = tt.get("weeks") or []
         lc = tu.last_clc_day(wk)
-        badge = "🟢" if tt.get("status") == "active" else "✅"
-        title = (f"{badge} {tt.get('student_initials')} · {tt.get('program')} — {tt.get('home_school') or 'home school?'}"
+        title = (f"{tu.status_label(tt)} · {tt.get('student_initials')} · {tt.get('program')} — {tt.get('home_school') or 'home school?'}"
                  + (f"  ·  last CLC day {lc.strftime('%d/%m')}" if lc else ""))
         with st.expander(title):
             a, b = st.columns([1, 1])
@@ -414,7 +460,16 @@ elif view == VIEWS[1]:
                 f"**BSC:** {tt.get('bsc') or '—'}  \n"
                 f"**Year level:** {tt.get('year_level') or '—'}  \n"
                 f"**Recommencement:** {tu.recommencement_text(date.fromisoformat(rec)) if rec else '—'}  \n"
-                f"**Version {tt.get('version', 1)}** · updated by {tt.get('updated_by') or tt.get('created_by') or '—'}")
+                f"**Version {tt.get('version', 1)}** · updated by {tt.get('updated_by') or tt.get('created_by') or '—'}"
+                + (f"  \n**Published:** v{tt.get('published_version')} by {tt.get('published_by') or '—'} "
+                   f"on {str(tt.get('published_at') or '')[:10]}"
+                   + ("" if tt.get("publish_email_ok", True) else " · ⚠️ email not sent")
+                   if tt.get("published_version") else ""))
+            if tt.get("status") == tu.DRAFT:
+                a.info("📝 Draft — not yet sent to anyone. Check it with colleagues, then **Publish**.")
+            elif tu.has_unpublished_changes(tt):
+                a.warning(f"🟠 Saved changes (v{tt.get('version')}) aren't live yet — v{tt.get('published_version')} "
+                          "is what staff see. **Publish** to send the update.")
             if tt.get("notes"):
                 a.caption(tt["notes"])
             with b:
@@ -423,18 +478,47 @@ elif view == VIEWS[1]:
                 if sent:
                     st.markdown(sent)
 
-            bc = st.columns(4)
+            bc = st.columns(5)
             if bc[0].button("✏️ Edit / export", key=f"ed_{tt['id']}"):
                 load_into_editor(tt, flash=f"Loaded {tt.get('student_initials')}. Add full name/EDID/DOB in the export box if you need the Word file.")
                 st.rerun()
-            if tt.get("status") == "active":
+            stt = tt.get("status")
+            if stt == tu.DRAFT or tu.has_unpublished_changes(tt) or stt == "active":
+                with bc[1].popover("🚀 Publish" if stt == tu.DRAFT else "🚀 Publish changes"):
+                    st.caption("Emails the " + (tt.get("program") or "program") + " teacher(s), Admin and Leadership, "
+                               "and files a copy in the Document Archive.")
+                    if f"pbn_{tt['id']}" not in ss:
+                        ss[f"pbn_{tt['id']}"] = ss.get("tt_name", "")
+                    pb = st.text_input("Your name", key=f"pbn_{tt['id']}")
+                    pn = st.text_input("What changed? (optional)", key=f"pbc_{tt['id']}")
+                    if st.button("Publish now", type="primary", key=f"pb_{tt['id']}"):
+                        if not pb.strip():
+                            st.error("Add your name.")
+                        else:
+                            ss.tt_name = pb.strip()
+                            ss.tt_flash = do_publish(tt, pb.strip(), pn.strip())
+                            st.rerun()
+            elif stt == tu.PUBLISHED:
                 if bc[1].button("✅ Mark complete", key=f"cp_{tt['id']}"):
-                    tu.set_status(client, tt["id"], "complete"); st.rerun()
-            else:
+                    tu.set_status(client, tt["id"], tu.COMPLETE); st.rerun()
+            elif stt == tu.COMPLETE:
                 if bc[1].button("↩️ Reactivate", key=f"ra_{tt['id']}"):
-                    tu.set_status(client, tt["id"], "active"); st.rerun()
-            show_hist = bc[2].toggle("History", key=f"hi_{tt['id']}")
-            with bc[3].popover("🗑️ Delete"):
+                    tu.set_status(client, tt["id"], tu.PUBLISHED if tt.get("published_version") else tu.DRAFT)
+                    st.rerun()
+            if tu.is_live(tt) and tt.get("publish_email_ok") is False:
+                if bc[2].button("📧 Resend email", key=f"re_{tt['id']}"):
+                    live = tu.live_view(tt)
+                    ok, msg = tu.send_email(tu.recipients_for(client, live.get("program") or ""),
+                                            f"Transition timetable — {live.get('student_initials')} ({live.get('program')})",
+                                            tu.timetable_email_html(live, bool(tt.get("published_version")),
+                                                                    tt.get("published_by") or "—", "",
+                                                                    tu.portal_page_url()))
+                    if ok:
+                        client.table(tu.TABLE_TIMETABLES).update({"publish_email_ok": True}).eq("id", tt["id"]).execute()
+                    ss.tt_flash = ("📧 " if ok else "⚠️ ") + msg
+                    st.rerun()
+            show_hist = bc[3].toggle("History", key=f"hi_{tt['id']}")
+            with bc[4].popover("🗑️ Delete"):
                 st.warning("Deletes this timetable and all its saved versions. This can't be undone. "
                            "Use **Mark complete** instead if the transition has simply finished.")
                 if st.checkbox("I understand", key=f"dc_{tt['id']}") and st.button("Delete permanently", key=f"dl_{tt['id']}"):
@@ -462,11 +546,23 @@ elif view == VIEWS[1]:
 # ══════════════════════════════════════════════════════════════════════════
 # ✏️ CREATE / EDIT
 # ══════════════════════════════════════════════════════════════════════════
-else:
+elif view == VIEWS[2]:
     dr = ss.tt_draft
     top = st.columns([3, 1])
     top[0].subheader(("Editing " + dr["student_initials"] + f" (v{dr['version']})") if dr.get("id") else "New transition timetable")
     top[1].button("➕ Start a new one", on_click=cb_new)
+    if not dr.get("id"):
+        st.caption("📝 New timetables are saved as a **Draft**. Nothing is sent until you **Publish**.")
+    elif dr.get("status") == tu.DRAFT:
+        st.info("📝 **Draft** — only visible here. Save as often as you like; Publish when it's checked.")
+    elif dr.get("status") == tu.COMPLETE:
+        st.info("✅ This transition is marked complete.")
+    elif dr.get("published_version") and int(dr.get("version") or 0) > int(dr["published_version"]):
+        st.warning(f"🟠 Published v{dr['published_version']} is live. Your saved changes (v{dr['version']}) "
+                   "aren't live until you publish them.")
+    else:
+        st.success(f"🟢 Published (v{dr.get('published_version') or dr.get('version')}). "
+                   "Edits you save stay as unpublished changes until you publish again.")
 
     # ── Upload an existing Word timetable
     with st.expander("📥 Start from an existing Word timetable", expanded=not dr.get("id") and not dr["weeks"]):
@@ -603,14 +699,23 @@ else:
         if lc:
             pc[1].markdown(f"Last scheduled CLC day: **{lc.strftime('%a %d/%m/%Y')}**")
 
-    # ── Save
-    st.markdown("#### Save")
-    sc = st.columns([2, 3, 1])
+    # ── Save / publish
+    st.markdown("#### Save & publish")
+    sc = st.columns([2, 3])
+    if "tt_saved_by" not in ss:
+        ss.tt_saved_by = ss.get("tt_name", "")
     saved_by = sc[0].text_input("Your name", key="tt_saved_by")
+    ss.tt_name = saved_by
     note = sc[1].text_input("What changed? (optional)", key=k("note"),
                             placeholder="e.g. Added Week 3, Thursday now full day at home school")
-    sc[2].markdown("<div style='height:1.7rem'></div>", unsafe_allow_html=True)
-    if sc[2].button("💾 Save", type="primary", key=k("save")):
+    is_draft = (not dr.get("id")) or dr.get("status") == tu.DRAFT
+    bc_ = st.columns([1, 1, 2])
+    save_clicked = bc_[0].button("💾 Save draft" if is_draft else "💾 Save changes", key=k("save"))
+    pub_clicked = bc_[1].button("🚀 Save & publish", type="primary", key=k("pub"),
+                                disabled=dr.get("status") == tu.COMPLETE)
+    bc_[2].caption(f"Publish emails the {dr.get('program') or 'program'} teacher(s), Admin and Leadership, "
+                   "and files a copy in the student's Document Archive folder.")
+    if save_clicked or pub_clicked:
         problems = []
         if not dr["student_initials"]:
             problems.append("student initials")
@@ -625,22 +730,24 @@ else:
                 dup = [t for t in load_all(include_complete=False) if t.get("student_initials") == dr["student_initials"]]
                 if dup and not ss.get(k("dup_ok")):
                     ss[k("dup_ok")] = True
-                    st.warning(f"{dr['student_initials']} already has an active timetable. "
-                               "Edit that one from Timetables, or press Save again to create a second.")
+                    st.warning(f"{dr['student_initials']} already has an open timetable. "
+                               "Edit that one from Timetables, or press the button again to create a second.")
                     st.stop()
             try:
                 row = tu.save_timetable(client, dr, saved_by.strip(), note)
+                row.setdefault("published_version", dr.get("published_version"))
             except Exception as e:
                 st.error(f"Save failed: {e}")
             else:
-                msg = f"Saved {row.get('student_initials')} — version {row.get('version')}."
-                with st.spinner("Filing in Document Archive…"):
-                    arc = tu.archive_timetable(row, saved_by.strip(), note)
-                if arc:
-                    msg += f" 🗄️ Filed in {row.get('student_initials')}'s Document Archive folder (replaces the previous copy)."
+                if pub_clicked:
+                    msg = do_publish(row, saved_by.strip(), note)
+                    row.update(status=tu.PUBLISHED, published_version=row.get("version"))
+                elif row.get("status") == tu.DRAFT:
+                    msg = (f"📝 Saved draft {row.get('student_initials')} (v{row.get('version')}). "
+                           "Nothing has been sent — Publish when it's ready.")
                 else:
-                    msg += (" ⚠️ Couldn't file it in the Document Archive — the timetable is saved here, "
-                            "but check the archive and let Candice know.")
+                    msg = (f"💾 Saved v{row.get('version')}. These changes aren't live yet — "
+                           "press **Save & publish** to send the update.")
                 load_into_editor(row, sensitive=ss.tt_sensitive, flash=msg)
                 st.rerun()
 
@@ -664,3 +771,68 @@ else:
                                    type="primary", key=k("dl"))
             except Exception as e:
                 st.error(f"Couldn't build the Word file: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ⚙️ EMAIL SETTINGS (Admin & Leadership)
+# ══════════════════════════════════════════════════════════════════════════
+else:
+    st.subheader("📧 Who gets published timetables")
+    st.caption("When a timetable is published, it goes to everyone active under that student's program "
+               "(JP, PY or SY), plus everyone under Admin and Leadership.")
+    if confidential_gate():
+        try:
+            recips = tu.load_recipients(client, active_only=False)
+        except Exception as e:
+            recips = []
+            st.error(f"Couldn't load recipients — has the SQL been run? ({e})")
+        for role in tu.RECIPIENT_ROLES:
+            group = [r for r in recips if r.get("role") == role]
+            st.markdown(f"**{role}**" + ("" if group else "  — _nobody yet_"))
+            for rc in group:
+                c1, c2, c3, c4 = st.columns([3, 4, 1, 1])
+                c1.write(rc.get("name") or "")
+                c2.write(rc.get("email") or "")
+                act = c3.checkbox("Active", value=bool(rc.get("active")), key=f"rca_{rc['id']}")
+                if act != bool(rc.get("active")):
+                    client.table(tu.TABLE_RECIPIENTS).update({"active": act}).eq("id", rc["id"]).execute()
+                    st.rerun()
+                if c4.button("Remove", key=f"rcd_{rc['id']}"):
+                    client.table(tu.TABLE_RECIPIENTS).delete().eq("id", rc["id"]).execute()
+                    st.rerun()
+
+        with st.form("tt_add_recipient", clear_on_submit=True):
+            c1, c2, c3 = st.columns([3, 4, 2])
+            rn = c1.text_input("Name")
+            re_ = c2.text_input("Email")
+            rr = c3.selectbox("Group", tu.RECIPIENT_ROLES)
+            if st.form_submit_button("Add recipient"):
+                if rn.strip() and "@" in re_:
+                    client.table(tu.TABLE_RECIPIENTS).insert(
+                        {"name": rn.strip(), "email": re_.strip(), "role": rr, "active": True}).execute()
+                    st.rerun()
+                else:
+                    st.error("Enter a name and a valid email.")
+
+        cc = st.columns(2)
+        if cc[0].button("Copy Admin & Leadership from Hazard Report"):
+            try:
+                hz = client.table("hazard_recipients").select("*").eq("active", True).execute().data or []
+            except Exception:
+                hz = []
+            have = {(r.get("email", "").lower(), r.get("role")) for r in recips}
+            new = [{"name": h.get("name"), "email": h.get("email"), "role": h.get("role"), "active": True}
+                   for h in hz if h.get("role") in ("Admin", "Leadership")
+                   and (str(h.get("email", "")).lower(), h.get("role")) not in have]
+            if new:
+                client.table(tu.TABLE_RECIPIENTS).insert(new).execute()
+                ss.tt_flash = f"Copied {len(new)} recipient(s) from the Hazard Report."
+                st.rerun()
+            else:
+                st.info("Nothing new to copy (or the Hazard Report list isn't in this database).")
+        if recips and cc[1].button("Send a test email to all active recipients"):
+            ok, msg = tu.send_email([r["email"] for r in recips if r.get("active")],
+                                    "TEST — Transition Timetables email",
+                                    "<p>This is a test from the CLC portal's Transition Timetables tool. "
+                                    "Published timetables will arrive like this.</p>")
+            (st.success if ok else st.error)(msg)
