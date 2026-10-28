@@ -60,6 +60,14 @@ LOC_CLC, LOC_HOME, LOC_OTHER = "CLC", "HOME", "OTHER"
 
 TABLE_TIMETABLES = "transition_timetables"
 TABLE_HISTORY = "transition_timetable_history"
+TABLE_RECIPIENTS = "transition_timetable_recipients"
+
+# Status flow: draft → published → complete
+DRAFT, PUBLISHED, COMPLETE = "draft", "published", "complete"
+LEGACY_LIVE = "active"          # rows saved before draft/publish existed
+RECIPIENT_ROLES = ["JP", "PY", "SY", "Admin", "Leadership"]
+SNAP_FIELDS = ("student_initials", "program", "home_school", "home_school_short", "home_school_contact",
+               "bsc", "year_level", "recommencement_date", "weeks", "notes")
 
 LOGO_PATH = Path(__file__).parent / "data" / "transition_timetables" / "clc_logo.jpeg"
 
@@ -604,10 +612,43 @@ def get_students_client():
 
 
 def load_timetables(client, include_complete: bool = True) -> list[dict]:
-    q = client.table(TABLE_TIMETABLES).select("*").order("updated_at", desc=True)
+    rows = client.table(TABLE_TIMETABLES).select("*").order("updated_at", desc=True).execute().data or []
     if not include_complete:
-        q = q.eq("status", "active")
-    return q.execute().data or []
+        rows = [r for r in rows if r.get("status") != COMPLETE]
+    return rows
+
+
+def is_live(tt: dict) -> bool:
+    return tt.get("status") in (PUBLISHED, LEGACY_LIVE)
+
+
+def live_view(tt: dict) -> dict | None:
+    """The PUBLISHED version of a timetable (what This Week / Bulletin show).
+    Edits saved after publishing stay out of this until it's published again."""
+    if not is_live(tt):
+        return None
+    snap = tt.get("published_snapshot")
+    if snap:
+        v = dict(tt)
+        v.update(snap)
+        return v
+    return tt
+
+
+def has_unpublished_changes(tt: dict) -> bool:
+    return (tt.get("status") == PUBLISHED
+            and int(tt.get("version") or 0) > int(tt.get("published_version") or 0))
+
+
+def status_label(tt: dict) -> str:
+    stt = tt.get("status")
+    if stt == DRAFT:
+        return "📝 Draft"
+    if stt == COMPLETE:
+        return "✅ Complete"
+    if has_unpublished_changes(tt):
+        return "🟠 Published — unpublished changes"
+    return "🟢 Published"
 
 
 def save_timetable(client, record: dict, saved_by: str, change_note: str = "") -> dict:
@@ -617,6 +658,10 @@ def save_timetable(client, record: dict, saved_by: str, change_note: str = "") -
         "student_initials", "register_id", "program", "home_school", "home_school_short", "home_school_contact",
         "bsc", "year_level", "recommencement_date", "status", "weeks", "notes")}
     payload["weeks"] = sort_weeks(payload.get("weeks") or [])
+    if payload.get("status") == LEGACY_LIVE:
+        payload["status"] = PUBLISHED
+    if not payload.get("status"):
+        payload["status"] = DRAFT
     payload["updated_at"] = now
     payload["updated_by"] = saved_by
     if record.get("id"):
@@ -625,7 +670,7 @@ def save_timetable(client, record: dict, saved_by: str, change_note: str = "") -
     else:
         payload["version"] = 1
         payload["created_by"] = saved_by
-        payload.setdefault("status", "active")
+        payload["status"] = DRAFT
         res = client.table(TABLE_TIMETABLES).insert(payload).execute()
     row = (res.data or [payload])[0]
     try:
@@ -660,15 +705,16 @@ def delete_timetable(client, timetable_id: str):
 # For the Daily Bulletin / Calendar
 # ──────────────────────────────────────────────────────────────────────────
 def where_is_everyone(timetables: list[dict], d: date) -> list[dict]:
-    """[{initials, program, day, home_school}] for active timetables on date d."""
+    """[{initials, program, day, home_school}] for PUBLISHED timetables on date d."""
     out = []
     for tt in timetables:
-        if tt.get("status") != "active":
-            continue
-        day = day_for(tt.get("weeks") or [], d)
+        live = live_view(tt)
+        if not live:
+            continue  # drafts and completed timetables never show
+        day = day_for(live.get("weeks") or [], d)
         if day:
-            out.append({"initials": tt.get("student_initials", ""), "program": tt.get("program", ""),
-                        "home_school": tt.get("home_school_short") or school_short_name(tt.get("home_school", "")),
+            out.append({"initials": live.get("student_initials", ""), "program": live.get("program", ""),
+                        "home_school": live.get("home_school_short") or school_short_name(live.get("home_school", "")),
                         "day": day})
     return sorted(out, key=lambda x: (x["program"], x["initials"]))
 
@@ -737,3 +783,131 @@ def archive_timetable(record: dict, saved_by: str, change_note: str = "") -> dic
         )
     except Exception:
         return None
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Email (same Google Apps Script mailer as the Hazard Report / Credit Card tools)
+# ──────────────────────────────────────────────────────────────────────────
+def portal_page_url() -> str:
+    base = _secret("PORTAL_URL") or "https://clc-lbu-portal.onrender.com"
+    return f"{base.rstrip('/')}/Transition_Timetables"
+
+
+def send_email(recipients: list[str], subject: str, html_body: str) -> tuple[bool, str]:
+    """POST to the CLC Portal Mailer (EMAIL_WEBHOOK_URL / EMAIL_WEBHOOK_TOKEN)."""
+    import json
+    import urllib.request
+    recipients = sorted({r.strip() for r in recipients if r and "@" in r})
+    if not recipients:
+        return False, "No email recipients are set up for this program (⚙️ Email settings)."
+    url = _secret("EMAIL_WEBHOOK_URL", "email.webhook_url")
+    token = _secret("EMAIL_WEBHOOK_TOKEN", "email.webhook_token")
+    if not url:
+        return False, "Email isn't set up on the portal (EMAIL_WEBHOOK_URL missing)."
+    try:
+        body = json.dumps({"token": token, "to": ",".join(recipients),
+                           "subject": subject, "html": html_body}).encode()
+        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            reply = resp.read().decode(errors="ignore").strip()
+    except Exception as e:
+        return False, f"Email failed: {e}"
+    if reply.startswith("OK"):
+        return True, f"Email sent to {len(recipients)} recipient(s)."
+    return False, f"Email failed: mailer replied '{reply[:150]}'"
+
+
+def load_recipients(client, active_only: bool = True) -> list[dict]:
+    rows = client.table(TABLE_RECIPIENTS).select("*").order("role").order("name").execute().data or []
+    return [r for r in rows if r.get("active")] if active_only else rows
+
+
+def recipients_for(client, program: str) -> list[str]:
+    roles = {program, "Admin", "Leadership"}
+    return [r["email"] for r in load_recipients(client) if r.get("role") in roles]
+
+
+def _esc(x) -> str:
+    import html as _h
+    return _h.escape(str(x or ""))
+
+
+def timetable_email_html(rec: dict, updated: bool, by: str, note: str, url: str) -> str:
+    """Initials-only HTML summary of the published timetable."""
+    ini, prog = rec.get("student_initials", ""), rec.get("program", "")
+    short = rec.get("home_school_short") or school_short_name(rec.get("home_school", ""))
+    rd = rec.get("recommencement_date")
+    rec_txt = recommencement_text(date.fromisoformat(rd)) if rd else "—"
+    head = "Updated transition timetable" if updated else "New transition timetable"
+    rows_html = ""
+    for w in sort_weeks(rec.get("weeks") or []):
+        mon = week_monday(w["year"], w["term"], w["week"])
+        cells = ""
+        for i, day in enumerate(w["days"]):
+            home = day["loc"] != LOC_CLC
+            place = "CLC" if day["loc"] == LOC_CLC else (short or "Home school") if day["loc"] == LOC_HOME \
+                else (day.get("other") or "Other")
+            extra = day["label"].upper() if day.get("label") else fmt_time_range(day)
+            bg = "#FFF59D" if home else "#EEF6EA"
+            cells += (f'<td style="border:1px solid #ccc;padding:6px;text-align:center;background:{bg};'
+                      f'{"font-weight:bold;" if home else ""}">{_esc(place)}<br>'
+                      f'<span style="font-size:12px">{_esc(extra)}</span></td>')
+        rows_html += (f'<tr><td style="border:1px solid #ccc;padding:6px;white-space:nowrap">'
+                      f'<b>T{w["term"]} W{w["week"]}</b><br><span style="font-size:12px">'
+                      f'{mon.strftime("%d/%m")}–{(mon + timedelta(days=4)).strftime("%d/%m")}</span></td>{cells}</tr>')
+    day_heads = "".join(f'<th style="border:1px solid #ccc;padding:6px;background:#C5E0B3">{d}</th>'
+                        for d in DAY_NAMES)
+    note_html = f'<p><b>What changed:</b> {_esc(note)}</p>' if (note and updated) else ""
+    return f"""
+<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222">
+  <h2 style="color:#2d5a22;margin:0 0 6px">{head}: {_esc(ini)} · {_esc(prog)}</h2>
+  <p style="margin:0 0 12px;color:#555">Published by {_esc(by)} in the CLC portal.</p>
+  {note_html}
+  <table style="border-collapse:collapse;margin-bottom:12px">
+    <tr><td style="padding:2px 12px 2px 0"><b>Home school</b></td><td>{_esc(rec.get("home_school")) or "—"}</td></tr>
+    <tr><td style="padding:2px 12px 2px 0"><b>Home school contact</b></td><td>{_esc(rec.get("home_school_contact")) or "—"}</td></tr>
+    <tr><td style="padding:2px 12px 2px 0"><b>BSC</b></td><td>{_esc(rec.get("bsc")) or "—"}</td></tr>
+    <tr><td style="padding:2px 12px 2px 0"><b>Recommencement at home school</b></td><td>{_esc(rec_txt)}</td></tr>
+  </table>
+  <table style="border-collapse:collapse;font-size:13px">
+    <tr><th style="border:1px solid #ccc;padding:6px;background:#C5E0B3">Week</th>{day_heads}</tr>
+    {rows_html}
+  </table>
+  <p style="font-size:12px;color:#555">Yellow = at home school. Green = at CLC.</p>
+  <p>An initials-only Word copy has been filed in {_esc(ini)}'s Document Archive folder.</p>
+  <p><a href="{_esc(url)}" style="background:#2d5a22;color:#fff;padding:8px 14px;border-radius:4px;
+     text-decoration:none">Open Transition Timetables</a></p>
+</div>"""
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Publish
+# ──────────────────────────────────────────────────────────────────────────
+def publish_timetable(client, row: dict, published_by: str, change_note: str = "") -> dict:
+    """Make the saved version live, file it in the archive and email the program
+    teacher(s), Admin and Leadership. Returns a result dict; never raises after
+    the status update succeeds."""
+    updated = row.get("published_version") is not None or row.get("status") == LEGACY_LIVE
+    snapshot = {f: row.get(f) for f in SNAP_FIELDS}
+    now = datetime.utcnow().isoformat()
+    upd = {"status": PUBLISHED, "published_snapshot": snapshot, "published_version": row.get("version"),
+           "published_at": now, "published_by": published_by}
+    client.table(TABLE_TIMETABLES).update(upd).eq("id", row["id"]).execute()
+    live = dict(row); live.update(upd)
+
+    arc = archive_timetable(live, published_by, change_note)
+
+    try:
+        to = recipients_for(client, row.get("program") or "")
+    except Exception:
+        to = []
+    ini, prog = row.get("student_initials", ""), row.get("program", "")
+    subject = (f"{'UPDATED' if updated else 'New'} transition timetable — {ini} ({prog})")
+    email_ok, email_msg = send_email(to, subject,
+                                     timetable_email_html(live, updated, published_by, change_note, portal_page_url()))
+    try:
+        client.table(TABLE_TIMETABLES).update({"publish_email_ok": email_ok}).eq("id", row["id"]).execute()
+    except Exception:
+        pass
+    live["publish_email_ok"] = email_ok
+    return {"row": live, "updated": updated, "archive_ok": bool(arc), "email_ok": email_ok, "email_msg": email_msg}
