@@ -3,7 +3,7 @@
 =======================================
 
 One screen per student for case meetings: SMARTAR goals, behaviour data
-(Behaviour Support Tool + Scatter Plot Tracker) and the Transition
+(Behaviour Support Tool + Window of Tolerance) and the Transition
 Timetable, plus the student's filed documents — without opening each tool
 and finding the student again.
 
@@ -15,7 +15,8 @@ Where the data comes from
   • Goals ............... smartar_goals / smartar_tracking   (SMARTAR Goal Builder, SGoal Quick Track)
   • Incidents ........... incidents / critical_incidents     (Behaviour Support Tool, Quick Incident Log)
   • Absences ............ student_attendance                  (Behaviour Support Tool)
-  • Scatter plot ........ scatter_students / scatter_weekly_data (Scatter Plot Tracker)
+  • Window of Tolerance . wot_builder_reports (Window of Tolerance Builder); if none built yet,
+                          the Behaviour Support Tool's own draft from incident data
   • Transition .......... transition_timetables               (Transition Timetables, via transition_utils)
   • Documents ........... document_archive                    (Document Archive)
   • Profile ............. starting_profiles / support_plans / strategy_trials (Behaviour Support Tool)
@@ -85,6 +86,18 @@ TEAL, TEAL_LIGHT, AMBER, AMBER_LIGHT = "#1A7A7A", "#e8f2f2", "#C8760A", "#fdf3e3
 RED, GREEN, GREY = "#c0392b", "#1a7a3c", "#6b7c7c"
 ADELAIDE_TZ = ZoneInfo("Australia/Adelaide")
 PORTAL = "https://clc-lbu-portal.onrender.com"
+WOT_BUILDER_URL = "https://clc-portal.pages.dev/window-of-tolerance-builder.html"
+
+# Same five zones, order and colours as the Window of Tolerance Builder
+WOT_ZONE_META = [
+    ("hyper", "Mobilisation — Hyperarousal", "fight / flight", "#AF3A2C", "#F5E1DC"),
+    ("copingup", "Coping — moving toward Hyperarousal", "", "#B9761A", "#F3E5CC"),
+    ("wot", "Window of Tolerance", "regulated, engaged, learning", "#2E7A48", "#DDEBE0"),
+    ("copingdown", "Coping — moving toward Hypoarousal", "", "#2A6693", "#DCE7EF"),
+    ("hypo", "Immobilisation — Hypoarousal", "shut down / freeze", "#3C4C6B", "#E1E4EB"),
+]
+WOT_COLS = [("context", "When / where"), ("behaviour", "What it looks like"),
+            ("interventions", "What helps")]
 
 LEVEL_ORDER = ["EXCEEDING", "ABOVE", "EXPECTED", "BELOW", "NOT YET"]
 LEVEL_EMOJI = {"EXCEEDING": "🌟", "ABOVE": "✅", "EXPECTED": "🎯", "BELOW": "⚠️", "NOT YET": "❌"}
@@ -141,6 +154,36 @@ st.markdown(f"""
                font-size: .82rem; min-height: 64px; border: 1px solid #d6e4e4; }}
   .day-cell .dn {{ font-weight: 700; font-size: .78rem; text-transform: uppercase; }}
   .muted {{ color: {GREY}; font-size: .85rem; }}
+  .strip-lbl {{ color: {GREY}; font-size: .72rem; font-weight: 700; text-transform: uppercase;
+                letter-spacing: .08em; margin: .9rem 0 .35rem; }}
+  .hyp {{ background: #f0f7f4; border: 1.5px solid {GREEN}; border-radius: 10px;
+          padding: .9rem 1.1rem; font-size: .9rem; line-height: 1.6; color: #1f2d2d; }}
+  .hyp .ttl {{ font-weight: 700; color: {GREEN}; margin-bottom: .35rem; }}
+  .kv {{ background: white; border: 1px solid #d6e4e4; border-radius: 8px; padding: .5rem .7rem;
+         height: 100%; }}
+  .kv .k {{ font-size: .7rem; font-weight: 700; color: {GREY}; text-transform: uppercase;
+            letter-spacing: .05em; }}
+  .kv .v {{ font-size: .86rem; color: #1f2d2d; margin-top: .15rem; line-height: 1.4; }}
+  .listbox {{ background: white; border: 1px solid #d6e4e4; border-radius: 10px;
+              padding: .6rem .85rem; height: 100%; font-size: .87rem; }}
+  .listbox .h {{ font-weight: 700; color: {TEAL}; margin-bottom: .25rem; }}
+  .listbox ul {{ margin: 0; padding-left: 1.1rem; }}
+  .risk {{ display:flex; gap:.7rem; align-items:flex-start; background:white; border:1px solid #d6e4e4;
+           border-radius:8px; padding:.5rem .7rem; margin:.3rem 0; font-size:.87rem; }}
+  .risk .lvl {{ min-width:74px; text-align:center; border-radius:6px; color:white; font-weight:700;
+                font-size:.72rem; padding:.25rem .3rem; }}
+  .wot {{ display:flex; flex-direction:column; gap:.4rem; }}
+  .wot-row {{ display:grid; grid-template-columns: 1.1fr 1.4fr 1.4fr 1.4fr; gap:.7rem;
+              border-radius:8px; padding:.6rem .8rem; font-size:.84rem; color:#1f2d2d; }}
+  .wot-lbl {{ font-size:.85rem; line-height:1.3; }}
+  .wot-sub {{ font-size:.74rem; color:{GREY}; font-weight:400; margin-top:.15rem; }}
+  .wot-n {{ font-size:.72rem; color:{GREY}; margin-top:.3rem; }}
+  .wot-h {{ font-size:.68rem; font-weight:700; text-transform:uppercase; letter-spacing:.05em;
+            color:{GREY}; margin-bottom:.15rem; }}
+  .wot-cell ul {{ margin:0; padding-left:1rem; }}
+  @media (max-width: 760px) {{ .wot-row {{ grid-template-columns: 1fr; }} }}
+  .sens {{ display:inline-block; border-radius:999px; padding:.15rem .6rem; margin:.15rem .25rem .15rem 0;
+           font-size:.78rem; font-weight:600; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -162,7 +205,7 @@ def _secret(*names):
 
 
 def _make_main_client():
-    """The project the SMARTAR, Behaviour Support and Scatter Plot tools use
+    """The project the SMARTAR and Behaviour Support tools use
     (secrets [supabase] url/key). Falls back to the archive's project."""
     from supabase import create_client
     url = key = None
@@ -290,8 +333,8 @@ def load_behaviour(ini: str) -> dict:
             return out
         out["incidents"] = _q("main", lambda c: c.table("incidents")
                               .select("id, student_id, date, time, day_of_week, session, location, "
-                                      "behaviour_type, antecedent, severity, hypothesis_function, "
-                                      "hypothesis_item, is_critical, duration_minutes")
+                                      "behaviour_type, antecedent, intervention, description, severity, "
+                                      "hypothesis_function, hypothesis_item, is_critical, duration_minutes")
                               .in_("student_id", ids).execute().data or [])
         out["critical"] = _q("main", lambda c: c.table("critical_incidents")
                              .select("id, student_id, severity, primary_location, primary_time, "
@@ -328,24 +371,6 @@ def _loads(v, default):
 
 
 @st.cache_data(ttl=60, show_spinner=False)
-def load_scatter(ini: str) -> dict:
-    out = {"key": None, "definitions": {}, "weeks": [], "error": None}
-    try:
-        rows = _q("main", lambda c: c.table("scatter_students")
-                  .select("student_name, behaviour_definitions").execute().data or [])
-        match = next((r for r in rows if _name_matches(r.get("student_name"), ini)), None)
-        key = match["student_name"] if match else ini
-        out["key"] = key
-        out["definitions"] = _loads(match.get("behaviour_definitions"), {}) if match else {}
-        out["weeks"] = _q("main", lambda c: c.table("scatter_weekly_data")
-                          .select("week_start, behaviours, schedule, grid_data")
-                          .eq("student_name", key).order("week_start").execute().data or [])
-    except Exception as exc:  # noqa: BLE001
-        out["error"] = str(exc)
-    return out
-
-
-@st.cache_data(ttl=60, show_spinner=False)
 def load_transition(ini: str) -> dict:
     out = {"timetables": [], "error": None}
     if tu is None:
@@ -365,6 +390,390 @@ def load_documents(ini: str) -> list[dict]:
     return fetch_archive(student_initials=ini, limit=50)
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def load_profile(ids: tuple) -> dict:
+    """Starting profile, Behaviour Support Plan and strategy trials
+    (all Behaviour Support Tool tables, keyed by its student id)."""
+    out = {"profile": {}, "plan": {}, "trials": [], "error": None}
+    if not ids:
+        return out
+    try:
+        rows = _q("main", lambda c: c.table("starting_profiles").select("*")
+                  .in_("student_id", list(ids)).execute().data or [])
+        rows.sort(key=lambda r: str(r.get("updated_at") or ""), reverse=True)
+        for r in rows:
+            prof = _loads(r.get("profile"), {})
+            if prof:
+                out["profile"] = prof
+                break
+    except Exception:
+        pass  # table optional
+    try:
+        rows = _q("main", lambda c: c.table("support_plans").select("*")
+                  .in_("student_id", list(ids)).execute().data or [])
+        rows.sort(key=lambda r: str(r.get("last_updated_at") or ""), reverse=True)
+        out["plan"] = rows[0] if rows else {}
+    except Exception:
+        pass
+    try:
+        out["trials"] = _q("main", lambda c: c.table("strategy_trials").select("*")
+                           .in_("student_id", list(ids)).order("start_date", desc=True)
+                           .execute().data or [])
+    except Exception:
+        pass
+    return out
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def load_sensory(ini: str, ids: tuple) -> dict:
+    """Most recent Sensory Overview for this student (students project)."""
+    out = {"latest": None, "count": 0, "error": None}
+    try:
+        rows = _q("students", lambda c: c.table("sensory_overviews")
+                  .select("id, student_id, student_name, overview_date, review_date, "
+                          "completed_by, priority_results, created_at")
+                  .order("created_at", desc=True).execute().data or [])
+        mine = [r for r in rows
+                if (r.get("student_id") and str(r["student_id"]) in ids)
+                or _name_matches(r.get("student_name"), ini)]
+        mine.sort(key=lambda r: (str(r.get("overview_date") or ""), str(r.get("created_at") or "")),
+                  reverse=True)
+        out["count"] = len(mine)
+        out["latest"] = mine[0] if mine else None
+    except Exception as exc:  # noqa: BLE001
+        out["error"] = str(exc)
+    return out
+
+
+SAFETY_DOC_TYPE = "Safety & Risk Plan"
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_safety_plan(ini: str) -> dict:
+    """Latest Safety & Risk Plan in the student's archive folder. The
+    builder keeps no table (privacy-first: Excel + Word only), so the
+    summary is read from the filed Word document itself."""
+    out = {"doc": None, "count": 0, "parsed": None, "error": None}
+    try:
+        docs = fetch_archive(student_initials=ini, doc_type=SAFETY_DOC_TYPE, limit=10) or []
+        out["count"] = len(docs)
+        if not docs:
+            return out
+        out["doc"] = docs[0]
+        data = download_bytes(docs[0].get("storage_path") or "")
+        if data:
+            out["parsed"] = parse_safety_plan(data)
+    except Exception as exc:  # noqa: BLE001
+        out["error"] = str(exc)
+    return out
+
+
+def parse_safety_plan(data: bytes) -> dict:
+    """Pull the summary parts out of a Safety & Risk Plan .docx built by
+    16_Safety_risk_plan_builder.py: risk rows (issue, rating, function),
+    priority actions, plan date, review date. Also returns the student's
+    name from the details table, ONLY so it can be redacted."""
+    from docx import Document
+
+    doc = Document(io.BytesIO(data))
+    res = {"risks": [], "priority_actions": [], "plan_date": "", "review_date": "",
+           "names": []}
+
+    def paras(cell):
+        return [p.text.strip() for p in cell.paragraphs if p.text.strip()]
+
+    for t in doc.tables:
+        try:
+            first = [c.text.strip() for c in t.rows[0].cells]
+        except Exception:
+            continue
+        joined = " ".join(first).upper()
+        if first and first[0].startswith("Concerning Issue"):
+            for row in t.rows[1:]:
+                cells = row.cells
+                if len(cells) < 2:
+                    continue
+                p0 = paras(cells[0])
+                if not p0 or p0[0].startswith("*"):
+                    continue
+                func = next((p.split(":", 1)[1].strip() for p in p0 if p.startswith("Function:")), "")
+                p1 = paras(cells[1])
+                res["risks"].append({
+                    "issue": p0[0],
+                    "code": p1[0] if p1 else "",
+                    "level": (p1[1] if len(p1) > 1 else "").upper(),
+                    "function": func,
+                })
+        elif "PRIORITY ACTIONS" in joined:
+            lines = paras(t.rows[0].cells[0])
+            res["priority_actions"] = [l for l in lines if l.upper() != "PRIORITY ACTIONS"]
+        elif "NEXT REVIEW DATE" in joined and len(t.rows) > 1:
+            res["review_date"] = t.rows[1].cells[-1].text.strip()
+        elif "STUDENT DETAILS" in joined:
+            for row in t.rows:
+                for c in row.cells:
+                    for line in paras(c):
+                        if line.startswith("Plan Date:"):
+                            res["plan_date"] = line.split(":", 1)[1].strip()
+                        elif line.startswith("Full Name:"):
+                            nm = line.split(":", 1)[1].strip()
+                            res["names"] = [nm] + [p for p in nm.split() if len(p) >= 3]
+    # De-duplicate merged-cell repeats
+    seen, risks = set(), []
+    for r in res["risks"]:
+        k = (r["issue"], r["code"])
+        if k not in seen:
+            seen.add(k)
+            risks.append(r)
+    res["risks"] = risks
+    return res
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Borrowing the other tools' own logic (single source of truth)
+# ──────────────────────────────────────────────────────────────────────────
+PAGES_DIR = Path(__file__).parent
+
+
+@st.cache_resource(show_spinner=False)
+def _borrow(filename: str, names: tuple) -> dict:
+    """Load named top-level functions/constants from another portal page
+    WITHOUT running that page. Lets the Snapshot use the Behaviour Support
+    Tool's hypothesis and the Sensory Overview's summary exactly as those
+    tools write them, so the wording never drifts. Returns {} on failure."""
+    try:
+        src = (PAGES_DIR / filename).read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        chunks = []
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name in names:
+                chunks.append(ast.get_source_segment(src, node))
+            elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                if any(isinstance(t, ast.Name) and t.id in names for t in targets):
+                    chunks.append(ast.get_source_segment(src, node))
+        ns = {"pd": pd, "json": json, "re": re, "date": date, "datetime": datetime,
+              "st": _StShim()}
+        exec("\n\n".join(c for c in chunks if c), ns)  # noqa: S102 — our own repo code
+        return ns  # the functions' own globals — callers may swap in a fresh _StShim
+    except Exception:
+        return {}
+
+
+class _StShim:
+    """Stand-in for `st` inside borrowed functions, so they read OUR data
+    (e.g. staff/student names for de-identifying) instead of the Snapshot's
+    real session state."""
+    def __init__(self, session_state: dict | None = None):
+        self.session_state = session_state or {}
+
+
+def behaviour_hypothesis(beh: dict, ini: str) -> dict | None:
+    """The Behaviour Support Tool's Functional Hypothesis Statement, built
+    from ALL this student's incidents (as the tool does)."""
+    fns = _borrow("5_Behaviour_Support.py",
+                  ("CLINICAL_BEHAVIOUR_MAP", "get_clinical_behaviour",
+                   "generate_strong_clinical_hypothesis"))
+    gen, clin = fns.get("generate_strong_clinical_hypothesis"), fns.get("get_clinical_behaviour")
+    rows = []
+    for i in beh["incidents"]:
+        rows.append({"behaviour_type": i.get("behaviour_type") or "", "antecedent": i.get("antecedent") or "",
+                     "location": i.get("location") or "", "session": i.get("session") or "",
+                     "severity": i.get("severity"), "incident_type": "Quick"})
+    for c in beh["critical"]:
+        rows.append({"behaviour_type": _short(c.get("primary_behaviour"), 50) or "Behaviour (see ABCH form)",
+                     "antecedent": c.get("primary_context") or "",
+                     "location": c.get("primary_location") or "", "session": "",
+                     "severity": c.get("severity") or 5, "incident_type": "Critical"})
+    if len(rows) < 3 or not gen:
+        return None
+    df = pd.DataFrame(rows)
+    df["severity"] = pd.to_numeric(df["severity"], errors="coerce").fillna(3)
+
+    def mode(col):
+        s = df[col][df[col].astype(str).str.strip() != ""]
+        return s.mode()[0] if len(s) else "Unknown"
+
+    top_beh, top_ant, top_loc, top_ses = mode("behaviour_type"), mode("antecedent"), mode("location"), mode("session")
+    try:
+        hyp = gen(df, top_ant, top_beh, top_loc, top_ses, ini)
+    except Exception:
+        return None
+    hyp["n"] = len(df)
+    hyp["behaviour_label"] = clin(top_beh) if clin else top_beh
+    return hyp
+
+
+def sensory_summary(rec: dict) -> dict:
+    pr = _loads(rec.get("priority_results"), {})
+    fn = _borrow("7_Sensory_Overview.py", ("generate_hypothesis",)).get("generate_hypothesis")
+    text, strategies = "", []
+    if fn:
+        try:
+            r = fn(pr)
+            text, strategies = (r if isinstance(r, tuple) else (r, []))
+        except Exception:
+            pass
+    order = {"HIGH PRIORITY": 0, "MEDIUM PRIORITY": 1, "LOW PRIORITY": 2}
+    areas = sorted(((k, v) for k, v in pr.items() if isinstance(v, dict)),
+                   key=lambda kv: (order.get(kv[1].get("priority"), 3), -float(kv[1].get("pct") or 0)))
+    return {"areas": areas, "text": text, "strategies": strategies}
+
+
+def make_redactor(ini: str, names: list[str]):
+    """Swap the student's name(s) for their initials in free text."""
+    pats = [re.compile(rf"\b{re.escape(n)}(?:'s)?\b", re.I) for n in names if n]
+
+    def red(text) -> str:
+        s = str(text or "")
+        for p in pats:
+            s = p.sub(lambda m: ini + ("'s" if m.group(0).lower().endswith("'s") else ""), s)
+        return s
+    return red
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Window of Tolerance
+# ──────────────────────────────────────────────────────────────────────────
+def _wot_builder_creds() -> tuple[str, str] | None:
+    """The WoT Builder page connects with its own (public, anon) Supabase
+    URL/key. Read them from the copy in the repo so the Snapshot can reach
+    wot_builder_reports even if none of the portal's secrets point there."""
+    for f in (PAGES_DIR / "53_Window_of_tolerance-creator.py",):
+        try:
+            src = f.read_text(encoding="utf-8")
+            u = re.search(r'SUPABASE_URL\s*=\s*"([^"]+)"', src)
+            k = re.search(r'SUPABASE_ANON_KEY\s*=\s*"([^"]+)"', src)
+            if u and k:
+                return u.group(1), k.group(1)
+        except Exception:
+            continue
+    return None
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def load_wot(ini: str, register_id: str) -> dict:
+    """Latest Window of Tolerance saved in the WoT Builder for this student."""
+    out = {"report": None, "error": None}
+
+    def fetch(c):
+        rows = (c.table("wot_builder_reports").select("*")
+                .eq("student_initials", ini).execute().data or [])
+        if register_id:
+            rows += (c.table("wot_builder_reports").select("*")
+                     .eq("student_register_id", register_id).execute().data or [])
+        return rows
+
+    rows, last_err, reached = [], None, False
+    for which in ("students", "main"):
+        try:
+            rows = _q(which, fetch, retries=1)
+            reached = True
+            if rows:
+                break
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+    if not rows:
+        creds = _wot_builder_creds()
+        if creds:
+            try:
+                from supabase import create_client
+                rows = fetch(create_client(*creds))
+                reached = True
+            except Exception as exc:  # noqa: BLE001
+                last_err = exc
+    if rows:
+        uniq = {r.get("id"): r for r in rows}
+        out["report"] = max(uniq.values(), key=lambda r: str(r.get("updated_at") or ""))
+    elif not reached and last_err:
+        out["error"] = str(last_err)
+    return out
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_people() -> dict:
+    """Staff and student first names, used ONLY to de-identify peers/staff
+    mentioned in incident context lines (as the Behaviour Support Tool does)."""
+    out = {"staff": [], "students": []}
+    try:
+        out["staff"] = [{"name": r.get("name")} for r in
+                        (_q("main", lambda c: c.table("staff").select("name").execute().data or []))]
+    except Exception:
+        pass
+    try:
+        out["students"] = [{"id": str(r.get("id")), "name": r.get("name") or r.get("first_name")} for r in
+                           (_q("main", lambda c: c.table("students").select("id, name, first_name")
+                               .execute().data or []))]
+    except Exception:
+        pass
+    return out
+
+
+def wot_from_report(rep: dict) -> dict:
+    """{zone_id: {col: [text, ...]}} from a saved WoT Builder report."""
+    data = _loads(rep.get("data"), {})
+    out = {}
+    for zid, *_ in WOT_ZONE_META:
+        z = data.get(zid) or {}
+        cols = {}
+        for col, _lbl in WOT_COLS:
+            items = z.get(col) or []
+            cols[col] = [str(i.get("text") if isinstance(i, dict) else i).strip() for i in items
+                         if str(i.get("text") if isinstance(i, dict) else i).strip()]
+        if any(cols.values()):
+            out[zid] = cols
+    return out
+
+
+def wot_from_incidents(beh: dict, people: dict) -> dict:
+    """The Behaviour Support Tool's own 'Window of Tolerance — Draft from This
+    Student's Data' (build_window_of_tolerance_table), run on this student's
+    incidents. Covers the four dysregulated zones only — incident logs can't
+    show what being inside the window looks like."""
+    ns = _borrow("5_Behaviour_Support.py",
+                 ("WOT_ZONES", "WOT_DIRECTION_MAP", "INTERVENTION_DETAIL", "_strip_category_prefix",
+                  "deidentify_context", "_polish_intervention_list", "build_window_of_tolerance_table"))
+    fn = ns.get("build_window_of_tolerance_table") if ns else None
+    if not fn or not beh["incidents"]:
+        return {}
+    df = pd.DataFrame([{k: i.get(k) for k in ("behaviour_type", "antecedent", "intervention",
+                                              "description", "severity")} for i in beh["incidents"]])
+    ns["st"] = _StShim({"staff": people.get("staff", []), "students": people.get("students", [])})
+    try:
+        res = fn(df, student_id=beh["student_ids"][0] if beh["student_ids"] else None) or {}
+    except Exception:
+        return {}
+    peers = make_peer_redactor(people, beh["student_ids"])
+    return {zid: {"context": [peers(x) for x in v.get("context", [])],
+                  "behaviour": [peers(x) for x in v.get("behaviour", [])],
+                  "interventions": v.get("interventions", []), "n": v.get("n", 0)}
+            for zid, v in res.items()}
+
+
+def make_peer_redactor(people: dict, own_ids: list[str]):
+    """Other students' first names -> 'a peer', staff first names -> 'a staff
+    member' (same rule as the Behaviour Support Tool's deidentify_context)."""
+    own = set(own_ids or [])
+    pats = []
+    for s in people.get("staff", []):
+        first = (s.get("name") or "").split()[0] if s.get("name") else ""
+        if len(first) > 2:
+            pats.append((re.compile(rf"\b{re.escape(first)}\b", re.I), "a staff member"))
+    for s in people.get("students", []):
+        if s.get("id") in own:
+            continue
+        first = (s.get("name") or "").split()[0] if s.get("name") else ""
+        if len(first) > 2:
+            pats.append((re.compile(rf"\b{re.escape(first)}\b", re.I), "a peer"))
+
+    def red(text) -> str:
+        out = str(text or "")
+        for p, rep in pats:
+            out = p.sub(rep, out)
+        return out
+    return red
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Date helpers
 # ──────────────────────────────────────────────────────────────────────────
@@ -377,6 +786,21 @@ def _d(v) -> date | None:
         return date.fromisoformat(str(v)[:10])
     except Exception:
         return None
+
+
+def _any_date(v) -> date | None:
+    """Dates typed by staff come in many shapes: 2026-11-30, 30/11/2026,
+    30 Nov 2026, 30 November 2026."""
+    d = _d(v)
+    if d:
+        return d
+    s = str(v or "").strip()
+    for fmt in ("%d/%m/%Y", "%d/%m/%y", "%d %b %Y", "%d %B %Y", "%d-%m-%Y", "%d.%m.%Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except Exception:
+            continue
+    return None
 
 
 def _monday(d: date) -> date:
@@ -473,6 +897,16 @@ def ci_date(ci: dict) -> date | None:
     return _d(ci.get("primary_time")) or _d(ci.get("created_at"))
 
 
+def _as_list(v) -> list[str]:
+    if isinstance(v, list):
+        return [str(x).strip() for x in v if str(x).strip()]
+    s = str(v or "").strip()
+    if not s:
+        return []
+    parts = [p.strip(" •-*\t") for p in re.split(r"\n+|;\s*", s)]
+    return [p for p in parts if p]
+
+
 def top(counter: Counter, n: int = 3) -> list[tuple[str, int]]:
     return [(k, v) for k, v in counter.most_common() if k][:n]
 
@@ -503,42 +937,6 @@ def behaviour_stats(beh: dict, start: date, end: date) -> dict:
         "days": day,
         "functions": func,
     }
-
-
-def scatter_stats(sc: dict, start: date, end: date) -> dict:
-    """Totals per (day-of-week, time slot) across the weeks in range."""
-    grid: dict[tuple[str, str], int] = {}
-    slots: list[str] = []
-    behaviours: list[str] = []
-    weeks_used = 0
-    for w in sc["weeks"]:
-        ws = _d(w.get("week_start"))
-        if not ws or not (start - timedelta(days=6) <= ws <= end):
-            continue
-        weeks_used += 1
-        sched = _loads(w.get("schedule"), [])
-        behs = _loads(w.get("behaviours"), [])
-        data = _loads(w.get("grid_data"), {})
-        for b in behs:
-            if b not in behaviours:
-                behaviours.append(b)
-        for slot in sched:
-            t = slot.get("time")
-            if t and t not in slots:
-                slots.append(t)
-        for i in range(5):
-            d = ws + timedelta(days=i)
-            if not in_range(d, start, end):
-                continue
-            for slot in sched:
-                t = slot.get("time")
-                for b_idx in range(max(1, len(behs))):
-                    v = data.get(f"{d}_{t}_{b_idx}", 0) or 0
-                    if v:
-                        k = (DAY_NAMES[i], t)
-                        grid[k] = grid.get(k, 0) + int(v)
-    return {"grid": grid, "slots": slots, "behaviours": behaviours,
-            "weeks": weeks_used, "total": sum(grid.values())}
 
 
 def pick_timetable(tts: list[dict]) -> dict | None:
@@ -603,15 +1001,33 @@ def _short(s, n=110) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
-def top_table(title: str, counter: Counter, total: int, n: int = 5):
-    items = top(counter, n)
-    st.markdown(f"**{title}**")
-    if not items:
-        st.markdown('<span class="muted">No data</span>', unsafe_allow_html=True)
-        return
-    df = pd.DataFrame([{"": k, "Count": v, "%": f"{round(v / total * 100)}%" if total else ""}
-                       for k, v in items])
-    st.dataframe(df, hide_index=True, use_container_width=True)
+def render_wot(zones: dict, draft: bool = False, limit: int = 6):
+    """Five stacked bands (hyper at the top, hypo at the bottom), each with
+    When / What it looks like / What helps — mirroring the WoT Builder."""
+    html = ['<div class="wot">']
+    for zid, label, sub, col, wash in WOT_ZONE_META:
+        z = zones.get(zid)
+        if not z and not (zid == "wot" and draft):
+            continue
+        cells = []
+        if not z:  # draft has no 'in the window' zone
+            cells.append('<div class="wot-cell" style="grid-column:span 3"><span class="muted">'
+                         'Incident logs can\'t show this — add it in the WoT Builder.</span></div>')
+        else:
+            for key, lbl in WOT_COLS:
+                items = z.get(key) or []
+                body = ("<ul>" + "".join(f"<li>{_esc(redact(x))}</li>" for x in items[:limit]) + "</ul>"
+                        + (f'<span class="muted">+ {len(items) - limit} more</span>' if len(items) > limit else "")
+                        ) if items else '<span class="muted">—</span>'
+                cells.append(f'<div class="wot-cell"><div class="wot-h">{lbl}</div>{body}</div>')
+        n = f'<div class="wot-n">{z["n"]} incident{"s" if z["n"] != 1 else ""}</div>' if (z and z.get("n")) else ""
+        html.append(
+            f'<div class="wot-row" style="background:{wash};border-left:6px solid {col}">'
+            f'<div class="wot-lbl" style="color:{col}"><b>{_esc(label)}</b>'
+            f'{f"<div class=wot-sub>{_esc(sub)}</div>" if sub else ""}{n}</div>'
+            + "".join(cells) + "</div>")
+    html.append("</div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
 
 
 def plot_layout(fig, height=300):
@@ -630,11 +1046,13 @@ def plot_layout(fig, height=300):
 # Word summary (initials only)
 # ──────────────────────────────────────────────────────────────────────────
 def build_summary_docx(stu: dict, period_lbl: str, start: date, end: date,
-                       goals: list[tuple[dict, dict]], bs: dict, sc_stats: dict,
-                       tt: dict | None) -> bytes:
+                       goals: list[tuple[dict, dict]], bs: dict, wot: dict | None,
+                       tt: dict | None, profile: dict | None = None) -> bytes:
     from docx import Document
     from docx.shared import Pt, RGBColor
 
+    profile = profile or {}
+    red = profile.get("redact") or (lambda s: str(s or ""))
     doc = Document()
     style = doc.styles["Normal"]
     style.font.name = "Calibri"
@@ -648,6 +1066,55 @@ def build_summary_docx(stu: dict, period_lbl: str, start: date, end: date,
     )
     doc.add_paragraph(f"Data period: {period_lbl} ({_fmt(start, True)} – {_fmt(end, True)})   ·   "
                       f"Prepared {_fmt(TODAY, True)}")
+
+    # ── Profile ──
+    doc.add_heading("Profile", level=2)
+    if profile.get("summary"):
+        doc.add_paragraph(red(profile["summary"]))
+    for lbl, key in (("Strengths", "strengths"), ("Interests", "interests"),
+                     ("What helps", "helps"), ("What doesn't help", "not_helps")):
+        items = profile.get(key) or []
+        if items:
+            p = doc.add_paragraph()
+            p.add_run(f"{lbl}: ").bold = True
+            p.add_run("; ".join(red(x) for x in items[:6]))
+    hyp_ = profile.get("hyp")
+    if hyp_:
+        p = doc.add_paragraph()
+        p.add_run("Functional hypothesis: ").bold = True
+        p.add_run(red(hyp_["summary"]))
+    plans = profile.get("plans") or []
+    if plans:
+        p = doc.add_paragraph()
+        p.add_run("Plans on file: ").bold = True
+        p.add_run(" · ".join(plans))
+    sp_ = profile.get("safety") or {}
+    if sp_.get("risks"):
+        p = doc.add_paragraph()
+        p.add_run("Safety & Risk Plan risks: ").bold = True
+        p.add_run("; ".join(f"{red(r['issue'])} ({r.get('level') or '—'})" for r in sp_["risks"]))
+    if sp_.get("priority_actions"):
+        p = doc.add_paragraph()
+        p.add_run("Priority actions: ").bold = True
+        p.add_run("; ".join(red(a) for a in sp_["priority_actions"][:6]))
+    ss = profile.get("sensory")
+    if ss:
+        hi = [f"{a} ({v.get('priority', '').split()[0].title()})" for a, v in ss["areas"]
+              if v.get("priority") in ("HIGH PRIORITY", "MEDIUM PRIORITY")]
+        p = doc.add_paragraph()
+        p.add_run("Sensory priority areas: ").bold = True
+        p.add_run(", ".join(hi) if hi else "None high or medium")
+        if ss.get("strategies"):
+            p = doc.add_paragraph()
+            p.add_run("Sensory strategies: ").bold = True
+            p.add_run("; ".join(ss["strategies"]))
+    trials_ = profile.get("trials") or []
+    if trials_:
+        p = doc.add_paragraph()
+        p.add_run("Strategy trials: ").bold = True
+        p.add_run("; ".join(
+            f"{red(t.get('title') or 'Trial')} — {'running' if t.get('status') == 'Running' else (t.get('outcome') or 'concluded')}"
+            for t in trials_[:6]))
 
     doc.add_heading("SMARTAR goals", level=2)
     if not goals:
@@ -678,13 +1145,25 @@ def build_summary_docx(stu: dict, period_lbl: str, start: date, end: date,
         items = top(counter, 3)
         if items:
             doc.add_paragraph(f"{title}: " + "; ".join(f"{k} ({v})" for k, v in items))
-    if sc_stats["total"]:
-        peak = max(sc_stats["grid"].items(), key=lambda kv: kv[1])
-        doc.add_paragraph(
-            f"Scatter plot ({', '.join(sc_stats['behaviours']) or 'target behaviour'}): "
-            f"{sc_stats['total']} recorded across {sc_stats['weeks']} week(s); "
-            f"peak {peak[0][0]} {peak[0][1]} ({peak[1]})."
-        )
+
+    doc.add_heading("Window of Tolerance", level=2)
+    if not wot:
+        doc.add_paragraph("Not built yet.")
+    else:
+        doc.add_paragraph("From the Window of Tolerance Builder." if wot["source"] == "builder"
+                          else "Draft from incident data (not yet built in the WoT Builder).")
+        t = doc.add_table(rows=1, cols=4)
+        t.style = "Light Grid Accent 1"
+        for c, txt in zip(t.rows[0].cells, ["Zone", "When / where", "What it looks like", "What helps"]):
+            c.text = txt
+        for zid, label, *_ in WOT_ZONE_META:
+            z = wot["zones"].get(zid)
+            if not z:
+                continue
+            r = t.add_row().cells
+            r[0].text = label
+            for i, (key, _l) in enumerate(WOT_COLS, start=1):
+                r[i].text = "\n".join(f"• {red(x)}" for x in (z.get(key) or [])[:5]) or "—"
 
     doc.add_heading("Transition", level=2)
     if not tt:
@@ -790,14 +1269,33 @@ if p_start_d and start < p_start_d and period != "Whole placement":
 with st.spinner(f"Loading {ini}…"):
     sm = load_smartar(ini)
     beh = load_behaviour(ini)
-    sc = load_scatter(ini)
     tr = load_transition(ini)
+    prof = load_profile(tuple(beh["student_ids"]))
+    sens = load_sensory(ini, tuple(beh["student_ids"]))
+    safe = load_safety_plan(ini)
+    wot_rec = load_wot(ini, str(stu.get("id") or ""))
+
+redact = make_redactor(ini, beh["names"] + ((safe.get("parsed") or {}).get("names") or []))
+_people = load_people()
+_peers = make_peer_redactor(_people, beh["student_ids"])
+wot_draft = wot_from_incidents(beh, _people) if beh["incidents"] else {}
+if wot_rec["report"]:
+    _zones = {zid: {k: [_peers(x) for x in v] for k, v in cols.items()}
+              for zid, cols in wot_from_report(wot_rec["report"]).items()}
+    wot_view = {"source": "builder", "zones": _zones,
+                "updated": _d(wot_rec["report"].get("updated_at")),
+                "by": wot_rec["report"].get("updated_by"), "status": wot_rec["report"].get("status")}
+elif wot_draft:
+    wot_view = {"source": "draft", "zones": wot_draft}
+else:
+    wot_view = None
+hyp = behaviour_hypothesis(beh, ini)
+sens_sum = sensory_summary(sens["latest"]) if sens["latest"] else None
 
 active_goals = [g for g in sm["goals"] if g.get("active")]
 past_goals = [g for g in sm["goals"] if not g.get("active")]
 goal_rows = [(g, goal_stats(g, sm["tracking"], start, end)) for g in active_goals]
 bs = behaviour_stats(beh, start, end)
-scs = scatter_stats(sc, start, end)
 tt = pick_timetable(tr["timetables"])
 
 # ── Student header ────────────────────────────────────────────────────────
@@ -857,6 +1355,68 @@ if tt:
 else:
     tile(t4, "Transition", "No timetable", "Create one in Transition Timetables", "info")
 
+# ── Plans on file ─────────────────────────────────────────────────────────
+st.markdown('<div class="strip-lbl">Plans on file</div>', unsafe_allow_html=True)
+q1, q2, q3, q5, q4 = st.columns(5)
+
+
+def _review_note(review) -> tuple[str, str]:
+    rd = _any_date(review)
+    if not rd:
+        return ("No review date set", "warn")
+    if rd < TODAY:
+        return (f"Review overdue — was due {_fmt(rd, True)}", "bad")
+    if (rd - TODAY).days <= 14:
+        return (f"Review due {_fmt(rd, True)}", "warn")
+    return (f"Review due {_fmt(rd, True)}", "good")
+
+
+plan = prof["plan"]
+if plan:
+    note, kind = _review_note(plan.get("review_date"))
+    upd = _d(plan.get("last_updated_at"))
+    tile(q1, "Behaviour Support Plan", "✓ In place", f"{note}" + (f" · updated {_fmt(upd)}" if upd else ""), kind)
+else:
+    tile(q1, "Behaviour Support Plan", "Not started", "Write it in Behaviour Support → Support Plan", "warn")
+
+sp = safe.get("parsed") or {}
+if safe["doc"]:
+    n_high = sum(1 for r in sp.get("risks", []) if r.get("level") in ("EXTREME", "HIGH"))
+    note, kind = _review_note(sp.get("review_date"))
+    tile(q2, "Safety & Risk Plan", f"✓ {_fmt(_d(safe['doc'].get('created_at')), True)}",
+         f"{len(sp.get('risks', []))} risks ({n_high} high/extreme) · {note}", "bad" if kind == "bad" else kind)
+else:
+    tile(q2, "Safety & Risk Plan", "None filed", "Not in the Document Archive", "info")
+
+if sens["latest"]:
+    rec = sens["latest"]
+    highs = [k for k, v in (sens_sum or {}).get("areas", []) if v.get("priority") == "HIGH PRIORITY"]
+    note, kind = _review_note(rec.get("review_date"))
+    tile(q3, "Sensory Overview", f"✓ {_fmt(_d(rec.get('overview_date')), True)}",
+         (f"{len(highs)} high-priority area{'s' if len(highs) != 1 else ''} · " if highs else "No high areas · ")
+         + note, kind)
+else:
+    tile(q3, "Sensory Overview", "Not completed", "Complete one in Sensory Overview", "info")
+
+if wot_view and wot_view["source"] == "builder":
+    upd = wot_view.get("updated")
+    tile(q5, "Window of Tolerance", f"✓ {_fmt(upd, True)}" if upd else "✓ Built",
+         ("Filed to archive" if wot_view.get("status") == "archived" else "Saved in WoT Builder")
+         + (f" · {wot_view['by']}" if wot_view.get("by") else ""), "good")
+elif wot_view:
+    tile(q5, "Window of Tolerance", "Data draft only", "Not yet built in the WoT Builder", "warn")
+else:
+    tile(q5, "Window of Tolerance", "Not built", "Build one in the WoT Builder", "info")
+
+running = [t for t in prof["trials"] if t.get("status") == "Running"]
+done = [t for t in prof["trials"] if t.get("status") != "Running"]
+if prof["trials"]:
+    worked = sum(1 for t in done if str(t.get("outcome") or "").startswith(("Worked", "Partly")))
+    tile(q4, "Strategy trials", f"{len(running)} running",
+         f"{len(done)} concluded · {worked} helped", "good" if running else "info")
+else:
+    tile(q4, "Strategy trials", "None yet", "Start one from Behaviour Support → Analysis", "info")
+
 # ── Actions ───────────────────────────────────────────────────────────────
 st.write("")
 a1, a2, a3, a4, a5, a6 = st.columns(6)
@@ -866,10 +1426,27 @@ sid = beh["student_ids"][0] if beh["student_ids"] else ""
 a3.link_button("📊 Behaviour Support",
                f"{PORTAL}/Behaviour_Support" + (f"?p=student_analysis&sid={quote(sid)}" if sid else ""),
                use_container_width=True)
-a4.link_button("📍 Scatter Plot", f"{PORTAL}/scatter_plot_tracker", use_container_width=True)
+a4.link_button("🪟 WoT Builder", WOT_BUILDER_URL, use_container_width=True)
 a5.link_button("🗓️ Transition", f"{PORTAL}/Transition_Timetables", use_container_width=True)
 try:
-    summary = build_summary_docx(stu, period_lbl, start, end, goal_rows, bs, scs, tt)
+    _pf = prof["profile"] or {}
+    _plans = []
+    if plan:
+        _plans.append(f"Behaviour Support Plan ({_review_note(plan.get('review_date'))[0].lower()})")
+    if safe["doc"]:
+        _plans.append(f"Safety & Risk Plan ({_review_note((safe.get('parsed') or {}).get('review_date'))[0].lower()})")
+    if sens["latest"]:
+        _plans.append(f"Sensory Overview {_fmt(_d(sens['latest'].get('overview_date')), True)}")
+    summary = build_summary_docx(
+        stu, period_lbl, start, end, goal_rows, bs, wot_view, tt,
+        profile={
+            "redact": redact, "summary": _pf.get("summary"),
+            "strengths": _as_list(_pf.get("strengths")) or _as_list(plan.get("strengths")),
+            "interests": _as_list(_pf.get("interests")) or _as_list(plan.get("interests")),
+            "helps": _as_list(_pf.get("what_helps")), "not_helps": _as_list(_pf.get("what_doesnt_help")),
+            "hyp": hyp, "plans": _plans, "safety": safe.get("parsed") or {},
+            "sensory": sens_sum, "trials": running + done,
+        })
     a6.download_button("⬇️ Meeting summary", summary,
                        file_name=f"Student_Snapshot_{ini}_{TODAY:%Y%m%d}.docx",
                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -878,7 +1455,279 @@ except Exception as exc:  # noqa: BLE001
     a6.caption(f"Summary unavailable: {exc}")
 
 st.write("")
-tab_g, tab_b, tab_t, tab_d = st.tabs(["🎯 Goals", "📊 Behaviour", "🗓️ Transition", "📁 Documents"])
+tab_p, tab_g, tab_b, tab_t, tab_d = st.tabs(
+    ["🧩 Profile", "🎯 Goals", "📊 Behaviour", "🗓️ Transition", "📁 Documents"])
+
+# ══════════════════════════════════════════════════════════════════════════
+# PROFILE — who they are, why the behaviour happens, what's in place
+# ══════════════════════════════════════════════════════════════════════════
+RISK_COL = {"EXTREME": "#8e1b10", "HIGH": "#d35400", "MODERATE": "#c9a227", "LOW": "#27ae60"}
+PLAN_FIELDS = [
+    ("early_warning_signs", "Early warning signs"),
+    ("response_early_signs", "When early signs appear"),
+    ("proactive_strategies_additional", "Proactive strategies"),
+    ("teaching_strategies", "Teaching strategies"),
+    ("response_escalation", "If it escalates"),
+    ("recovery_time", "Recovery time"),
+    ("post_incident_repair", "Repair after an incident"),
+    ("reinforcement", "Reinforcement"),
+    ("adjustments_supports", "Adjustments & supports"),
+    ("student_voice", "Student voice"),
+]
+
+
+def listbox(col, title: str, items: list[str], limit: int = 6):
+    if not items:
+        body = '<span class="muted">Not recorded</span>'
+    else:
+        body = "<ul>" + "".join(f"<li>{_esc(redact(x))}</li>" for x in items[:limit]) + "</ul>"
+        if len(items) > limit:
+            body += f'<span class="muted">+ {len(items) - limit} more</span>'
+    col.markdown(f'<div class="listbox"><div class="h">{title}</div>{body}</div>',
+                 unsafe_allow_html=True)
+
+
+def hbar(counter: Counter, title: str, colour: str, n: int = 6):
+    items = top(counter, n)
+    if not items:
+        st.markdown(f"**{title}**  \n<span class='muted'>No data</span>", unsafe_allow_html=True)
+        return
+    labels = [_short(redact(k), 42) for k, _ in items][::-1]
+    vals = [v for _, v in items][::-1]
+    f = go.Figure(go.Bar(x=vals, y=labels, orientation="h", marker_color=colour,
+                         text=vals, textposition="outside", cliponaxis=False,
+                         hovertemplate="%{y}: %{x}<extra></extra>"))
+    f.update_layout(title=dict(text=title, font=dict(size=14)), showlegend=False)
+    f.update_xaxes(visible=False)
+    st.plotly_chart(plot_layout(f, 60 + 34 * len(items)), use_container_width=True)
+
+
+def period_summary_text() -> str:
+    """Plain-English summary of the selected period's behaviour data."""
+    n = len(bs["inc"])
+    prev = bs["prev_n"]
+    lbl = period_lbl if period_lbl.startswith("Term") else "the " + period_lbl.lower()
+    out = [f"Over {lbl} ({_fmt(start, True)} – {_fmt(end, True)}), {ini} had "
+           f"{n} recorded incident{'s' if n != 1 else ''}"]
+    if period == "Whole placement":
+        out[-1] += "."
+    elif prev or n:
+        if prev == 0:
+            out[-1] += ", up from none in the previous period of the same length."
+        elif n == prev:
+            out[-1] += f", the same as the previous period of the same length ({prev})."
+        else:
+            pct = round(abs(n - prev) / prev * 100)
+            out[-1] += (f", {'up' if n > prev else 'down'} {pct}% on the previous period "
+                        f"of the same length ({prev}).")
+    else:
+        out[-1] += "."
+    if n:
+        out.append(f"{bs['crit_n']} {'were' if bs['crit_n'] != 1 else 'was'} critical"
+                   + (f", and average severity was {bs['avg_sev']}/5." if bs["avg_sev"] is not None else "."))
+        tb, tl, ts = top(bs["behaviours"], 1), top(bs["locations"], 1), top(bs["sessions"], 1)
+        td = top(bs["days"], 1)
+        if tb:
+            out.append(f"The most common behaviour was {tb[0][0].lower()} ({tb[0][1]} of {n}).")
+        where = []
+        if tl:
+            where.append(f"in the {tl[0][0]}" if not tl[0][0].lower().startswith(("the ", "a ")) else f"in {tl[0][0]}")
+        if ts:
+            where.append(f"during the {ts[0][0].lower()} session")
+        if td:
+            where.append(f"on {td[0][0]}s")
+        if where:
+            out.append("Incidents happened most often " + ", ".join(where[:-1])
+                       + (" and " if len(where) > 1 else "") + where[-1] + ".")
+        tf = top(bs["functions"], 1)
+        if tf:
+            tot = sum(bs["functions"].values())
+            out.append(f"Staff most often recorded the function as \u201c{tf[0][0]}\u201d "
+                       f"({round(tf[0][1] / tot * 100)}% of incidents with a function recorded).")
+    sd = school_days_between(start, end)
+    if sd:
+        a = len(bs["absent"])
+        out.append(f"{ini} was absent on {a} of {sd} school day{'s' if sd != 1 else ''}.")
+    return " ".join(out)
+
+
+def render_hypothesis():
+    """Functional Hypothesis Statement + detail cards (shown on Profile and Behaviour tabs)."""
+    if hyp:
+        st.markdown(f'<div class="hyp"><div class="ttl">📋 Functional Hypothesis Statement</div>'
+                    f'{_esc(redact(hyp["summary"]))}</div>', unsafe_allow_html=True)
+        det = hyp.get("detail", {})
+        k1, k2, k3 = st.columns(3)
+        for col, key in ((k1, "Behavioural Function"), (k2, "Primary Antecedent"),
+                         (k3, "BSEM Domain Priority")):
+            col.markdown(f'<div class="kv"><div class="k">{key}</div><div class="v">'
+                         f'{_esc(det.get(key, "—"))}</div></div>', unsafe_allow_html=True)
+        st.write("")
+        k4, k5, k6 = st.columns(3)
+        for col, key, val in ((k4, "Behaviour", hyp.get("behaviour_label") or det.get("Behaviour Label", "—")),
+                              (k5, "Peak context", det.get("Peak Context", "—")),
+                              (k6, "Risk indicator", det.get("Risk Indicator", "—"))):
+            col.markdown(f'<div class="kv"><div class="k">{key}</div><div class="v">'
+                         f'{_esc(val)}</div></div>', unsafe_allow_html=True)
+        # What staff recorded at the time, alongside the data-driven hypothesis
+        logged = Counter()
+        for i in beh["incidents"]:
+            f, it = (i.get("hypothesis_function") or "").strip(), (i.get("hypothesis_item") or "").strip()
+            if f or it:
+                logged[f"{f} {it.lower()}".strip()] += 1
+        for c in beh["critical"]:
+            f, it = (c.get("primary_hypothesis_function") or "").strip(), (c.get("primary_hypothesis_item") or "").strip()
+            if f or it:
+                logged[f"{f} {it.lower()}".strip()] += 1
+        tot = sum(logged.values())
+        if tot:
+            st.caption("Functions staff recorded on each incident: " + " · ".join(
+                f"**{k}** {round(v / tot * 100)}%" for k, v in logged.most_common(4)))
+        st.caption(f"Built the same way as Behaviour Support → Analysis, from all {hyp['n']} incidents "
+                   "in this placement (not just the selected period).")
+    elif beh["student_ids"]:
+        st.markdown('<span class="muted">Needs at least 3 logged incidents before a hypothesis can be '
+                    'generated.</span>', unsafe_allow_html=True)
+    else:
+        st.markdown(f'<span class="muted">{ini} isn\'t set up in the Behaviour Support Tool yet.</span>',
+                    unsafe_allow_html=True)
+
+
+
+with tab_p:
+    if beh["error"]:
+        st.error(f"Couldn't load Behaviour Support data: {beh['error']}")
+
+    # ── Who they are ──────────────────────────────────────────────────────
+    st.markdown("#### 🙂 About the student")
+    pf = prof["profile"] or {}
+    summary_txt = pf.get("summary")
+    strengths = _as_list(pf.get("strengths")) or _as_list(plan.get("strengths"))
+    interests = _as_list(pf.get("interests")) or _as_list(plan.get("interests"))
+    helps = _as_list(pf.get("what_helps"))
+    not_helps = _as_list(pf.get("what_doesnt_help"))
+    if summary_txt:
+        st.info(redact(summary_txt))
+    if strengths or interests or helps or not_helps:
+        b1, b2, b3, b4 = st.columns(4)
+        listbox(b1, "💪 Strengths", strengths)
+        listbox(b2, "⭐ Interests", interests)
+        listbox(b3, "✅ What helps", helps)
+        listbox(b4, "⛔ What doesn't help", not_helps)
+    elif not summary_txt:
+        st.markdown('<span class="muted">No starting profile or strengths recorded yet — add them in '
+                    'Behaviour Support → Starting Profile.</span>', unsafe_allow_html=True)
+
+    # ── Functional hypothesis ─────────────────────────────────────────────
+    st.markdown("#### 🔬 Functional hypothesis")
+    render_hypothesis()
+
+    # ── Behaviour Support Plan ────────────────────────────────────────────
+    st.markdown("#### 🛟 Behaviour Support Plan")
+    if not plan:
+        st.markdown('<span class="muted">No support plan written yet.</span>', unsafe_allow_html=True)
+    else:
+        filled = [(k, lbl) for k, lbl in PLAN_FIELDS if str(plan.get(k) or "").strip()]
+        meta = [f"Review {_fmt(_any_date(plan.get('review_date')), True)}" if plan.get("review_date") else None,
+                f"Class teacher: {plan['class_teacher']}" if plan.get("class_teacher") else None,
+                f"Support staff: {plan['support_staff']}" if plan.get("support_staff") else None]
+        st.caption(" · ".join(m for m in meta if m))
+        if not filled:
+            st.markdown('<span class="muted">Plan started but the strategy sections are empty.</span>',
+                        unsafe_allow_html=True)
+        for row in range(0, len(filled), 2):
+            cols = st.columns(2)
+            for col, (k, lbl) in zip(cols, filled[row:row + 2]):
+                listbox(col, lbl, _as_list(plan.get(k)), limit=5)
+            st.write("")
+
+    # ── Strategy trials ───────────────────────────────────────────────────
+    st.markdown("#### 🧪 Strategy trials")
+    if not prof["trials"]:
+        st.markdown('<span class="muted">No strategy trials recorded.</span>', unsafe_allow_html=True)
+    for t in running + done[:4]:
+        is_run = t.get("status") == "Running"
+        badge = "🟢 Running" if is_run else f"✅ {t.get('outcome') or 'Concluded'}"
+        when = (f"started {_fmt(_d(t.get('start_date')), True)}"
+                + (f" · review {_fmt(_d(t.get('review_date')), True)}" if is_run and t.get("review_date") else "")
+                + (f" · ended {_fmt(_d(t.get('end_date')), True)}" if not is_run and t.get("end_date") else ""))
+        with st.container(border=True):
+            st.markdown(f"**{_esc(redact(t.get('title') or 'Trial'))}** — {badge}  \n"
+                        f"<span class='muted'>{when}</span>", unsafe_allow_html=True)
+            lines = []
+            if t.get("strategy"):
+                lines.append(f"*Strategy:* {redact(t['strategy'])}")
+            if is_run and t.get("measure"):
+                lines.append(f"*Tracking:* {redact(t['measure'])}")
+            if not is_run and t.get("conclusion"):
+                lines.append(f"*What we learned:* {redact(t['conclusion'])}")
+            if lines:
+                st.markdown("  \n".join(lines))
+    if len(done) > 4:
+        st.caption(f"+ {len(done) - 4} earlier concluded trials in Behaviour Support.")
+
+    # ── Sensory Overview ──────────────────────────────────────────────────
+    st.markdown("#### 🌈 Sensory Overview")
+    if sens["error"]:
+        st.error(f"Couldn't load sensory overviews: {sens['error']}")
+    elif not sens["latest"]:
+        st.markdown('<span class="muted">No Sensory Overview completed.</span>', unsafe_allow_html=True)
+    else:
+        rec = sens["latest"]
+        st.caption(f"Completed {_fmt(_d(rec.get('overview_date')), True)}"
+                   + (f" by {rec['completed_by']}" if rec.get("completed_by") else "")
+                   + f" · {_review_note(rec.get('review_date'))[0]}"
+                   + (f" · {sens['count']} overviews on file" if sens["count"] > 1 else ""))
+        pills = []
+        for area, v in sens_sum["areas"]:
+            p = v.get("priority", "")
+            if p == "HIGH PRIORITY":
+                bg, fg = "#fde8e8", "#c62828"
+            elif p == "MEDIUM PRIORITY":
+                bg, fg = "#fff3e0", "#e65100"
+            else:
+                continue
+            pills.append(f'<span class="sens" style="background:{bg};color:{fg}">'
+                         f'{_esc(area)} · {p.split()[0].title()} {v.get("pct", "")}%</span>')
+        low_n = sum(1 for _, v in sens_sum["areas"] if v.get("priority") == "LOW PRIORITY")
+        st.markdown("".join(pills) + (f' <span class="muted">{low_n} low-priority areas</span>' if low_n else ""),
+                    unsafe_allow_html=True)
+        if sens_sum["text"]:
+            st.markdown(f'<div class="listbox" style="margin-top:.5rem">{_esc(sens_sum["text"])}</div>',
+                        unsafe_allow_html=True)
+        if sens_sum["strategies"]:
+            st.markdown("**Suggested sensory strategies**  \n" +
+                        "\n".join(f"- {s[:1].upper() + s[1:]}" for s in sens_sum["strategies"]))
+
+    # ── Safety & Risk Plan ────────────────────────────────────────────────
+    st.markdown("#### 🛡️ Safety & Risk Management Plan")
+    if safe["error"]:
+        st.error(f"Couldn't load the Safety & Risk Plan: {safe['error']}")
+    elif not safe["doc"]:
+        st.markdown('<span class="muted">No Safety & Risk Plan filed in the Document Archive. '
+                    '(Plans only appear here once saved to the archive from the Plan Builder.)</span>',
+                    unsafe_allow_html=True)
+    else:
+        sp = safe.get("parsed") or {}
+        st.caption(f"Plan dated {sp.get('plan_date') or _fmt(_d(safe['doc'].get('created_at')), True)}"
+                   f" · {_review_note(sp.get('review_date'))[0]}"
+                   + (f" · {safe['count']} versions filed" if safe["count"] > 1 else ""))
+        if not sp:
+            st.info("The plan is filed but couldn't be read — open it from the Documents tab.")
+        else:
+            order = {"EXTREME": 0, "HIGH": 1, "MODERATE": 2, "LOW": 3}
+            for r in sorted(sp.get("risks", []), key=lambda r: order.get(r.get("level"), 4)):
+                col = RISK_COL.get(r.get("level"), GREY)
+                fn = f'<br><span class="muted">Function: {_esc(redact(r["function"]))}</span>' if r.get("function") else ""
+                st.markdown(
+                    f'<div class="risk"><div class="lvl" style="background:{col}">{_esc(r.get("level") or "—")}'
+                    f'<br>{_esc(r.get("code"))}</div><div><b>{_esc(redact(r["issue"]))}</b>{fn}</div></div>',
+                    unsafe_allow_html=True,
+                )
+            if sp.get("priority_actions"):
+                st.markdown("**Priority actions**  \n" + "\n".join(
+                    f"- {redact(a)}" for a in sp["priority_actions"][:8]))
+            st.caption("Full plan (proactive strategies and procedures) is in the Documents tab.")
 
 # ══════════════════════════════════════════════════════════════════════════
 # GOALS
@@ -983,13 +1832,29 @@ with tab_b:
                   help="1 = minor/coping · 3 = elevated · 5 = crisis")
         m4.metric("Absences", n_abs)
 
+        # ── Behaviour summary ─────────────────────────────────────────────
+        st.markdown("#### 📋 Behaviour summary")
+        st.markdown(f'<div class="listbox" style="font-size:.9rem;line-height:1.6">'
+                    f'{_esc(redact(period_summary_text()))}</div>', unsafe_allow_html=True)
+
+        # ── Functional hypothesis ─────────────────────────────────────────
+        st.markdown("#### 🔬 Functional hypothesis")
+        render_hypothesis()
+
+        # ── Graphs ────────────────────────────────────────────────────────
+        st.markdown("#### 📈 Graphs")
         if bs["inc"]:
             # Weekly incidents, critical stacked on top
             wk = Counter()
             wk_c = Counter()
+            sev_wk: dict = {}
             for i in bs["inc"]:
                 m = _monday(_d(i["date"]))
                 (wk_c if i.get("is_critical") else wk)[m] += 1
+                try:
+                    sev_wk.setdefault(m, []).append(float(i.get("severity")))
+                except (TypeError, ValueError):
+                    pass
             mondays = []
             m = _monday(start)
             while m <= end:
@@ -1003,16 +1868,28 @@ with tab_b:
             fig.update_xaxes(tickformat="%-d %b")
             st.plotly_chart(plot_layout(fig, 280), use_container_width=True)
 
-            p1, p2, p3 = st.columns(3)
-            with p1:
-                top_table("Behaviours", bs["behaviours"], n_inc)
-            with p2:
-                top_table("Locations", bs["locations"], n_inc)
-            with p3:
-                top_table("Hypothesised function", bs["functions"], n_inc)
+            g1, g2 = st.columns(2)
+            with g1:
+                hbar(bs["behaviours"], "Most common behaviours", TEAL)
+            with g2:
+                hbar(bs["locations"], "Where incidents happen", AMBER)
+            g3, g4 = st.columns(2)
+            with g3:
+                hbar(bs["functions"], "Function recorded by staff", "#5b6ee1")
+            with g4:
+                sx = [m for m in mondays if sev_wk.get(m)]
+                if sx:
+                    sf = go.Figure(go.Scatter(
+                        x=sx, y=[round(sum(sev_wk[m]) / len(sev_wk[m]), 1) for m in sx],
+                        mode="lines+markers", line=dict(color=RED, width=2.5), name="Average severity",
+                        hovertemplate="Week of %{x|%-d %b}<br>Average severity %{y}<extra></extra>"))
+                    sf.update_yaxes(range=[0, 5.3], dtick=1)
+                    sf.update_xaxes(tickformat="%-d %b")
+                    sf.update_layout(title=dict(text="Average severity by week", font=dict(size=14)),
+                                     showlegend=False)
+                    st.plotly_chart(plot_layout(sf, 260), use_container_width=True)
 
             # When — session × day heat strip
-            st.markdown("**When incidents happen**")
             z = [[sum(1 for i in bs["inc"]
                       if i.get("session") == s
                       and (i.get("day_of_week") or (_d(i["date"]).strftime("%A"))) == d)
@@ -1024,7 +1901,8 @@ with tab_b:
                 hovertemplate="%{y}, %{x}: %{z}<extra></extra>",
             ))
             hm.update_yaxes(autorange="reversed")
-            st.plotly_chart(plot_layout(hm, 200), use_container_width=True)
+            hm.update_layout(title=dict(text="When incidents happen (session × day)", font=dict(size=14)))
+            st.plotly_chart(plot_layout(hm, 230), use_container_width=True)
         else:
             st.success("No incidents recorded in this period.")
 
@@ -1047,38 +1925,29 @@ with tab_b:
         if len(crit) > 6:
             st.caption(f"+ {len(crit) - 6} more — open Behaviour Support for the full list.")
 
-    # Scatter plot tracker
+    # ── Window of Tolerance ───────────────────────────────────────────────
     st.divider()
-    st.markdown("#### 📍 Scatter Plot Tracker")
-    if sc["error"]:
-        st.error(f"Couldn't load scatter plot data: {sc['error']}")
-    elif not sc["weeks"]:
-        st.info(f"No scatter plot weeks recorded for {ini}.")
+    st.markdown("#### 🪟 Window of Tolerance")
+    if wot_rec["error"] and not wot_view:
+        st.error(f"Couldn't load the Window of Tolerance: {wot_rec['error']}")
+    elif not wot_view:
+        st.info(f"No Window of Tolerance for {ini} yet, and not enough incident data to draft one. "
+                "Build it in the Window of Tolerance Builder.")
     else:
-        for b in scs["behaviours"] or list(sc["definitions"].keys()):
-            definition = sc["definitions"].get(b)
-            st.markdown(f"**Target behaviour:** {b}" + (f"  \n<span class='muted'>{_esc(definition)}</span>"
-                                                       if definition else ""), unsafe_allow_html=True)
-        if not scs["total"]:
-            st.info("No tallies recorded in this period.")
+        if wot_view["source"] == "builder":
+            st.caption(f"From the Window of Tolerance Builder"
+                       + (f" · last saved {_fmt(wot_view['updated'], True)}" if wot_view.get("updated") else "")
+                       + (f" by {wot_view['by']}" if wot_view.get("by") else ""))
         else:
-            peak = max(scs["grid"].items(), key=lambda kv: kv[1])
-            s1, s2, s3 = st.columns(3)
-            s1.metric("Tallies", scs["total"])
-            s2.metric("Weeks recorded", scs["weeks"])
-            s3.metric("Peak", f"{peak[0][0][:3]} {peak[0][1]}")
-            z = [[scs["grid"].get((d, t), 0) for d in DAY_NAMES] for t in scs["slots"]]
-            hm = go.Figure(go.Heatmap(
-                z=z, x=[d[:3] for d in DAY_NAMES], y=scs["slots"],
-                colorscale=[[0, "#f4f8f8"], [0.5, "#e8a54b"], [1, RED]],
-                showscale=False, text=[[v or "" for v in row] for row in z], texttemplate="%{text}",
-                hovertemplate="%{y}, %{x}: %{z}<extra></extra>",
-            ))
-            hm.update_yaxes(autorange="reversed")
-            hm.update_layout(title=dict(text="Tallies by time slot and day (all weeks in period)",
-                                        font=dict(size=14)))
-            st.plotly_chart(plot_layout(hm, max(220, 34 * len(scs["slots"]) + 80)),
-                            use_container_width=True)
+            st.warning("Not yet built in the Window of Tolerance Builder — this is the Behaviour Support "
+                       "Tool's **draft from incident data**. It covers the four dysregulated zones only; "
+                       "what regulated looks like for this student needs staff to add it in the Builder.")
+        render_wot(wot_view["zones"], draft=wot_view["source"] == "draft")
+        if wot_view["source"] == "builder" and wot_draft:
+            with st.expander("Compare with what the incident data shows"):
+                st.caption("The Behaviour Support Tool's draft, from this student's logged incidents. "
+                           "Useful for checking the built window still matches recent behaviour.")
+                render_wot(wot_draft, draft=True)
 
 # ══════════════════════════════════════════════════════════════════════════
 # TRANSITION
@@ -1191,5 +2060,5 @@ with tab_d:
         st.link_button("📁 Open Document Archive", f"{PORTAL}/Document_Archive")
 
 st.divider()
-st.caption("🧭 Student Snapshot · read-only view of SMARTAR, Behaviour Support, Scatter Plot Tracker, "
+st.caption("🧭 Student Snapshot · read-only view of SMARTAR, Behaviour Support, Window of Tolerance, "
            "Transition Timetables and the Document Archive · initials only.")
