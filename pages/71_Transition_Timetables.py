@@ -253,6 +253,38 @@ def cb_new():
     load_into_editor(None)
 
 
+def parsed_to_record(parsed: dict) -> dict:
+    """Turn a parsed Word timetable into an editor record (initials only)."""
+    sens = parsed["sensitive"]
+    full = sens.get("full_name", "")
+    ini = tu.initials_from_name(full)
+    reg = [r for r in load_register() if not r["archived"]]
+    parts = [p for p in full.replace(".", " ").split() if p]
+    two = "".join(p[0].upper() for p in parts[:2])
+    match = next((r for r in reg if r["initials"] in (ini, two)), None)
+    rec = dict(parsed["header"])
+    rec["student_initials"] = match["initials"] if match else ini
+    rec["weeks"] = parsed["weeks"]
+    rec["program"] = "PY"
+    if match:
+        rec["register_id"] = match["id"] or None
+        rec["program"] = match["program"] if match["program"] in PROGRAMS else "PY"
+        rec["year_level"] = rec.get("year_level") or match["year"]
+    rec["_on_register"] = bool(match)
+    return rec
+
+
+def weeks_preview_html(weeks: list[dict], short: str) -> str:
+    head = "".join(f"<th>{d}</th>" for d in tu.DAY_NAMES)
+    body = ""
+    for w in tu.sort_weeks(weeks):
+        mon = tu.week_monday(w["year"], w["term"], w["week"])
+        cells = "".join(cell_html(w["days"][i], short) for i in range(5))
+        body += (f'<tr><td class="stu">T{w["term"]} W{w["week"]}<br>'
+                 f'<small>{mon.strftime("%d/%m")}–{(mon + timedelta(days=4)).strftime("%d/%m")}</small></td>{cells}</tr>')
+    return f'<table class="tt-grid"><tr><th>Week</th>{head}</tr>{body}</table>'
+
+
 def do_publish(row: dict, by: str, note: str) -> str:
     """Publish + build the message shown after rerun."""
     with st.spinner("Publishing — emailing staff and filing in the Document Archive…"):
@@ -343,7 +375,7 @@ def stepdown_sentence(weeks: list[dict]) -> str:
 # ──────────────────────────────────────────────────────────────────────────
 # Navigation
 # ──────────────────────────────────────────────────────────────────────────
-VIEWS = ["📅 This Week", "🗂️ Timetables", "✏️ Create / Edit", "⚙️ Email settings"]
+VIEWS = ["📅 This Week", "🗂️ Timetables", "📥 Upload Word", "✏️ Create / Edit", "⚙️ Email settings"]
 if "tt_goto" in ss:
     ss.tt_view = ss.pop("tt_goto")
 if k("program") not in ss:
@@ -544,9 +576,110 @@ elif view == VIEWS[1]:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# ✏️ CREATE / EDIT
+# 📥 UPLOAD WORD TIMETABLES
 # ══════════════════════════════════════════════════════════════════════════
 elif view == VIEWS[2]:
+    st.subheader("📥 Convert Word timetables")
+    st.caption("Upload one or more transition timetables written in Word (the usual CLC layout). Each one is "
+               "converted into a portal timetable you can check, then save as a **Draft**. Once it's published, "
+               "it connects to This Week, the Bulletin lines, the Document Archive and the email alerts.")
+    st.caption("🔒 The Word files aren't stored. Only initials are saved. The full name, EDID and DOB in the file are "
+               "kept for this session only, so you can re-export the Word version from the editor.")
+    ss.setdefault("tt_up_nonce", 0)
+    ss.setdefault("tt_up_done", {})
+    files = st.file_uploader("Word timetables (.docx)", type=["docx"], accept_multiple_files=True,
+                             key=f"tt_up_files_{ss.tt_up_nonce}")
+    if not files:
+        st.info("Drag Word timetables here, or click **Browse files**. You can select several at once.")
+    else:
+        uc = st.columns([2, 3])
+        up_by = uc[0].text_input("Your name (for saving)", key="tt_up_by", value=ss.get("tt_name", ""))
+        if up_by.strip():
+            ss.tt_name = up_by.strip()
+        open_initials = {t.get("student_initials") for t in load_all(include_complete=False)}
+
+        converted = []
+        for fi, f in enumerate(files):
+            fkey = f"{f.name}:{f.size}"
+            with st.container(border=True):
+                st.markdown(f"**📄 {html.escape(f.name)}**")
+                if fkey in ss.tt_up_done:
+                    st.success(ss.tt_up_done[fkey])
+                    continue
+                try:
+                    parsed = tu.parse_timetable_docx(f.getvalue())
+                except Exception as e:
+                    st.error(f"Couldn't read this file: {e}. Is it a Word (.docx) timetable?")
+                    continue
+                if not parsed["weeks"]:
+                    st.error("No weeks found. This doesn't look like the CLC transition timetable layout — "
+                             "use **Create / Edit** to enter it by hand.")
+                    continue
+                rec = parsed_to_record(parsed)
+                cc = st.columns([1, 1, 2, 2])
+                rec["student_initials"] = cc[0].text_input("Initials", value=rec["student_initials"],
+                                                           key=f"up_ini_{fi}_{fkey}", max_chars=4).strip().upper()
+                rec["program"] = cc[1].selectbox("Program", PROGRAMS, index=PROGRAMS.index(rec["program"]),
+                                                 key=f"up_prog_{fi}_{fkey}")
+                cc[2].markdown(f"**Home school:** {html.escape(rec.get('home_school') or '—')}  \n"
+                               f"**Contact:** {html.escape(rec.get('home_school_contact') or '—')} · "
+                               f"**BSC:** {html.escape(rec.get('bsc') or '—')}")
+                rd = rec.get("recommencement_date")
+                cc[3].markdown(f"**Recommencement:** {tu.recommencement_text(date.fromisoformat(rd)) if rd else '—'}  \n"
+                               + (stepdown_sentence(rec["weeks"]) or f"{len(rec['weeks'])} week(s)"))
+                if not rec.pop("_on_register"):
+                    st.caption(f"ℹ️ {rec['student_initials'] or 'This student'} isn't on the Student Register — "
+                               "check the initials and program.")
+                if rec["student_initials"] in open_initials:
+                    st.warning(f"{rec['student_initials']} already has an open timetable in the portal. "
+                               "Saving this creates a second one — open the existing one from Timetables if "
+                               "this is an update.")
+                for w_ in parsed["warnings"]:
+                    st.warning(w_)
+                short = rec.get("home_school_short") or tu.school_short_name(rec.get("home_school", ""))
+                st.markdown(weeks_preview_html(rec["weeks"], short), unsafe_allow_html=True)
+
+                bc_ = st.columns([1, 1, 3])
+                if bc_[0].button("✏️ Check in editor", key=f"up_ed_{fi}_{fkey}"):
+                    ss.tt_up_done[fkey] = f"Opened {rec['student_initials']} in the editor (not saved yet)."
+                    load_into_editor(rec, sensitive=parsed["sensitive"],
+                                     flash=f"Converted {f.name}. Check the grid, then **Save draft**.")
+                    st.rerun()
+                if bc_[1].button("💾 Save as draft", key=f"up_sv_{fi}_{fkey}"):
+                    if not up_by.strip():
+                        st.error("Add your name above first.")
+                    elif not rec["student_initials"]:
+                        st.error("Add the student's initials.")
+                    else:
+                        row = tu.save_timetable(client, rec, up_by.strip(), f"Converted from Word: {f.name}")
+                        ss.tt_up_done[fkey] = (f"💾 Saved as draft {row.get('student_initials')} · {row.get('program')}. "
+                                               "Find it in **Timetables** to check and publish.")
+                        st.rerun()
+                converted.append((fkey, rec))
+
+        if len(converted) > 1:
+            st.divider()
+            if st.button(f"💾 Save all {len(converted)} as drafts", type="primary"):
+                if not up_by.strip():
+                    st.error("Add your name above first.")
+                elif any(not r["student_initials"] for _, r in converted):
+                    st.error("Every timetable needs initials before saving.")
+                else:
+                    for fkey, rec in converted:
+                        row = tu.save_timetable(client, rec, up_by.strip(), "Converted from Word")
+                        ss.tt_up_done[fkey] = (f"💾 Saved as draft {row.get('student_initials')} · {row.get('program')}. "
+                                               "Find it in **Timetables** to check and publish.")
+                    st.rerun()
+        if ss.tt_up_done and st.button("🧹 Clear and upload more"):
+            ss.tt_up_done = {}
+            ss.tt_up_nonce += 1
+            st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ✏️ CREATE / EDIT
+# ══════════════════════════════════════════════════════════════════════════
+elif view == VIEWS[3]:
     dr = ss.tt_draft
     top = st.columns([3, 1])
     top[0].subheader(("Editing " + dr["student_initials"] + f" (v{dr['version']})") if dr.get("id") else "New transition timetable")
@@ -566,7 +699,8 @@ elif view == VIEWS[2]:
 
     # ── Upload an existing Word timetable
     with st.expander("📥 Start from an existing Word timetable", expanded=not dr.get("id") and not dr["weeks"]):
-        st.caption("Upload a timetable in the usual CLC layout. The grid fills in for you to check. "
+        st.caption("Tip: the **📥 Upload Word** section (top of the page) converts several at once. "
+                   "Upload a timetable in the usual CLC layout. The grid fills in for you to check. "
                    "The Word file itself isn't stored, and the full name / EDID / DOB in it are only kept "
                    "in this session for the export.")
         up = st.file_uploader("Word timetable (.docx)", type=["docx"], key=k("upload"))
@@ -577,15 +711,8 @@ elif view == VIEWS[2]:
                 st.error(f"Couldn't read that file: {e}")
             else:
                 sens = parsed["sensitive"]
-                ini = tu.initials_from_name(sens.get("full_name", ""))
-                rec = dict(parsed["header"])
-                rec["student_initials"] = ini
-                rec["weeks"] = parsed["weeks"]
-                match = next((r for r in load_register() if r["initials"] == ini and not r["archived"]), None)
-                if match:
-                    rec["register_id"] = match["id"] or None
-                    rec["program"] = match["program"] or "PY"
-                    rec["year_level"] = rec.get("year_level") or match["year"]
+                rec = parsed_to_record(parsed)
+                ini = rec["student_initials"]
                 msg = f"Read {len(parsed['weeks'])} week(s) for {ini or 'the student'}. Check the grid, then save."
                 if parsed["warnings"]:
                     msg += "  ⚠️ " + "  ⚠️ ".join(parsed["warnings"])
