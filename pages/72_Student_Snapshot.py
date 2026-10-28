@@ -172,6 +172,48 @@ st.markdown(f"""
            border-radius:8px; padding:.5rem .7rem; margin:.3rem 0; font-size:.87rem; }}
   .risk .lvl {{ min-width:74px; text-align:center; border-radius:6px; color:white; font-weight:700;
                 font-size:.72rem; padding:.25rem .3rem; }}
+  .ov-grid {{ display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:.75rem; margin:.2rem 0 .6rem; }}
+  .ov-tile {{ color:#fff; border-radius:14px; padding:.85rem 1rem .8rem; min-height:150px;
+              box-shadow:0 4px 14px rgba(20,40,40,.14); display:flex; flex-direction:column; }}
+  .ov-top {{ display:flex; align-items:center; gap:.45rem; }}
+  .ov-ico {{ font-size:1.15rem; }}
+  .ov-lbl {{ font-size:.74rem; font-weight:700; text-transform:uppercase; letter-spacing:.08em; opacity:.95; }}
+  .ov-tab {{ margin-left:auto; font-size:.68rem; background:rgba(255,255,255,.18); border-radius:999px;
+             padding:.08rem .5rem; opacity:.9; white-space:nowrap; }}
+  .ov-big {{ font-size:1.75rem; font-weight:800; line-height:1.15; margin:.35rem 0 .1rem; }}
+  .ov-big small {{ font-size:.85rem; font-weight:600; opacity:.85; }}
+  .ov-body {{ font-size:.83rem; line-height:1.45; flex:1; }}
+  .ov-body p {{ margin:.25rem 0; }}
+  .ov-body ul {{ margin:.1rem 0 .3rem; padding-left:1.05rem; }}
+  .ov-dim {{ opacity:.85; font-size:.78rem; }}
+  .ov-k {{ font-size:.66rem; font-weight:700; text-transform:uppercase; letter-spacing:.07em;
+           opacity:.8; margin-top:.3rem; }}
+  .ov-chips {{ margin-top:.45rem; display:flex; flex-wrap:wrap; gap:.3rem; }}
+  .ov-chip {{ font-size:.7rem; font-weight:700; border-radius:999px; padding:.12rem .55rem;
+              background:rgba(255,255,255,.92); color:#1f2d2d; }}
+  .ov-chip.ov-bad {{ color:#b0281b; }} .ov-chip.ov-good {{ color:#1a7a3c; }}
+  .ov-chip.ov-warn {{ color:#9a5a06; }} .ov-chip.ov-info {{ color:#2b3b3b; }}
+  .ov-bar {{ display:flex; align-items:center; gap:.4rem; font-size:.75rem; margin:.28rem 0; }}
+  .ov-bar span {{ width:1.4rem; opacity:.85; }} .ov-bar b {{ min-width:3.2rem; text-align:right; }}
+  .ov-track {{ flex:1; height:8px; background:rgba(255,255,255,.25); border-radius:999px; overflow:hidden; }}
+  .ov-fill {{ height:100%; background:#fff; border-radius:999px; }}
+  .ov-band {{ background:rgba(255,255,255,.95); color:#1f2d2d; border-radius:6px; padding:.25rem .45rem;
+              margin:.22rem 0; font-size:.74rem; line-height:1.3; }}
+  .ov-help {{ color:#2E7A48; font-size:.72rem; }}
+  .ov-days {{ display:flex; gap:.25rem; margin:.3rem 0; }}
+  .ov-day {{ flex:1; text-align:center; border-radius:6px; padding:.2rem 0; font-size:.68rem; line-height:1.2; }}
+  .ov-day b {{ display:block; font-size:.8rem; }}
+  .ov-clc {{ background:#fff; color:#8f5205; }} .ov-home {{ background:rgba(255,255,255,.3); }}
+  .ov-none {{ background:rgba(0,0,0,.12); opacity:.7; }}
+  .ov-risk {{ display:flex; gap:.4rem; align-items:center; margin:.22rem 0; font-size:.78rem; }}
+  .ov-lv {{ background:#fff; color:#7d241b; font-weight:800; font-size:.62rem; border-radius:4px;
+            padding:.05rem .3rem; min-width:2.1rem; text-align:center; }}
+  .ov-pill {{ display:inline-block; background:rgba(255,255,255,.95); color:#5f2a78; border-radius:999px;
+              padding:.08rem .5rem; margin:.15rem .2rem .1rem 0; font-size:.72rem; font-weight:700; }}
+  .ov-trial {{ font-size:.78rem; margin:.2rem 0; }}
+  @media (max-width: 1100px) {{ .ov-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
+  @media (max-width: 640px) {{ .ov-grid {{ grid-template-columns: 1fr; }}
+                               .ov-tile {{ grid-column: span 1 !important; }} }}
   .wot {{ display:flex; flex-direction:column; gap:.4rem; }}
   .wot-row {{ display:grid; grid-template-columns: 1.1fr 1.4fr 1.4fr 1.4fr; gap:.7rem;
               border-radius:8px; padding:.6rem .8rem; font-size:.84rem; color:#1f2d2d; }}
@@ -984,14 +1026,6 @@ def day_text(day: dict, home_short: str) -> str:
 # ──────────────────────────────────────────────────────────────────────────
 # Small render helpers
 # ──────────────────────────────────────────────────────────────────────────
-def tile(col, label: str, big: str, note: str = "", kind: str = "info"):
-    col.markdown(
-        f'<div class="tile {kind}"><div class="lbl">{label}</div>'
-        f'<div class="big">{big}</div><div class="note">{note}</div></div>',
-        unsafe_allow_html=True,
-    )
-
-
 def _esc(s) -> str:
     return (str(s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
@@ -1317,47 +1351,15 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ── At a glance ───────────────────────────────────────────────────────────
-t1, t2, t3, t4 = st.columns(4)
-
+# ── Derived values used by the overview tiles and the tabs ───────────────
 tracked = [s for _, s in goal_rows if s["pct_on"] is not None]
-if not active_goals:
-    tile(t1, "SMARTAR goals", "None active", "Set goals in the Goal Builder", "warn")
-else:
-    on_track = sum(1 for s in tracked if s["pct_on"] >= 60)
-    declining = sum(1 for _, s in goal_rows if s["trend"] == "declining")
-    note = f"{on_track} of {len(active_goals)} at Expected+ most of the time"
-    if declining:
-        note += f" · {declining} declining"
-    avg = round(sum(s["pct_on"] for s in tracked) / len(tracked)) if tracked else None
-    kind = "bad" if declining else ("good" if avg is not None and avg >= 60 else "warn")
-    tile(t1, "SMARTAR goals", f"{avg}% Expected+" if avg is not None else "No tracking", note, kind)
-
 n_inc = len(bs["inc"])
 delta = n_inc - bs["prev_n"]
-arrow = "▲" if delta > 0 else "▼" if delta < 0 else "="
-kind = "bad" if bs["crit_n"] else ("warn" if delta > 0 else "good")
-tile(t2, "Incidents", f"{n_inc}",
-     f"{arrow} {abs(delta)} vs previous period · {bs['crit_n']} critical", kind)
-
 school_days = school_days_between(start, end)
 n_abs = len(bs["absent"])
-tile(t3, "Absences", f"{n_abs}", f"of {school_days} school days in this period",
-     "warn" if school_days and n_abs / school_days > 0.1 else "info")
-
-if tt:
-    view = tt_view(tt)
-    weeks = tt_weeks(view)
-    lcd = tu.last_clc_day(weeks) if (tu and weeks) else None
-    tile(t4, "Transition", tt_status(tt).split(" ", 1)[-1],
-         f"Last CLC day {_fmt(lcd, True)}" if lcd else (view.get("home_school") or ""),
-         "good" if tt.get("status") in ("published", "active") else "warn")
-else:
-    tile(t4, "Transition", "No timetable", "Create one in Transition Timetables", "info")
-
-# ── Plans on file ─────────────────────────────────────────────────────────
-st.markdown('<div class="strip-lbl">Plans on file</div>', unsafe_allow_html=True)
-q1, q2, q3, q5, q4 = st.columns(5)
+plan = prof["plan"]
+running = [t for t in prof["trials"] if t.get("status") == "Running"]
+done = [t for t in prof["trials"] if t.get("status") != "Running"]
 
 
 def _review_note(review) -> tuple[str, str]:
@@ -1371,51 +1373,8 @@ def _review_note(review) -> tuple[str, str]:
     return (f"Review due {_fmt(rd, True)}", "good")
 
 
-plan = prof["plan"]
-if plan:
-    note, kind = _review_note(plan.get("review_date"))
-    upd = _d(plan.get("last_updated_at"))
-    tile(q1, "Behaviour Support Plan", "✓ In place", f"{note}" + (f" · updated {_fmt(upd)}" if upd else ""), kind)
-else:
-    tile(q1, "Behaviour Support Plan", "Not started", "Write it in Behaviour Support → Support Plan", "warn")
-
-sp = safe.get("parsed") or {}
-if safe["doc"]:
-    n_high = sum(1 for r in sp.get("risks", []) if r.get("level") in ("EXTREME", "HIGH"))
-    note, kind = _review_note(sp.get("review_date"))
-    tile(q2, "Safety & Risk Plan", f"✓ {_fmt(_d(safe['doc'].get('created_at')), True)}",
-         f"{len(sp.get('risks', []))} risks ({n_high} high/extreme) · {note}", "bad" if kind == "bad" else kind)
-else:
-    tile(q2, "Safety & Risk Plan", "None filed", "Not in the Document Archive", "info")
-
-if sens["latest"]:
-    rec = sens["latest"]
-    highs = [k for k, v in (sens_sum or {}).get("areas", []) if v.get("priority") == "HIGH PRIORITY"]
-    note, kind = _review_note(rec.get("review_date"))
-    tile(q3, "Sensory Overview", f"✓ {_fmt(_d(rec.get('overview_date')), True)}",
-         (f"{len(highs)} high-priority area{'s' if len(highs) != 1 else ''} · " if highs else "No high areas · ")
-         + note, kind)
-else:
-    tile(q3, "Sensory Overview", "Not completed", "Complete one in Sensory Overview", "info")
-
-if wot_view and wot_view["source"] == "builder":
-    upd = wot_view.get("updated")
-    tile(q5, "Window of Tolerance", f"✓ {_fmt(upd, True)}" if upd else "✓ Built",
-         ("Filed to archive" if wot_view.get("status") == "archived" else "Saved in WoT Builder")
-         + (f" · {wot_view['by']}" if wot_view.get("by") else ""), "good")
-elif wot_view:
-    tile(q5, "Window of Tolerance", "Data draft only", "Not yet built in the WoT Builder", "warn")
-else:
-    tile(q5, "Window of Tolerance", "Not built", "Build one in the WoT Builder", "info")
-
-running = [t for t in prof["trials"] if t.get("status") == "Running"]
-done = [t for t in prof["trials"] if t.get("status") != "Running"]
-if prof["trials"]:
-    worked = sum(1 for t in done if str(t.get("outcome") or "").startswith(("Worked", "Partly")))
-    tile(q4, "Strategy trials", f"{len(running)} running",
-         f"{len(done)} concluded · {worked} helped", "good" if running else "info")
-else:
-    tile(q4, "Strategy trials", "None yet", "Start one from Behaviour Support → Analysis", "info")
+# Colourful overview tiles — filled in further down, once every helper exists
+overview_box = st.container()
 
 # ── Actions ───────────────────────────────────────────────────────────────
 st.write("")
@@ -1592,6 +1551,244 @@ def render_hypothesis():
         st.markdown(f'<span class="muted">{ini} isn\'t set up in the Behaviour Support Tool yet.</span>',
                     unsafe_allow_html=True)
 
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# OVERVIEW — one colourful tile per area, the detail lives in the tabs below
+# ══════════════════════════════════════════════════════════════════════════
+OV_THEME = {
+    "summary": ("#1A7A7A", "#0f5656"), "hyp": ("#2E7A48", "#1c5530"),
+    "about": ("#d9603b", "#a8401f"), "goals": ("#2c6fb7", "#1b4c82"),
+    "wot": ("#3C4C6B", "#232f47"), "trans": ("#C8760A", "#8f5205"),
+    "plan": ("#4b4fb3", "#2f3285"), "safety": ("#b03a2e", "#7d241b"),
+    "sensory": ("#8e44ad", "#5f2a78"), "trials": ("#a0407a", "#6e2752"),
+    "empty": ("#8a9a9a", "#6b7b7b"),
+}
+
+
+def _ov_tile(key: str, icon: str, label: str, big: str = "", body: str = "",
+             chips: list[tuple[str, str]] | None = None, span: int = 1, tab: str = "",
+             empty: bool = False) -> str:
+    c1, c2 = OV_THEME["empty" if empty else key]
+    chip_html = "".join(
+        f'<span class="ov-chip ov-{kind}">{_esc(txt)}</span>' for txt, kind in (chips or []) if txt)
+    return (
+        f'<div class="ov-tile" style="grid-column:span {span};'
+        f'background:linear-gradient(135deg,{c1} 0%,{c2} 100%)">'
+        f'<div class="ov-top"><span class="ov-ico">{icon}</span><span class="ov-lbl">{_esc(label)}</span>'
+        f'{f"<span class=ov-tab>{_esc(tab)} ›</span>" if tab else ""}</div>'
+        f'{f"<div class=ov-big>{big}</div>" if big else ""}'
+        f'<div class="ov-body">{body}</div>'
+        f'{f"<div class=ov-chips>{chip_html}</div>" if chip_html else ""}</div>'
+    )
+
+
+def _ul(items, n=3, cut=70) -> str:
+    items = [x for x in items if x][:n]
+    if not items:
+        return ""
+    return "<ul>" + "".join(f"<li>{_esc(_short(redact(x), cut))}</li>" for x in items) + "</ul>"
+
+
+def _review_chip(review) -> tuple[str, str]:
+    txt, kind = _review_note(review)
+    return (txt.replace("Review overdue — was due", "Review overdue ·"), kind)
+
+
+def render_overview():
+    tiles = []
+
+    # 1 ── Behaviour summary (wide)
+    if beh["student_ids"]:
+        sents = re.split(r"(?<=\.)\s+", redact(period_summary_text()))
+        arrow = "▲" if delta > 0 else "▼" if delta < 0 else "="
+        tiles.append(_ov_tile(
+            "summary", "📋", "Behaviour summary",
+            big=f'{n_inc}<small> incidents</small>',
+            body="<p>" + _esc(" ".join(sents[1:3]) or sents[0]) + "</p>",
+            chips=[(f"{arrow} {abs(delta)} vs previous period" if period != "Whole placement" else "",
+                    "bad" if delta > 0 else "good" if delta < 0 else "info"),
+                   (f"{bs['crit_n']} critical", "bad" if bs["crit_n"] else "good"),
+                   (f"Severity {bs['avg_sev']}/5" if bs["avg_sev"] is not None else "", "info"),
+                   (f"Absent {n_abs}/{school_days} days", "warn" if school_days and n_abs / school_days > .1 else "info")],
+            span=2, tab="Behaviour"))
+    else:
+        tiles.append(_ov_tile("summary", "📋", "Behaviour summary", body="<p>Not set up in the Behaviour "
+                              "Support Tool yet.</p>", span=2, empty=True))
+
+    # 2 ── Functional hypothesis (wide)
+    if hyp:
+        det = hyp.get("detail", {})
+        fn = det.get("Behavioural Function", "")
+        m = re.search(r"functions primarily to (.+?)\.", hyp["summary"])
+        why = m.group(1) if m else ""
+        tiles.append(_ov_tile(
+            "hyp", "🔬", "Functional hypothesis",
+            big=_esc(fn),
+            body=(f"<p>{_esc(hyp.get('behaviour_label') or '')} — to {_esc(why)}.</p>" if why else "")
+                 + f"<p class='ov-dim'>Most often after {_esc((det.get('Primary Antecedent') or '').lower())}"
+                 f" · {_esc(det.get('Peak Context') or '')}</p>",
+            chips=[(det.get("BSEM Domain Priority", ""), "info"), (f"from {hyp['n']} incidents", "info")],
+            span=2, tab="Behaviour"))
+    else:
+        tiles.append(_ov_tile("hyp", "🔬", "Functional hypothesis",
+                              body="<p>Needs at least 3 logged incidents.</p>", span=2, empty=True))
+
+    # 3 ── About the student
+    pf = prof["profile"] or {}
+    strengths = _as_list(pf.get("strengths")) or _as_list(plan.get("strengths"))
+    interests = _as_list(pf.get("interests")) or _as_list(plan.get("interests"))
+    helps = _as_list(pf.get("what_helps"))
+    if strengths or interests or helps:
+        body = ""
+        if strengths:
+            body += "<div class='ov-k'>Strengths</div>" + _ul(strengths, 2, 45)
+        if interests:
+            body += "<div class='ov-k'>Interests</div><p>" + _esc(", ".join(redact(x) for x in interests[:4])) + "</p>"
+        if helps:
+            body += "<div class='ov-k'>What helps</div>" + _ul(helps, 2, 45)
+        tiles.append(_ov_tile("about", "🙂", "About the student", body=body, tab="Profile"))
+    else:
+        tiles.append(_ov_tile("about", "🙂", "About the student",
+                              body="<p>No starting profile yet.</p>", tab="Profile", empty=True))
+
+    # 4 ── SMARTAR goals
+    if active_goals:
+        avg = round(sum(s["pct_on"] for s in tracked) / len(tracked)) if tracked else None
+        bars = ""
+        for i, (g, s) in enumerate(goal_rows[:4]):
+            pct = s["pct_on"] or 0
+            tr = {"improving": "↗", "declining": "↘", "stable": "→"}.get(s["trend"], "")
+            bars += (f'<div class="ov-bar"><span>G{i + 1}</span><div class="ov-track">'
+                     f'<div class="ov-fill" style="width:{pct}%"></div></div>'
+                     f'<b>{f"{pct}%" if s["pct_on"] is not None else "—"} {tr}</b></div>')
+        declining = sum(1 for _, s in goal_rows if s["trend"] == "declining")
+        tiles.append(_ov_tile("goals", "🎯", "SMARTAR goals",
+                              big=f"{avg}%<small> Expected+</small>" if avg is not None else "No tracking",
+                              body=bars,
+                              chips=[(f"{len(active_goals)} active", "info"),
+                                     (f"{declining} declining" if declining else "", "bad")],
+                              tab="Goals"))
+    else:
+        tiles.append(_ov_tile("goals", "🎯", "SMARTAR goals", body="<p>No active goals.</p>",
+                              tab="Goals", empty=True))
+
+    # 5 ── Window of Tolerance (mini bands)
+    if wot_view:
+        bands = ""
+        for zid, label, _sub, col, _w in WOT_ZONE_META:
+            z = wot_view["zones"].get(zid) or {}
+            line = (z.get("behaviour") or z.get("context") or [""])[0]
+            helps_ = (z.get("interventions") or [""])[0]
+            if not line and not helps_:
+                continue
+            short_lbl = {"hyper": "Hyper", "copingup": "Coping ↑", "wot": "In window",
+                         "copingdown": "Coping ↓", "hypo": "Hypo"}[zid]
+            bands += (f'<div class="ov-band" style="border-left:5px solid {col}">'
+                      f'<b>{short_lbl}</b> {_esc(_short(redact(line), 46))}'
+                      + (f'<div class="ov-help">✓ {_esc(_short(redact(helps_), 52))}</div>' if helps_ else "")
+                      + "</div>")
+        tiles.append(_ov_tile("wot", "🪟", "Window of Tolerance", body=bands,
+                              chips=[("Built in WoT Builder" if wot_view["source"] == "builder"
+                                      else "Draft from incident data",
+                                      "good" if wot_view["source"] == "builder" else "warn")],
+                              tab="Behaviour"))
+    else:
+        tiles.append(_ov_tile("wot", "🪟", "Window of Tolerance", body="<p>Not built yet.</p>",
+                              tab="Behaviour", empty=True))
+
+    # 6 ── Transition (this week strip)
+    if tt:
+        v = tt_view(tt)
+        wks = tt_weeks(v)
+        mon = _monday(TODAY)
+        strip = ""
+        if tu is not None and wks:
+            for k in range(5):
+                d = tu.day_for(wks, mon + timedelta(days=k))
+                loc = (d or {}).get("loc", "")
+                cls = {"CLC": "clc", "HOME": "home"}.get(loc, "none")
+                strip += (f'<div class="ov-day ov-{cls}"><b>{"MTWTF"[k]}</b>'
+                          f'{"CLC" if loc == "CLC" else "Home" if loc == "HOME" else "—"}</div>')
+        lcd = tu.last_clc_day(wks) if (tu and wks) else None
+        home = v.get("home_school_short") or (tu.school_short_name(v.get("home_school") or "") if tu else "")
+        tiles.append(_ov_tile(
+            "trans", "🗓️", "Transition",
+            big=_esc(re.sub(r"^[^\w]+", "", tt_status(tt)).split(" —")[0]),
+            body=(f'<div class="ov-days">{strip}</div>' if strip else "")
+                 + f"<p class='ov-dim'>{_esc(home)}"
+                 + (f" · last CLC day {_fmt(lcd, True)}" if lcd else "") + "</p>",
+            chips=[("This week", "info")] if strip else [], tab="Transition"))
+    else:
+        tiles.append(_ov_tile("trans", "🗓️", "Transition", body="<p>No timetable yet.</p>",
+                              tab="Transition", empty=True))
+
+    # 7 ── Behaviour Support Plan
+    if plan:
+        ews = _as_list(plan.get("early_warning_signs"))
+        resp = _as_list(plan.get("response_early_signs")) or _as_list(plan.get("proactive_strategies_additional"))
+        body = ""
+        if ews:
+            body += "<div class='ov-k'>Watch for</div>" + _ul(ews, 3, 40)
+        if resp:
+            body += "<div class='ov-k'>Then</div>" + _ul(resp, 2, 45)
+        tiles.append(_ov_tile("plan", "🛟", "Support plan", body=body or "<p>Plan started.</p>",
+                              chips=[_review_chip(plan.get("review_date"))], tab="Profile"))
+    else:
+        tiles.append(_ov_tile("plan", "🛟", "Support plan", body="<p>Not written yet.</p>",
+                              tab="Profile", empty=True))
+
+    # 8 ── Safety & Risk Plan
+    sp = safe.get("parsed") or {}
+    if safe["doc"]:
+        order = {"EXTREME": 0, "HIGH": 1, "MODERATE": 2, "LOW": 3}
+        risks = sorted(sp.get("risks", []), key=lambda r: order.get(r.get("level"), 4))
+        body = "".join(f'<div class="ov-risk"><span class="ov-lv">{_esc((r.get("level") or "—")[:3])}</span>'
+                       f'{_esc(_short(redact(r["issue"]), 42))}</div>' for r in risks[:3])
+        n_high = sum(1 for r in risks if r.get("level") in ("EXTREME", "HIGH"))
+        tiles.append(_ov_tile("safety", "🛡️", "Safety & Risk Plan",
+                              big=f"{len(risks)}<small> risks</small>", body=body,
+                              chips=[(f"{n_high} high/extreme" if n_high else "", "bad"),
+                                     _review_chip(sp.get("review_date"))], tab="Profile"))
+    else:
+        tiles.append(_ov_tile("safety", "🛡️", "Safety & Risk Plan", body="<p>None filed.</p>",
+                              tab="Profile", empty=True))
+
+    # 9 ── Sensory Overview
+    if sens["latest"] and sens_sum:
+        pills = "".join(
+            f'<span class="ov-pill">{_esc(a)}{" ●" if v.get("priority") == "HIGH PRIORITY" else ""}</span>'
+            for a, v in sens_sum["areas"] if v.get("priority") in ("HIGH PRIORITY", "MEDIUM PRIORITY"))
+        strat = (sens_sum.get("strategies") or [""])[0]
+        tiles.append(_ov_tile("sensory", "🌈", "Sensory",
+                              body=(f"<div>{pills}</div>" if pills else "<p>No high or medium areas.</p>")
+                                   + (f"<p class='ov-dim'>Try: {_esc(_short(strat, 70))}</p>" if strat else ""),
+                              chips=[("● = high priority", "info") if pills else ("", "info"),
+                                     _review_chip(sens["latest"].get("review_date"))], tab="Profile"))
+    else:
+        tiles.append(_ov_tile("sensory", "🌈", "Sensory", body="<p>No overview completed.</p>",
+                              tab="Profile", empty=True))
+
+    # 10 ── Strategy trials
+    if prof["trials"]:
+        body = "".join(f"<div class='ov-trial'>🟢 {_esc(_short(redact(t.get('title') or 'Trial'), 48))}</div>"
+                       for t in running[:2])
+        body += "".join(f"<div class='ov-trial'>✅ {_esc(_short(redact(t.get('title') or 'Trial'), 34))}"
+                        f" <i>— {_esc((t.get('outcome') or 'concluded').lower())}</i></div>" for t in done[:2])
+        worked = sum(1 for t in done if str(t.get("outcome") or "").startswith(("Worked", "Partly")))
+        tiles.append(_ov_tile("trials", "🧪", "Strategy trials",
+                              big=f"{len(running)}<small> running</small>", body=body,
+                              chips=[(f"{worked} of {len(done)} helped" if done else "", "good")],
+                              tab="Profile"))
+    else:
+        tiles.append(_ov_tile("trials", "🧪", "Strategy trials", body="<p>None yet.</p>",
+                              tab="Profile", empty=True))
+
+    st.markdown('<div class="ov-grid">' + "".join(tiles) + "</div>", unsafe_allow_html=True)
+
+
+with overview_box:
+    render_overview()
 
 
 with tab_p:
