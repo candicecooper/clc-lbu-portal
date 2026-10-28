@@ -612,10 +612,40 @@ def school_days_since(last_entry: date, as_of: date) -> int:
     return count_school_days(last_entry + timedelta(days=1), as_of)
 
 
-def goal_tracking_frequency(goal_id, goal_start, recent_window_days: int = 14) -> dict:
+def count_expected_days(start: date, end: date, excused: set | None = None) -> int:
+    """Weekdays (Mon–Fri) from start to end inclusive, minus any date in
+    `excused` (ISO date strings) — attendance-aware sibling of
+    count_school_days(). With no excused dates it behaves identically."""
+    if start > end:
+        return 0
+    excused = excused or set()
+    n, d = 0, start
+    while d <= end:
+        if d.weekday() < 5 and d.isoformat() not in excused:
+            n += 1
+        d += timedelta(days=1)
+    return n
+
+
+def expected_days_since(last_entry: date, as_of: date, excused: set | None = None) -> int:
+    """Expected school days strictly after last_entry, up to and including
+    as_of, excluding any date in `excused` — attendance-aware sibling of
+    school_days_since()."""
+    if last_entry >= as_of:
+        return 0
+    return count_expected_days(last_entry + timedelta(days=1), as_of, excused)
+
+
+def goal_tracking_frequency(goal_id, goal_start, recent_window_days: int = 14,
+                            excused_dates: set | None = None) -> dict:
     """
     How consistently a goal is being tracked, assuming an entry is expected
-    every school day (Mon–Fri).
+    every school day (Mon–Fri) the student was actually at school.
+
+    excused_dates: ISO date strings (from the Behaviour Support Tool's
+    attendance record — full-day Absent or No School) that are dropped from
+    the expected-days count entirely, so a day the student genuinely couldn't
+    have been tracked never counts against them. Empty/None = old behaviour.
 
     Returns:
         status: "not_started" | "needs_increase" | "on_track"
@@ -623,12 +653,15 @@ def goal_tracking_frequency(goal_id, goal_start, recent_window_days: int = 14) -
         consistency_pct: % of expected school days (last `recent_window_days`
             calendar days, or since the goal started if more recent) that
             have at least one observation
-        days_behind: school days elapsed since the last observation, measured
-            against the last COMPLETED school day (so today isn't flagged
-            before the day is even over)
+        days_behind: expected school days elapsed since the last observation,
+            measured against the last COMPLETED school day (so today isn't
+            flagged before the day is even over)
         expected_days / actual_days: the raw counts behind consistency_pct
+        excused_in_window: how many of the window's weekdays were excused
+            (absence / no school) — 0 if attendance wasn't available/matched
     """
     today = date.today()
+    excused_dates = excused_dates or set()
     try:
         start_d = date.fromisoformat(str(goal_start)[:10]) if goal_start else today
     except Exception:
@@ -638,27 +671,29 @@ def goal_tracking_frequency(goal_id, goal_start, recent_window_days: int = 14) -
     if not all_rows:
         return {
             "status": "not_started", "last_entry": None, "consistency_pct": 0,
-            "expected_days": count_school_days(start_d, today), "actual_days": 0,
-            "days_behind": None,
+            "expected_days": count_expected_days(start_d, today, excused_dates), "actual_days": 0,
+            "days_behind": None, "excused_in_window": 0,
         }
 
     tracked_dates = sorted({r["session_date"] for r in all_rows})
     last_entry = date.fromisoformat(tracked_dates[-1][:10])
 
-    window_from     = max(start_d, today - timedelta(days=recent_window_days))
-    recent_tracked  = {d for d in tracked_dates if d >= window_from.isoformat()}
-    expected_days   = count_school_days(window_from, today) or 1
-    actual_days     = len(recent_tracked)
-    consistency_pct = min(round(actual_days / expected_days * 100), 100)
+    window_from      = max(start_d, today - timedelta(days=recent_window_days))
+    recent_tracked   = {d for d in tracked_dates if d >= window_from.isoformat()}
+    expected_days    = count_expected_days(window_from, today, excused_dates) or 1
+    actual_days      = len(recent_tracked)
+    consistency_pct  = min(round(actual_days / expected_days * 100), 100)
+    excused_in_window = count_school_days(window_from, today) - count_expected_days(window_from, today, excused_dates)
 
     last_completed_school_day = most_recent_school_day(today - timedelta(days=1))
-    days_behind = school_days_since(last_entry, last_completed_school_day)
+    days_behind = expected_days_since(last_entry, last_completed_school_day, excused_dates)
 
     status = "needs_increase" if (days_behind >= 1 or consistency_pct < 60) else "on_track"
 
     return {
         "status": status, "last_entry": last_entry, "consistency_pct": consistency_pct,
         "expected_days": expected_days, "actual_days": actual_days, "days_behind": days_behind,
+        "excused_in_window": excused_in_window,
     }
 
 
@@ -812,12 +847,16 @@ def send_teacher_alert_email(student_name: str, program: str, days_silent: int, 
     mapping Candice fills in on the Admin Panel's Teacher Alerts tab — unlike
     the Hazard Report's fixed Admin/Leadership recipient list, here SHE sets
     who gets alerted for each program. The send mechanism itself (webhook
-    first, SMTP fallback) is identical to send_hazard_email()."""
+    first, SMTP fallback) is identical to send_hazard_email(). `to_addr` may
+    hold more than one address (comma- or semicolon-separated) — each
+    program's box accepts a list, same as the Hazard Report recipients."""
+    import re
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
     from html import escape
 
-    if not to_addr:
+    recipients = [e.strip() for e in re.split(r"[,;]", to_addr or "") if e.strip()]
+    if not recipients:
         return False, "No teacher email set for this program."
     user, pwd, host, port = _smtp_settings()
     webhook = _secret("EMAIL_WEBHOOK_URL", "email.webhook_url", "gmail.webhook_url")
@@ -841,30 +880,33 @@ def send_teacher_alert_email(student_name: str, program: str, days_silent: int, 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = f"CLC Portal <{user}>"
-    msg["To"] = to_addr
+    msg["To"] = ", ".join(recipients)
     msg.attach(MIMEText(html, "html"))
 
     # 1. Web route (works on Render free plan) if it has been set up
     if webhook:
         try:
-            return _send_via_webhook(webhook, webhook_token, [to_addr], subject, html)
+            return _send_via_webhook(webhook, webhook_token, recipients, subject, html)
         except Exception as e:
             if not pwd:
                 return False, f"Email failed: {e}"
     # 2. Gmail SMTP (needs a host that allows email ports)
     try:
-        _send_via_smtp(user, pwd, host, port, [to_addr], msg)
-        return True, "Email sent."
+        _send_via_smtp(user, pwd, host, port, recipients, msg)
+        return True, f"Email sent to {len(recipients)} recipient(s)."
     except Exception as e:
         return False, f"Email failed: {e}"
 
 
-def student_school_days_silent(student_name: str) -> int | None:
-    """School days since this student's most recent tracking entry, counting
-    ANY of their active goals (not just one) — used for the 'hasn't had data
-    entered for two straight days' teacher reminder. Returns None if the
-    student has no active goal, or has never had anything tracked yet (that
-    case is already covered by the 'Not Started' status elsewhere)."""
+def student_school_days_silent(student: dict) -> int | None:
+    """Expected school days since this student's most recent tracking entry,
+    counting ANY of their active goals (not just one) — used for the 'hasn't
+    had data entered for two straight days' teacher reminder. Days the
+    student was marked Absent or there was No School (Behaviour Support
+    Tool) don't count, same as the Program Snapshot status. Returns None if
+    the student has no active goal, or has never had anything tracked yet
+    (that case is already covered by the 'Not Started' status elsewhere)."""
+    student_name = student["student_name"]
     goals = get_goals(student_name)
     if not goals:
         return None
@@ -876,7 +918,8 @@ def student_school_days_silent(student_name: str) -> int | None:
         return None
     last_date = max(date.fromisoformat(str(r["session_date"])[:10]) for r in rows)
     last_completed = most_recent_school_day(date.today() - timedelta(days=1))
-    return school_days_since(last_date, last_completed)
+    excused_dates = get_excused_dates_for_student(student)
+    return expected_days_since(last_date, last_completed, excused_dates)
 
 
 def run_teacher_alert_check(students: list, min_days_silent: int = 2, dry_run: bool = False) -> list:
@@ -890,7 +933,7 @@ def run_teacher_alert_check(students: list, min_days_silent: int = 2, dry_run: b
     today_str = date.today().isoformat()
     results = []
     for s in students:
-        days_silent = student_school_days_silent(s["student_name"])
+        days_silent = student_school_days_silent(s)
         if days_silent is None or days_silent < min_days_silent:
             continue
         prog = s.get("program", "?")
@@ -918,6 +961,83 @@ def run_teacher_alert_check(students: list, min_days_silent: int = 2, dry_run: b
     return results
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ATTENDANCE (from the Behaviour Support Tool) — so a day a student was
+# marked absent, or there was no school, isn't counted as a missed tracking
+# entry. Reads the portal-wide `students` + `student_attendance` tables in
+# the same Supabase project this tool already connects to — nothing here is
+# written, and if a student can't be confidently matched, their tracking
+# status just falls back to the old (attendance-blind) behaviour.
+# ══════════════════════════════════════════════════════════════════════════════
+ATTENDANCE_EXCUSED_TYPES = {"Absent", "No school"}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _behaviour_student_id_map() -> dict:
+    """{(first_name_lower, program): students.id} from the Behaviour Support
+    Tool's central `students` table. Only kept when the first name is unique
+    within that program — if two active students share a first name in the
+    same program, neither is mapped, so attendance is never borrowed from
+    the wrong student."""
+    try:
+        rows = (sb.table("students").select("id, first_name, name, program")
+               .eq("archived", False).execute().data or [])
+    except Exception:
+        return {}
+    by_key = defaultdict(list)
+    for r in rows:
+        fname = (r.get("first_name") or "").strip()
+        if not fname and r.get("name"):
+            fname = str(r["name"]).split()[0]
+        if not fname:
+            continue
+        key = (fname.lower(), (r.get("program") or "").strip())
+        by_key[key].append(str(r["id"]))
+    return {k: v[0] for k, v in by_key.items() if len(v) == 1}
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _attendance_exceptions_for(behaviour_student_id: str) -> list:
+    try:
+        res = (sb.table("student_attendance").select("exceptions")
+              .eq("student_id", behaviour_student_id).limit(1).execute())
+        if res.data:
+            return res.data[0].get("exceptions") or []
+    except Exception:
+        pass
+    return []
+
+
+def get_excused_dates_for_student(student: dict) -> set:
+    """ISO date strings this student was marked Absent, or there was No
+    School, in the Behaviour Support Tool's attendance record. Empty set —
+    i.e. no change to the existing expected-every-school-day logic — if the
+    student can't be matched to a Behaviour Support record or has no
+    attendance recorded yet."""
+    key = ((student.get("student_name") or "").strip().lower(),
+          (student.get("program") or "").strip())
+    behaviour_id = _behaviour_student_id_map().get(key)
+    if not behaviour_id:
+        return set()
+    exceptions = _attendance_exceptions_for(behaviour_id)
+    return {
+        e.get("date") for e in exceptions
+        if e.get("type") in ATTENDANCE_EXCUSED_TYPES and e.get("date")
+    }
+
+
+def attendance_match_coverage(students: list) -> tuple:
+    """(matched_names, unmatched_names) — a quick diagnostic so a silent
+    name/program mismatch between this tool and the Behaviour Support Tool
+    is visible rather than quietly producing the wrong consistency numbers."""
+    id_map = _behaviour_student_id_map()
+    matched, unmatched = [], []
+    for s in students:
+        key = ((s.get("student_name") or "").strip().lower(), (s.get("program") or "").strip())
+        (matched if key in id_map else unmatched).append(s["student_name"])
+    return matched, unmatched
+
+
 # ── Program Snapshot — status meta + per-student aggregation ───────────────────
 SNAPSHOT_STATUS_META = {
     # key: (emoji, label, colour)
@@ -934,17 +1054,20 @@ SNAPSHOT_SEVERITY = {"no_goal": 0, "not_started": 1, "needs_increase": 2, "on_tr
 def build_student_snapshot(student: dict) -> dict:
     """Aggregates one student's active goal(s) into a single Program Snapshot
     row: student, program, overall status (the worst status across their
-    goals), goal_count, and the per-goal detail (goal + its frequency info)."""
+    goals), goal_count, and the per-goal detail (goal + its frequency info).
+    Attendance (Behaviour Support Tool) is factored in once per student and
+    applied to every one of their goals."""
     s_goals = get_goals(student["student_name"])
     if not s_goals:
         return {
             "student": student["student_name"], "program": student.get("program", "?"),
             "status": "no_goal", "goal_count": 0, "goals": [],
         }
+    excused_dates = get_excused_dates_for_student(student)
     goals_info = []
     worst_status = "on_track"
     for g in s_goals:
-        freq = goal_tracking_frequency(g["id"], g.get("start_date"))
+        freq = goal_tracking_frequency(g["id"], g.get("start_date"), excused_dates=excused_dates)
         goals_info.append({"goal": g, "freq": freq})
         if SNAPSHOT_SEVERITY[freq["status"]] < SNAPSHOT_SEVERITY[worst_status]:
             worst_status = freq["status"]
@@ -2558,6 +2681,7 @@ elif view == "📈 Progress Report":
         counts, total, pcts = calc_percentages(tracking)
         trend = analyze_trend(tracking)
         needs_ref, low_c = check_goal_needs_refinement(goal["id"])
+        streak_type, streak_days = check_goal_streak(goal["id"])
 
         smartar_text = goal.get("smartar_goal", "No goal text")
 
@@ -2602,6 +2726,11 @@ elif view == "📈 Progress Report":
                 '<div class="alert-box">➡️ <b>Stable but Low:</b> Consistent low performance — consider refining.</div>',
                 unsafe_allow_html=True,
             )
+
+        if streak_type and is_active:
+            st.markdown(render_streak_alert(streak_type, streak_days), unsafe_allow_html=True)
+            if st.button("✏️ Edit this goal in Goal Builder", key=f"streak_jump_report_{goal['id']}"):
+                jump_to_edit_goal(selected_name, goal["id"])
 
         if goal.get("exclusion_goal"):
             st.markdown(
@@ -2769,6 +2898,21 @@ elif view == "🗺️ Program Snapshot":
         emoji, label, _ = SNAPSHOT_STATUS_META[key]
         mcols[i].metric(f"{emoji} {label}", counts_by_status[key])
 
+    # ── Attendance-matching diagnostic — so a silent name/program mismatch
+    # with the Behaviour Support Tool is visible, not just a wrong number ──
+    matched, unmatched = attendance_match_coverage(students)
+    if matched:
+        cap = f"🔗 Attendance from the Behaviour Support Tool is linked for {len(matched)}/{len(students)} student(s) — excused (absent / no school) days are excluded from their expected tracking days."
+        if unmatched:
+            cap += f" Not linked for: {', '.join(unmatched)} (check the first name matches exactly, incl. program, in both tools)."
+        st.caption(cap)
+    else:
+        st.caption(
+            "ℹ️ No students could be matched to the Behaviour Support Tool's attendance records yet "
+            "(so absence days aren't currently excluded from expected tracking days — everything below "
+            "assumes every school day as before)."
+        )
+
     st.markdown("---")
 
     if display_mode.startswith("📇"):
@@ -2930,6 +3074,9 @@ elif view == "🗺️ Program Snapshot":
                                             mc1.metric("Last entry", freq["last_entry"].strftime("%d %b")
                                                       if freq["last_entry"] else "Never")
                                             mc2.metric("Consistency", f"{freq['consistency_pct']}%")
+                                            if freq.get("excused_in_window"):
+                                                st.caption(f"📅 {freq['excused_in_window']} absence/no-school "
+                                                          f"day(s) excluded from the last 14 school days.")
 
                                             # Reuses the bulk program-wide query
                                             # fetched above — no extra DB round trip.
@@ -3009,6 +3156,9 @@ elif view == "🗺️ Program Snapshot":
                     fc2.metric("Consistency (14 days)", f"{freq['consistency_pct']}%")
                     fc3.metric("Tracking period", g.get("tracking_period", "All Day"))
                     st.caption(f"Performance (last 21 days): {perf_summary}")
+                    if freq.get("excused_in_window"):
+                        st.caption(f"📅 {freq['excused_in_window']} absence/no-school day(s) "
+                                  f"excluded from the last 14 school days.")
 
                     if freq["status"] == "needs_increase":
                         st.markdown(
@@ -3438,13 +3588,14 @@ elif view == "⚙️ Admin Panel":
 
         st.markdown("---")
         st.markdown("**Teacher email per program**")
+        st.caption("You can list more than one address per program, separated by commas.")
         current_emails = get_teacher_emails()
         ecols = st.columns(3)
         new_emails = {}
         for ecol, prog in zip(ecols, PROGRAMS):
             new_emails[prog] = ecol.text_input(
                 f"{prog} teacher email", value=current_emails.get(prog, ""),
-                key=f"teacher_email_{prog}", placeholder="name@school...",
+                key=f"teacher_email_{prog}", placeholder="name@school..., name2@school...",
             )
         if st.button("💾 Save teacher emails", key="save_teacher_emails"):
             if set_teacher_emails(new_emails):
