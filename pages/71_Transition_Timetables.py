@@ -73,9 +73,11 @@ PRESETS = [
     "CLC – custom times",
     "Home school – custom times",
     "Other / not attending",
+    "No session (not scheduled)",
 ]
 CUSTOM_PRESETS = {3, 4}
 OTHER_PRESET = 5
+NONE_PRESET = 6
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -159,6 +161,8 @@ def day_to_preset(d: dict) -> int:
         if d.get("full_day"):
             return 2
         return 1 if (d.get("start"), d.get("end")) == (tu.HOME_AM_START, tu.HOME_AM_END) else 4
+    if d["loc"] == tu.LOC_NONE:
+        return NONE_PRESET
     return OTHER_PRESET
 
 
@@ -174,6 +178,8 @@ def preset_to_day(p: int, iso: str, start: str, end: str, label: str, other: str
         base.update(loc=tu.LOC_CLC, start=start.strip(), end=end.strip())
     elif p == 4:
         base.update(loc=tu.LOC_HOME, start=start.strip(), end=end.strip())
+    elif p == NONE_PRESET:
+        base.update(loc=tu.LOC_NONE, start="", end="")
     else:
         base.update(loc=tu.LOC_OTHER, start=start.strip(), end=end.strip(), other=(other or "").strip())
     return base
@@ -325,7 +331,7 @@ def confidential_gate() -> bool:
 # Shared renderers
 # ──────────────────────────────────────────────────────────────────────────
 def cell_html(day: dict | None, home_short: str, is_today=False) -> str:
-    if not day:
+    if not day or day.get("loc") == tu.LOC_NONE:
         return f'<td class="tt-none{" tt-today" if is_today else ""}">—</td>'
     cls = {"CLC": "tt-clc", "HOME": "tt-home"}.get(day["loc"], "tt-other")
     place = {"CLC": "CLC", "HOME": home_short or "Home school"}.get(day["loc"], day.get("other") or "Other")
