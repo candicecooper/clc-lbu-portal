@@ -104,6 +104,61 @@ def groq_ai_call(prompt: str, max_tokens: int = 1500, temperature: float = 0.1) 
     raise last_err if last_err else RuntimeError("Groq call failed for an unknown reason.")
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# VIEW-ONLY BRIDGE FROM OTHER PORTAL TOOLS (e.g. Student Snapshot)
+# Other general-staff tools (Student Snapshot, etc.) sit behind the single
+# shared staff password from staff_auth.py (session flag "clc_staff_ok").
+# This tool has its own, separate, NAMED login (real staff email+password)
+# because incidents are attributed to a specific, verified staff member.
+# Those two logins used to be completely unaware of each other, so a staff
+# member already unlocked elsewhere in the portal still hit this tool's own
+# password wall when a link sent them straight to a student.
+#
+# The fix: if the shared staff flag is already set AND the URL is asking
+# for one specific student's dashboard/analysis (?p=...&sid=...), let them
+# straight in to VIEW that page — but never to write. Every save/delete
+# path in this file calls _viewer_write_blocked() first and refuses to run
+# for a bridged session, so every incident/record is still only ever saved
+# under a real, password-verified staff account. (Aug 2026)
+# ══════════════════════════════════════════════════════════════════════════
+_VIEWER_SAFE_PAGES = {"student_dashboard", "student_analysis"}
+_VIEWER_USER = {"id": "_viewer", "name": "Staff (viewing via Student Snapshot)",
+                "email": "", "role": "VIEWER"}
+
+
+def _viewer_write_blocked(what: str = "do this") -> bool:
+    """Call at the very top of any function that saves or deletes data.
+    Returns True (and shows a message) if the current session is a
+    view-only bridge session, in which case the caller must not write."""
+    if st.session_state.get("_viewer_session"):
+        st.error(f"🔒 You're viewing this student via a quick link from Student Snapshot. "
+                 f"Please log in here with your own email and password to {what}.")
+        return True
+    return False
+
+
+def _try_viewer_bridge() -> bool:
+    """Called only when the tool's own login hasn't succeeded yet. Grants a
+    view-only session if the shared staff password is already unlocked
+    (set by staff_auth.py elsewhere in this same browser session) and the
+    URL names a safe page + a real student id. Never sets write access."""
+    ss = st.session_state
+    if not ss.get("clc_staff_ok"):
+        return False
+    p = _qp_get("p")
+    sid = _qp_get("sid")
+    if p not in _VIEWER_SAFE_PAGES or not sid:
+        return False
+    if not any(str(s.get("id")) == sid for s in ss.get("students", [])):
+        return False
+    ss.logged_in = True
+    ss["_viewer_session"] = True
+    ss.current_user = dict(_VIEWER_USER)
+    ss.current_page = p
+    ss.selected_student_id = sid
+    return True
+
+
 st.set_page_config(page_title="CLC Behaviour Support", page_icon="📊", layout="wide", initial_sidebar_state="collapsed")
 
 with st.sidebar:
@@ -2881,6 +2936,8 @@ def save_attendance_to_db(student_id, absent_dates, pt_days, pt_sessions, pt_not
     """Upsert attendance record for a student in Supabase. If the newer schedule /
     exceptions columns don't exist yet, the older fields are still saved and a flag is set
     so the page can show the one-line SQL needed."""
+    if _viewer_write_blocked("update attendance"):
+        return False
     if not supabase or not student_id:
         return False
     base = {
@@ -4021,6 +4078,8 @@ def load_placement_extensions_from_db(student_id):
 
 def save_placement_extension_to_db(student_id, from_date, to_date, reason):
     """Insert a new placement extension record in Supabase."""
+    if _viewer_write_blocked("add a placement extension"):
+        return False
     if not supabase or not student_id:
         return False
     try:
@@ -4038,6 +4097,8 @@ def save_placement_extension_to_db(student_id, from_date, to_date, reason):
 
 def delete_placement_extension_from_db(extension_id):
     """Permanently delete a placement extension record from Supabase."""
+    if _viewer_write_blocked("delete a placement extension"):
+        return False
     if not supabase or not extension_id:
         return False
     try:
@@ -4082,6 +4143,8 @@ def load_support_plan_from_db(student_id):
 def save_support_plan_to_db(student_id, data: dict, updated_by: str = ""):
     """Upsert the staff/student-authored sections of a Behaviour Support
     Plan. Only ever touches fields staff explicitly edited."""
+    if _viewer_write_blocked("save the support plan"):
+        return False
     if not supabase or not student_id:
         return False
     try:
@@ -4309,6 +4372,8 @@ def load_trials(student_id) -> list[dict]:
 def save_trial(student_id, trial: dict) -> bool:
     """Insert or update a trial. Falls back to session storage (returning False, with the
     reason in session_state['_last_save_error']) if the database save fails."""
+    if _viewer_write_blocked("save a strategy trial"):
+        return False
     trial = dict(trial)
     trial["student_id"] = student_id
     st.session_state.pop(f"_trials_cache_{student_id}", None)
@@ -4722,6 +4787,8 @@ def load_starting_profile(student_id) -> dict:
 def save_starting_profile(student_id, profile: dict, by: str = "") -> bool:
     """Save to the database. Always keeps a session copy; returns False (and records
     why in session_state['_last_save_error']) if the database save did not go through."""
+    if _viewer_write_blocked("save the starting profile"):
+        return False
     st.session_state[f"starting_profile_{student_id}"] = profile
     st.session_state[f"_profile_cache_{student_id}"] = profile
     st.session_state.pop("_last_save_error", None)
@@ -4940,6 +5007,8 @@ def load_students_from_db():
         return []
 
 def save_student_to_db(student):
+    if _viewer_write_blocked("save student details"):
+        return False
     if not supabase:
         return False
     try:
@@ -4965,6 +5034,8 @@ def save_student_to_db(student):
         return False
 
 def delete_student_from_db(student_id):
+    if _viewer_write_blocked("delete a student"):
+        return False
     if not supabase:
         return False
     try:
@@ -5001,6 +5072,8 @@ def load_staff_from_db():
         return []
 
 def save_staff_to_db(staff_member):
+    if _viewer_write_blocked("save staff details"):
+        return False
     if not supabase:
         return False
     try:
@@ -5037,6 +5110,8 @@ def save_staff_to_db(staff_member):
         return False
 
 def delete_staff_from_db(staff_id):
+    if _viewer_write_blocked("delete a staff member"):
+        return False
     if not supabase:
         return False
     try:
@@ -5082,6 +5157,8 @@ def load_incidents_from_db(student_id=None):
         return []
 
 def save_incident_to_db(incident):
+    if _viewer_write_blocked("save an incident"):
+        return False
     if not supabase:
         return False
     try:
@@ -5153,6 +5230,8 @@ def load_critical_incidents_from_db(student_id=None):
         return []
 
 def save_critical_incident_to_db(critical):
+    if _viewer_write_blocked("save a critical incident"):
+        return False
     if not supabase:
         return False
     try:
@@ -5451,6 +5530,10 @@ def init_state():
     if "last_saved_incident" not in ss: ss.last_saved_incident = None
 
 def login_user(email: str, password: str) -> bool:
+    # Any real named login clears a leftover view-only bridge flag — a
+    # staff member who was just viewing via Student Snapshot and then
+    # properly signs in gets full access, not a stuck read-only session.
+    st.session_state.pop("_viewer_session", None)
     email = (email or "").strip().lower()
     password = (password or "").strip()
     if not email or not password:
@@ -5595,14 +5678,23 @@ def restore_login_from_url() -> bool:
             em = os.environ.get("BEHAVIOUR_ADMIN_EMAIL", "")
         if em:
             user = {"id": "admin_bypass", "name": "Admin", "email": em, "role": "ADM"}
+    elif uid == "_viewer":
+        # A view-only bridge session (see _try_viewer_bridge) — reconstruct
+        # the same read-only identity on a reconnect/refresh, never upgrade it.
+        user = dict(_VIEWER_USER)
     else:
         user = next((s for s in ss.get("staff", []) if str(s.get("id")) == str(uid)), None)
     if not user:
         return False
     ss.logged_in = True
     ss.current_user = user
+    if uid == "_viewer":
+        ss["_viewer_session"] = True
     p = _qp_get("p")
-    ss.current_page = p if (p in VALID_PAGES and p != "login") else "landing"
+    if uid == "_viewer":
+        ss.current_page = p if p in _VIEWER_SAFE_PAGES else "landing"
+    else:
+        ss.current_page = p if (p in VALID_PAGES and p != "login") else "landing"
     sid = _qp_get("sid")
     if sid and any(str(s.get("id")) == sid for s in ss.get("students", [])):
         match = next(s for s in ss.students if str(s.get("id")) == sid)
@@ -5630,6 +5722,7 @@ def do_logout():
     ss.current_user = None
     ss.current_page = "login"
     ss.pop("_auth_issued", None)
+    ss.pop("_viewer_session", None)
     _qp_set(s="", p="", sid="")
 
 
@@ -9660,6 +9753,8 @@ def _render_student_analysis_page_inner():
                 _e_ccons = st.text_area("Consequence / Response", value=_primary.get("consequence","") or "", key=f"e_ccons_{_ve_id}")
                 _e_notes = st.text_area("Admin Summary / Notes", value=_ve_record.get("admin_summary","") or "", key=f"e_cnotes_{_ve_id}")
                 if st.form_submit_button("💾 Save Changes", type="primary"):
+                    if _viewer_write_blocked("edit a critical incident"):
+                        st.stop()
                     _update_payload = {
                         "created_at": f"{_e_cdate.isoformat()}T00:00:00" if _e_cdate else None,
                         "primary_time": _e_ctime, "primary_location": _e_cloc,
@@ -9793,6 +9888,8 @@ def _render_student_analysis_page_inner():
             with col_final:
                 if st.button("🔴 YES — permanently delete this incident", type="primary",
                              key=f"final_del_{selected_id}", use_container_width=True):
+                    if _viewer_write_blocked("delete an incident"):
+                        st.stop()
                     deleted = False
                     if supabase:
                         try:
@@ -10607,6 +10704,8 @@ def render_student_dashboard():
         save_col, clear_col = st.columns(2)
         with save_col:
             if st.button("💾 Save as Critical Incident", type="primary", key="save_ai_extracted", use_container_width=True):
+                if _viewer_write_blocked("save a historical critical incident"):
+                    st.stop()
                 try:
                     outcomes_raw = inc.get("outcomes", "")
                     outcomes_list = [o.strip() for o in outcomes_raw.split(",") if o.strip()] if isinstance(outcomes_raw, str) else outcomes_raw
@@ -12302,9 +12401,22 @@ def main():
     init_state()
     if not st.session_state.logged_in:
         restore_login_from_url()
+    if not st.session_state.logged_in:
+        _try_viewer_bridge()
     page = st.session_state.current_page
     if not st.session_state.logged_in:
         render_login_page()
+        return
+    if st.session_state.get("_viewer_session") and page not in _VIEWER_SAFE_PAGES:
+        # A bridged (view-only) session asked for a page it isn't allowed to
+        # use — e.g. its own current_page changed via a "Log New Incident" /
+        # admin-style button inside an allowed page. Send them to the real
+        # login instead of rendering anything that could write data.
+        st.info("🔒 You're viewing this student via a quick link from Student Snapshot — that only "
+                "covers viewing. Log in with your own email and password to do anything else here.")
+        if st.button("🔓 Log in to Behaviour Support", type="primary"):
+            do_logout()
+            st.rerun()
         return
     persist_login_to_url()
     if page == "landing":                  render_landing_page()
