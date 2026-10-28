@@ -513,10 +513,13 @@ STREAK_POSITIVE_LEVELS = {"EXCEEDING", "ABOVE"}
 STREAK_NEGATIVE_LEVELS = {"BELOW", "NOT YET"}
 
 
+@st.cache_data(ttl=60, show_spinner=False)
 def check_goal_streak(goal_id, days=5):
     """Looks at the most recent `days` DISTINCT school days that have at least
     one tracking entry for this goal (pulled from tracking rows directly, so a
-    day isn't counted twice for multiple sessions).
+    day isn't counted twice for multiple sessions). Cached briefly since it's
+    now called twice per visible goal on Program Snapshot (once for the
+    top-of-page summary tiles, once again in the per-program detail panel).
 
     Returns (streak_type, day_count):
       - ("positive", days) if every entry on each of those days is
@@ -2888,15 +2891,51 @@ elif view == "🗺️ Program Snapshot":
     with st.spinner("Building snapshot…"):
         all_snapshots = [build_student_snapshot(s) for s in students]
 
-    # ── Summary metrics (one row per student, by their worst-case status) ──
-    counts_by_status = {k: 0 for k in SNAPSHOT_STATUS_META}
-    for snap in all_snapshots:
-        counts_by_status[snap["status"]] += 1
+    # ── Summary tiles across every program ──────────────────────────────────
+    STREAK_TILE_DAYS = 4  # deliberately shorter than the 5-day revision nudge
+                          # used elsewhere — an earlier, broader warning signal
 
-    mcols = st.columns(4)
-    for i, key in enumerate(["on_track", "needs_increase", "not_started", "no_goal"]):
-        emoji, label, _ = SNAPSHOT_STATUS_META[key]
-        mcols[i].metric(f"{emoji} {label}", counts_by_status[key])
+    no_data_students = sorted({sn["student"] for sn in all_snapshots if sn["status"] == "not_started"})
+
+    positive_streak_students, negative_streak_students = set(), set()
+    for sn in all_snapshots:
+        for gi in sn["goals"]:
+            s_type, _ = check_goal_streak(gi["goal"]["id"], days=STREAK_TILE_DAYS)
+            if s_type == "positive":
+                positive_streak_students.add(sn["student"])
+            elif s_type == "negative":
+                negative_streak_students.add(sn["student"])
+
+    silent_students = sorted({
+        s["student_name"] for s in students
+        if (student_school_days_silent(s) or 0) >= 2
+    })
+
+    mcols = st.columns(5)
+    mcols[0].metric("🧑‍🎓 Active Students", len(students))
+    mcols[1].metric("⚪ No Data Tracked", len(no_data_students))
+    mcols[2].metric(f"🚀 {STREAK_TILE_DAYS}+ Days Achieving/Above", len(positive_streak_students))
+    mcols[3].metric(f"📉 {STREAK_TILE_DAYS}+ Days Below/Not Yet", len(negative_streak_students))
+    mcols[4].metric("⚠️ 2+ Days No Data Entered", len(silent_students))
+
+    no_goal_students = sorted(sn["student"] for sn in all_snapshots if sn["status"] == "no_goal")
+    if no_goal_students:
+        st.caption(f"ℹ️ {len(no_goal_students)} student(s) have no SMARTAR goal set yet: "
+                  f"{', '.join(no_goal_students)}.")
+
+    # ── Who's behind each tile — a bare count isn't actionable on its own ──
+    if no_data_students or positive_streak_students or negative_streak_students or silent_students:
+        with st.expander("👀 Who's in each tile above"):
+            if no_data_students:
+                st.markdown(f"**⚪ No data tracked:** {', '.join(no_data_students)}")
+            if positive_streak_students:
+                st.markdown(f"**🚀 {STREAK_TILE_DAYS}+ days achieving/above:** "
+                           f"{', '.join(sorted(positive_streak_students))}")
+            if negative_streak_students:
+                st.markdown(f"**📉 {STREAK_TILE_DAYS}+ days below/not yet:** "
+                           f"{', '.join(sorted(negative_streak_students))}")
+            if silent_students:
+                st.markdown(f"**⚠️ 2+ days no data entered:** {', '.join(silent_students)}")
 
     # ── Attendance-matching diagnostic — so a silent name/program mismatch
     # with the Behaviour Support Tool is visible, not just a wrong number ──
