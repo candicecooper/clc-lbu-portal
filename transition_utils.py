@@ -57,6 +57,9 @@ CLC_START, CLC_END = "9:00", "2:45"
 HOME_AM_START, HOME_AM_END = "8:45", "12:00"
 
 LOC_CLC, LOC_HOME, LOC_OTHER = "CLC", "HOME", "OTHER"
+LOC_NONE = "NONE"   # no session that day (e.g. after the last day in a short week)
+
+READER_VERSION = "v7 (reads layouts A + B)"
 
 TABLE_TIMETABLES = "transition_timetables"
 TABLE_HISTORY = "transition_timetable_history"
@@ -167,6 +170,8 @@ def fmt_time_range(day: dict) -> str:
 def short_day_text(day: dict, home_school: str = "Home school") -> str:
     """Compact text for screens / Bulletin (no names)."""
     loc = day.get("loc")
+    if loc == LOC_NONE:
+        return "No session"
     place = {LOC_CLC: "CLC", LOC_HOME: home_school or "Home school"}.get(
         loc, day.get("other") or "Other")
     bits = [place, fmt_time_range(day)]
@@ -178,6 +183,8 @@ def short_day_text(day: dict, home_school: str = "Home school") -> str:
 def doc_day_text(day: dict, name: str, home_school_short: str) -> list[str]:
     """Sentence used in the Word export, e.g. 'Abi will attend Bellevue. 8:45 – 12:00'."""
     loc = day.get("loc")
+    if loc == LOC_NONE:
+        return [""]
     if loc == LOC_CLC:
         place = "CLC"
     elif loc == LOC_HOME:
@@ -206,7 +213,7 @@ def week_summary(week: dict) -> dict:
             out["At CLC"] += 1
         elif d["loc"] == LOC_HOME:
             out["Home school – full day" if d.get("full_day") else "Home school – part day"] += 1
-        else:
+        elif d["loc"] != LOC_NONE:
             out["Other"] += 1
     return out
 
@@ -317,8 +324,8 @@ def parse_timetable_docx(file_bytes: bytes) -> dict:
                     header["home_school"] = header["home_school"] or _after("School", txt)
                 elif "contact person" in low:
                     header["home_school_contact"] = header["home_school_contact"] or _after("Person", txt)
-                elif low.startswith("bsc"):
-                    header["bsc"] = header["bsc"] or _after("BSC", txt)
+                elif low.startswith("bsc") or low.startswith("bse"):
+                    header["bsc"] = header["bsc"] or _after(txt[:3], txt)
                 elif low.startswith("year level"):
                     header["year_level"] = header["year_level"] or _after("Year Level", txt)
                 elif low.startswith("edid"):
@@ -358,6 +365,14 @@ def parse_timetable_docx(file_bytes: bytes) -> dict:
                 if mm and mm.group(1).strip().lower() not in ("clc", "cowandilla"):
                     nm = mm.group(1).strip()
                     seen[nm] = seen.get(nm, 0) + 1
+    if not seen:
+        for table in doc.tables:
+            for row in table.rows:
+                for txt in _cell_texts(row):
+                    mm = re.match(r"\s*([A-Za-z][A-Za-z' ]{1,40}?)\s*[–\-—:]\s*\d", txt)
+                    if mm and mm.group(1).strip().lower() not in ("clc", "cowandilla", "date", "term", "week"):
+                        nm = mm.group(1).strip()
+                        seen[nm] = seen.get(nm, 0) + 1
     if seen:
         header["home_school_short"] = max(seen, key=seen.get)
     elif header["home_school"]:
@@ -368,48 +383,105 @@ def parse_timetable_docx(file_bytes: bytes) -> dict:
         home_tokens += [w.lower() for w in school_short_name(header["home_school"]).split() if len(w) > 3]
         home_tokens.append(school_short_name(header["home_school"]).lower())
 
-    # ── pass 2: week blocks (Term row → Week/Date row → activity row)
+    # ── pass 2: week blocks. Handles both layouts seen so far:
+    #   A) "Term: 3" | Mon..Fri   /  "Week: 9" | dates   /  activities
+    #   B) "Term: 4 Week: 4" | Mon..Fri  /  blank | dates  /  activities   (short weeks allowed)
     weeks: list[dict] = []
+    day_lookup = {n.lower(): i for i, n in enumerate(DAY_NAMES)}
+    day_lookup.update({n[:3].lower(): i for i, n in enumerate(DAY_NAMES)})
     for table in doc.tables:
         rows = [_cell_texts(r) for r in table.rows]
         i = 0
         while i < len(rows):
             first = rows[i][0] if rows[i] else ""
             mterm = re.search(r"term\s*:?\s*(\d)", first, flags=re.I)
-            if mterm and i + 2 < len(rows):
-                term = int(mterm.group(1))
-                week_row, act_row = rows[i + 1], rows[i + 2]
-                mweek = re.search(r"week\s*:?\s*(\d{1,2})", week_row[0] if week_row else "", flags=re.I)
-                if not mweek:
-                    i += 1
-                    continue
-                wk = int(mweek.group(1))
-                # Monday dd/mm from the date row (used to pick the right year)
-                mon_dm = None
-                if len(week_row) > 1:
-                    m = _DATE_DM_RE.search(week_row[1])
-                    if m:
-                        mon_dm = (int(m.group(1)), int(m.group(2)))
-                year = None
-                for y in (doc_year, doc_year + 1, doc_year - 1):
-                    if y in TERM_DATES and term in TERM_DATES[y]:
-                        mon = week_monday(y, term, wk)
-                        if mon_dm is None or (mon.day, mon.month) == mon_dm:
-                            year = y
-                            break
-                if year is None:
-                    warnings.append(f"Term {term} Week {wk}: dates didn't match the SA term calendar — check this week.")
-                    year = doc_year if doc_year in TERM_DATES else max(TERM_DATES)
-                mon = week_monday(year, term, wk)
-                acts = act_row[1:6] if len(act_row) >= 6 else (act_row + [""] * 6)[1:6]
-                days = [_parse_day_text(acts[k], mon + timedelta(days=k), home_tokens) for k in range(5)]
-                for k, dd in enumerate(days):
-                    if dd["loc"] == LOC_OTHER:
-                        warnings.append(f"T{term} W{wk} {DAY_NAMES[k]}: couldn't tell CLC vs home school — set to 'Other', please check.")
-                weeks.append({"year": year, "term": term, "week": wk, "days": days})
-                i += 3
-            else:
+            if not mterm:
                 i += 1
+                continue
+            term = int(mterm.group(1))
+            mweek = re.search(r"week\s*:?\s*(\d{1,2})", first, flags=re.I)
+            if not mweek and i + 1 < len(rows) and rows[i + 1]:
+                mweek = re.search(r"week\s*:?\s*(\d{1,2})", rows[i + 1][0], flags=re.I)
+            if not mweek:
+                warnings.append(f"Found 'Term {term}' but no week number — that block was skipped.")
+                i += 1
+                continue
+            wk = int(mweek.group(1))
+
+            # Which column is which day (from the day names in this row; else positional)
+            colmap = {}
+            for j, txt in enumerate(rows[i]):
+                if j == 0:
+                    continue
+                w0 = (txt.strip().split() or [""])[0].lower().strip(":")
+                if w0 in day_lookup:
+                    colmap[j] = day_lookup[w0]
+            if not colmap:
+                colmap = {j: j - 1 for j in range(1, min(6, len(rows[i])))}
+
+            # Date row = next row with dd/mm; activity row = the row after it
+            date_i = next((r for r in range(i + 1, min(i + 3, len(rows)))
+                           if any(_DATE_DM_RE.search(c) for c in rows[r][1:])), i + 1)
+            act_i = date_i + 1
+            date_row = rows[date_i] if date_i < len(rows) else []
+            act_row = rows[act_i] if act_i < len(rows) else []
+
+            # Pick the year whose Week N Monday matches the dates written in the file
+            dm = None
+            for j, di in colmap.items():
+                if j < len(date_row):
+                    m = _DATE_DM_RE.search(date_row[j])
+                    if m:
+                        dm = (int(m.group(1)), int(m.group(2)), di)
+                        break
+            year = None
+            for y in (doc_year, doc_year + 1, doc_year - 1):
+                if y in TERM_DATES and term in TERM_DATES[y]:
+                    mon = week_monday(y, term, wk)
+                    if dm is None:
+                        year = y
+                        break
+                    dd_ = mon + timedelta(days=dm[2])
+                    if (dd_.day, dd_.month) == (dm[0], dm[1]):
+                        year = y
+                        break
+            if year is None:
+                warnings.append(f"Term {term} Week {wk}: dates didn't match the SA term calendar — check this week.")
+                year = doc_year if doc_year in TERM_DATES else max(TERM_DATES)
+            mon = week_monday(year, term, wk)
+
+            days = []
+            for k in range(5):
+                d = mon + timedelta(days=k)
+                j = next((jj for jj, di in colmap.items() if di == k), None)
+                if j is None or j >= len(act_row) + (0 if act_row else 1):
+                    days.append({"date": d.isoformat(), "loc": LOC_NONE, "start": "", "end": "",
+                                 "full_day": False, "label": "", "other": ""})
+                    continue
+                txt = act_row[j] if j < len(act_row) else ""
+                dd = _parse_day_text(txt, d, home_tokens)
+                if dd["loc"] == LOC_OTHER:
+                    warnings.append(f"T{term} W{wk} {DAY_NAMES[k]}: couldn't tell CLC vs home school — "
+                                    "set to 'Other', please check.")
+                days.append(dd)
+            weeks.append({"year": year, "term": term, "week": wk, "days": days})
+            i = act_i + 1
+
+    # Notes written under the tables (names swapped for initials — no names are stored)
+    ini = initials_from_name(sensitive["full_name"])
+    notes = []
+    for p_ in doc.paragraphs:
+        t_ = p_.text.strip()
+        if not t_ or t_.upper() in ("COWANDILLA LEARNING CENTRE", "STUDENT TRANSITION PROGRAMME",
+                                     "STUDENT TRANSITION PROGRAM"):
+            continue
+        if sensitive["full_name"]:
+            t_ = re.sub(re.escape(sensitive["full_name"]), ini, t_, flags=re.I)
+            for part in sensitive["full_name"].split():
+                if len(part) > 1:
+                    t_ = re.sub(r"\b" + re.escape(part) + r"(?=\b|['’]s)", ini, t_, flags=re.I)
+        notes.append(t_)
+    header["notes"] = " ".join(notes)
 
     if not weeks:
         warnings.append("No week blocks found — is this the standard CLC transition timetable layout?")
@@ -554,7 +626,7 @@ def build_timetable_docx(header: dict, weeks: list[dict], sensitive: dict) -> by
             d = mon + timedelta(days=k)
             _write(r1.cells[k + 1], DAY_NAMES[k], bold=True)
             _shade(r1.cells[k + 1], GREEN)
-            home = day["loc"] != LOC_CLC
+            home = day["loc"] in (LOC_HOME, LOC_OTHER)
             _write(r2.cells[k + 1], "", bold=home, lines=["Date:", d.strftime("%d/%m")])
             # make 'Date:' bold always
             r2.cells[k + 1].paragraphs[0].runs[0].bold = True
@@ -567,6 +639,15 @@ def build_timetable_docx(header: dict, weeks: list[dict], sensitive: dict) -> by
                 c.width = widths[ci]
         _keep_row(r1); _keep_row(r2)
         r3.height = Cm(1.6)
+
+    notes = (header.get("notes") or "").strip()
+    if notes:
+        ini = header.get("student_initials") or initials_from_name(sensitive.get("full_name", ""))
+        if ini and name and name != ini:
+            notes = re.sub(r"\b" + re.escape(ini) + r"\b", name, notes)
+        p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(10)
+        r = p.add_run(notes); r.font.size = Pt(10); r.font.name = FONT
 
     buf = io.BytesIO()
     doc.save(buf)
@@ -729,8 +810,8 @@ def bulletin_lines_for(client, d: date | None = None) -> list[str]:
     lines = []
     for e in where_is_everyone(tts, d):
         day = e["day"]
-        if day["loc"] == LOC_CLC and not day.get("label"):
-            continue  # normal CLC day — nothing to flag
+        if (day["loc"] == LOC_CLC and not day.get("label")) or day["loc"] == LOC_NONE:
+            continue  # normal CLC day / no session — nothing to flag
         place = "Home school" if day["loc"] == LOC_HOME else (day.get("other") or "Other")
         if day["loc"] == LOC_CLC:
             place = "CLC"
@@ -844,11 +925,11 @@ def timetable_email_html(rec: dict, updated: bool, by: str, note: str, url: str)
         mon = week_monday(w["year"], w["term"], w["week"])
         cells = ""
         for i, day in enumerate(w["days"]):
-            home = day["loc"] != LOC_CLC
+            home = day["loc"] in (LOC_HOME, LOC_OTHER)
             place = "CLC" if day["loc"] == LOC_CLC else (short or "Home school") if day["loc"] == LOC_HOME \
-                else (day.get("other") or "Other")
+                else "—" if day["loc"] == LOC_NONE else (day.get("other") or "Other")
             extra = day["label"].upper() if day.get("label") else fmt_time_range(day)
-            bg = "#FFF59D" if home else "#EEF6EA"
+            bg = "#FFF59D" if home else "#FFFFFF" if day["loc"] == LOC_NONE else "#EEF6EA"
             cells += (f'<td style="border:1px solid #ccc;padding:6px;text-align:center;background:{bg};'
                       f'{"font-weight:bold;" if home else ""}">{_esc(place)}<br>'
                       f'<span style="font-size:12px">{_esc(extra)}</span></td>')
