@@ -2891,11 +2891,14 @@ elif view == "🗺️ Program Snapshot":
     with st.spinner("Building snapshot…"):
         all_snapshots = [build_student_snapshot(s) for s in students]
 
-    # ── Summary tiles across every program ──────────────────────────────────
+    # ── Summary tiles across every program — colourful, gradient KPI-style ──
+    # tiles (same look as the per-program KPI row below), and CLICKABLE: pick
+    # one to filter the "Active Students" grid in every program tab down to
+    # just that group, so the tiles aren't only a count — they're a way in.
     STREAK_TILE_DAYS = 4  # deliberately shorter than the 5-day revision nudge
                           # used elsewhere — an earlier, broader warning signal
 
-    no_data_students = sorted({sn["student"] for sn in all_snapshots if sn["status"] == "not_started"})
+    no_data_students = {sn["student"] for sn in all_snapshots if sn["status"] == "not_started"}
 
     positive_streak_students, negative_streak_students = set(), set()
     for sn in all_snapshots:
@@ -2906,36 +2909,43 @@ elif view == "🗺️ Program Snapshot":
             elif s_type == "negative":
                 negative_streak_students.add(sn["student"])
 
-    silent_students = sorted({
+    silent_students = {
         s["student_name"] for s in students
         if (student_school_days_silent(s) or 0) >= 2
-    })
+    }
 
-    mcols = st.columns(5)
-    mcols[0].metric("🧑‍🎓 Active Students", len(students))
-    mcols[1].metric("⚪ No Data Tracked", len(no_data_students))
-    mcols[2].metric(f"🚀 {STREAK_TILE_DAYS}+ Days Achieving/Above", len(positive_streak_students))
-    mcols[3].metric(f"📉 {STREAK_TILE_DAYS}+ Days Below/Not Yet", len(negative_streak_students))
-    mcols[4].metric("⚠️ 2+ Days No Data Entered", len(silent_students))
+    # key, tile label, value, sublabel, member set (None = no filtering), gradient colours
+    SNAP_TILE_DEFS = [
+        ("all",      "🧑‍🎓 ACTIVE STUDENTS",
+         str(len(students)), "across all programs", None, ("#1d6fa4", "#134e7a")),
+        ("no_data",  "⚪ NO DATA TRACKED",
+         str(len(no_data_students)), "goal set, never tracked", no_data_students, ("#64748b", "#334155")),
+        ("positive", f"🚀 {STREAK_TILE_DAYS}+ DAYS ACHIEVING/ABOVE",
+         str(len(positive_streak_students)), "consider raising the goal", positive_streak_students, ("#16a34a", "#166534")),
+        ("negative", f"📉 {STREAK_TILE_DAYS}+ DAYS BELOW/NOT YET",
+         str(len(negative_streak_students)), "consider revising the goal", negative_streak_students, ("#dc2626", "#991b1b")),
+        ("silent",   "⚠️ 2+ DAYS NO DATA ENTERED",
+         str(len(silent_students)), "expected school days missed", silent_students, ("#ea580c", "#9a3412")),
+    ]
+    SNAP_TILE_LABELS  = {k: label for k, label, *_ in SNAP_TILE_DEFS}
+    SNAP_TILE_MEMBERS = {k: members for k, _, _, _, members, _ in SNAP_TILE_DEFS}
+
+    active_filter = st.session_state.get("snap_tile_filter", "all")
+    tcols = st.columns(5)
+    for col, (fkey, label, value, sub, _members, (c1, c2)) in zip(tcols, SNAP_TILE_DEFS):
+        with col:
+            st.markdown(render_kpi_tile(label, value, sub, c1, c2), unsafe_allow_html=True)
+            is_active = active_filter == fkey
+            btn_label = "✓ Showing" if is_active else ("Show all students" if fkey == "all" else "🔍 Filter to these")
+            if st.button(btn_label, key=f"snap_tile_filter_btn_{fkey}", use_container_width=True,
+                        type="primary" if is_active else "secondary", disabled=is_active):
+                st.session_state["snap_tile_filter"] = fkey
+                st.rerun()
 
     no_goal_students = sorted(sn["student"] for sn in all_snapshots if sn["status"] == "no_goal")
     if no_goal_students:
         st.caption(f"ℹ️ {len(no_goal_students)} student(s) have no SMARTAR goal set yet: "
                   f"{', '.join(no_goal_students)}.")
-
-    # ── Who's behind each tile — a bare count isn't actionable on its own ──
-    if no_data_students or positive_streak_students or negative_streak_students or silent_students:
-        with st.expander("👀 Who's in each tile above"):
-            if no_data_students:
-                st.markdown(f"**⚪ No data tracked:** {', '.join(no_data_students)}")
-            if positive_streak_students:
-                st.markdown(f"**🚀 {STREAK_TILE_DAYS}+ days achieving/above:** "
-                           f"{', '.join(sorted(positive_streak_students))}")
-            if negative_streak_students:
-                st.markdown(f"**📉 {STREAK_TILE_DAYS}+ days below/not yet:** "
-                           f"{', '.join(sorted(negative_streak_students))}")
-            if silent_students:
-                st.markdown(f"**⚠️ 2+ days no data entered:** {', '.join(silent_students)}")
 
     # ── Attendance-matching diagnostic — so a silent name/program mismatch
     # with the Behaviour Support Tool is visible, not just a wrong number ──
@@ -3041,17 +3051,33 @@ elif view == "🗺️ Program Snapshot":
                 # ── Student tile grid — one tile per active student, coloured ──
                 # as a tracking-consistency alert (green/amber/red/grey). Click
                 # a tile's button to open that student's goal charts below,
-                # side by side.
+                # side by side. Narrowed to whichever summary tile is selected
+                # above (Active Students / No Data Tracked / streak / silent).
+                members = SNAP_TILE_MEMBERS.get(active_filter)
+                grid_snaps = prog_snaps if members is None else [sn for sn in prog_snaps if sn["student"] in members]
+
                 st.markdown("#### 👥 Active Students")
-                st.caption(
-                    "🟢 On track · 🟠 Needs increase · 🔴 Not started · ⚪ No goal set — "
-                    "click a tile to view that student's goal charts."
-                )
+                if active_filter != "all":
+                    fcap, fclear = st.columns([6, 1])
+                    fcap.caption(f"Showing **{SNAP_TILE_LABELS[active_filter]}** only — "
+                               f"{len(grid_snaps)} student(s) in {prog}.")
+                    if fclear.button("✖ Clear", key=f"clear_filter_{prog}", use_container_width=True):
+                        st.session_state["snap_tile_filter"] = "all"
+                        st.rerun()
+                else:
+                    st.caption(
+                        "🟢 On track · 🟠 Needs increase · 🔴 Not started · ⚪ No goal set — "
+                        "click a tile to view that student's goal charts."
+                    )
+
+                if not grid_snaps:
+                    st.info(f"No students in {prog} match this filter." if active_filter != "all"
+                           else f"No active students in {prog}.")
 
                 selected_key = f"snap_selected_{prog}"
                 TILE_COLS = 4
-                for row_start in range(0, len(prog_snaps), TILE_COLS):
-                    row = prog_snaps[row_start:row_start + TILE_COLS]
+                for row_start in range(0, len(grid_snaps), TILE_COLS):
+                    row = grid_snaps[row_start:row_start + TILE_COLS]
                     tile_cols = st.columns(TILE_COLS)
                     for col, sn in zip(tile_cols, row):
                         with col:
