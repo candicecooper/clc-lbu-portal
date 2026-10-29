@@ -175,6 +175,22 @@ st.markdown(f"""
   .ov-grid {{ display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:.75rem; margin:.2rem 0 .6rem; }}
   .ov-tile {{ color:#fff; border-radius:14px; padding:.85rem 1rem .8rem; min-height:150px;
               box-shadow:0 4px 14px rgba(20,40,40,.14); display:flex; flex-direction:column; }}
+  .ov-click {{ cursor:pointer; transition:transform .15s ease, box-shadow .15s ease; }}
+  .ov-click:hover {{ transform:translateY(-3px); box-shadow:0 10px 24px rgba(20,40,40,.25); }}
+  .ov-click:focus-visible {{ outline:3px solid #1f2d2d; outline-offset:2px; }}
+  .ov-click:hover .ov-tab {{ background:#fff; color:#1f2d2d; opacity:1; }}
+  .ov-more {{ margin-top:.45rem; font-size:.8rem; }}
+  .ov-more summary {{ cursor:pointer; display:inline-block; font-weight:700; font-size:.72rem;
+                      background:rgba(0,0,0,.18); border-radius:999px; padding:.15rem .6rem;
+                      list-style:none; user-select:none; }}
+  .ov-more summary::-webkit-details-marker {{ display:none; }}
+  .ov-more summary::after {{ content:" ▾"; }}
+  .ov-more[open] summary::after {{ content:" ▴"; }}
+  .ov-more[open] summary {{ background:rgba(255,255,255,.95); color:#1f2d2d; }}
+  .ov-more-body {{ background:rgba(0,0,0,.16); border-radius:8px; padding:.5rem .7rem; margin-top:.35rem;
+                   line-height:1.45; }}
+  .ov-more-body ul {{ margin:.1rem 0 .35rem; padding-left:1.1rem; }}
+  .ov-more-body p {{ margin:.2rem 0 .4rem; }}
   .ov-top {{ display:flex; align-items:center; gap:.45rem; }}
   .ov-ico {{ font-size:1.15rem; }}
   .ov-lbl {{ font-size:.74rem; font-weight:700; text-transform:uppercase; letter-spacing:.08em; opacity:.95; }}
@@ -213,30 +229,35 @@ st.markdown(f"""
   .ov-trial {{ font-size:.78rem; margin:.2rem 0; }}
   .ov-2col {{ display:grid; grid-template-columns:1fr 1fr; gap:.2rem 1rem; }}
   .ov-wotgrid {{ display:grid; grid-template-columns:1fr 1fr; gap:0 .5rem; }}
-  .ov-tt {{ width:100%; border-collapse:separate; border-spacing:3px; margin:.35rem 0 .2rem;
-            table-layout:fixed; font-size:.72rem; }}
-  .ov-tt th {{ font-size:.66rem; font-weight:700; text-transform:uppercase; letter-spacing:.05em;
-               opacity:.85; padding:0 0 .1rem; text-align:center; border:none; background:none; }}
-  .ov-tt th.ov-wk {{ text-align:left; width:3.6rem; text-transform:none; letter-spacing:0;
-                     font-size:.74rem; opacity:1; }}
-  .ov-tt th.ov-wk span {{ display:block; font-weight:400; opacity:.8; font-size:.66rem; }}
-  .ov-tt td {{ border-radius:6px; padding:.3rem .2rem; text-align:center; line-height:1.2;
-               vertical-align:middle; border:none; overflow:hidden; }}
-  .ov-tt td b {{ display:block; font-size:.74rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
-  .ov-tt td span {{ display:block; font-size:.64rem; opacity:.85; white-space:nowrap; }}
-  .ov-tt td em {{ display:block; font-size:.6rem; font-style:normal; font-weight:800; }}
-  .ov-c-clc {{ background:#fff; color:#8f5205; }}
-  .ov-c-home {{ background:#2E7A48; color:#fff; }}
-  .ov-c-other {{ background:#3C4C6B; color:#fff; }}
-  .ov-c-none {{ background:rgba(0,0,0,.14); color:rgba(255,255,255,.75); }}
-  .ov-tt i {{ font-style:normal; }} .ov-tt .ov-sm {{ display:none; }}
+  .ov-tt {{ width:100%; border-collapse:separate; border-spacing:4px; margin:.35rem 0 .2rem;
+            table-layout:fixed; font-size:.8rem; }}
+  .ov-tt th {{ font-size:.72rem; font-weight:700; text-transform:uppercase; letter-spacing:.05em;
+               padding:0 0 .1rem; text-align:center; border:none; background:none; color:#fff; }}
+  .ov-tt th.ov-wk {{ text-align:left; width:5.2rem; text-transform:none; letter-spacing:0;
+                     font-size:.8rem; line-height:1.35; vertical-align:middle; }}
+  .ov-tt th.ov-wk span {{ display:inline-block; margin-top:.2rem; font-size:.62rem; font-weight:800;
+                          text-transform:uppercase; background:#fff; color:#8f5205; border-radius:999px;
+                          padding:.05rem .4rem; }}
+  .ov-tt td {{ border-radius:7px; padding:.4rem .45rem; text-align:center; line-height:1.3;
+               vertical-align:top; border:none; }}
+  .ov-tt td .ov-date {{ font-size:.68rem; font-weight:700; opacity:.75; margin-bottom:.15rem; }}
+  .ov-tt td .ov-dn {{ display:none; }}
+  .ov-c-clc {{ background:#fff; color:#5a3a06; }}
+  .ov-c-home {{ background:#2E7A48; color:#fff; font-weight:600; }}
+  .ov-c-other {{ background:#3C4C6B; color:#fff; font-weight:600; }}
+  .ov-c-none {{ background:rgba(0,0,0,.14); color:rgba(255,255,255,.8); }}
+  .ov-curwk th.ov-wk {{ color:#fff; }}
+  .ov-ttfoot {{ font-size:.8rem; margin:.35rem 0 0; opacity:.95; }}
   .ov-tt td.ov-today {{ outline:3px solid #1f2d2d; outline-offset:-1px; }}
   @media (max-width: 1100px) {{ .ov-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
   @media (max-width: 640px) {{ .ov-grid {{ grid-template-columns: 1fr; }}
                                .ov-2col, .ov-wotgrid {{ grid-template-columns: 1fr; }}
-                               .ov-tt .ov-lg {{ display:none; }} .ov-tt .ov-sm {{ display:inline; }}
-                               .ov-tt td span {{ font-size:.56rem; white-space:normal; }}
-                               .ov-tt th.ov-wk {{ width:2.7rem; }}
+                               .ov-tt, .ov-tt tbody, .ov-tt tr, .ov-tt td, .ov-tt th {{ display:block !important; width:100% !important; box-sizing:border-box; }}
+                               .ov-tt tr.ov-head {{ display:none !important; }}
+                               .ov-tt th.ov-wk {{ margin:.5rem 0 .1rem; }}
+                               .ov-tt td {{ margin:.25rem 0; text-align:left; width:100% !important;
+                                            box-sizing:border-box; }}
+                               .ov-tt td .ov-dn {{ display:inline; }}
                                .ov-tile {{ grid-column: span 1 !important; }} }}
   .wot {{ display:flex; flex-direction:column; gap:.4rem; }}
   .wot-row {{ display:grid; grid-template-columns: 1.1fr 1.4fr 1.4fr 1.4fr; gap:.7rem;
@@ -1592,19 +1613,32 @@ OV_THEME = {
 
 def _ov_tile(key: str, icon: str, label: str, big: str = "", body: str = "",
              chips: list[tuple[str, str]] | None = None, span: int = 1, tab: str = "",
-             empty: bool = False) -> str:
+             empty: bool = False, more: str = "") -> str:
     c1, c2 = OV_THEME["empty" if empty else key]
     chip_html = "".join(
         f'<span class="ov-chip ov-{kind}">{_esc(txt)}</span>' for txt, kind in (chips or []) if txt)
+    more_html = (f'<details class="ov-more"><summary>Show all</summary>'
+                 f'<div class="ov-more-body">{more}</div></details>') if more else ""
+    click = (f' data-tab="{_esc(tab)}" role="button" tabindex="0" '
+             f'title="Open the {_esc(tab)} tab"') if tab else ""
     return (
-        f'<div class="ov-tile" style="grid-column:span {span};'
+        f'<div class="ov-tile{" ov-click" if tab else ""}"{click} style="grid-column:span {span};'
         f'background:linear-gradient(135deg,{c1} 0%,{c2} 100%)">'
         f'<div class="ov-top"><span class="ov-ico">{icon}</span><span class="ov-lbl">{_esc(label)}</span>'
-        f'{f"<span class=ov-tab>{_esc(tab)} ›</span>" if tab else ""}</div>'
+        f'{f"<span class=ov-tab>Open {_esc(tab)} ›</span>" if tab else ""}</div>'
         f'{f"<div class=ov-big>{big}</div>" if big else ""}'
-        f'<div class="ov-body">{body}</div>'
+        f'<div class="ov-body">{body}</div>{more_html}'
         f'{f"<div class=ov-chips>{chip_html}</div>" if chip_html else ""}</div>'
     )
+
+
+def _ul_all(items) -> str:
+    items = [x for x in items if x]
+    return ("<ul>" + "".join(f"<li>{_esc(redact(x))}</li>" for x in items) + "</ul>") if items else ""
+
+
+def _sec(title, html) -> str:
+    return f"<div class='ov-k'>{_esc(title)}</div>{html}" if html else ""
 
 
 def _ul(items, n=3, cut=70) -> str:
@@ -1612,13 +1646,6 @@ def _ul(items, n=3, cut=70) -> str:
     if not items:
         return ""
     return "<ul>" + "".join(f"<li>{_esc(_short(redact(x), cut))}</li>" for x in items) + "</ul>"
-
-
-def fmt_day_time(day: dict) -> str:
-    if day.get("full_day"):
-        return "Full day"
-    a, b = (day.get("start") or "").strip(), (day.get("end") or "").strip()
-    return f"{a}–{b}" if a and b else (a or b)
 
 
 def _review_chip(review) -> tuple[str, str]:
@@ -1642,7 +1669,10 @@ def render_overview():
                    (f"{bs['crit_n']} critical", "bad" if bs["crit_n"] else "good"),
                    (f"Severity {bs['avg_sev']}/5" if bs["avg_sev"] is not None else "", "info"),
                    (f"Absent {n_abs}/{school_days} days", "warn" if school_days and n_abs / school_days > .1 else "info")],
-            span=2, tab="Behaviour"))
+            span=2, tab="Behaviour",
+            more=f"<p>{_esc(' '.join(sents))}</p>"
+                 + _sec("Most common behaviours", _ul_all([f"{k} ({v})" for k, v in top(bs['behaviours'], 5)]))
+                 + _sec("Locations", _ul_all([f"{k} ({v})" for k, v in top(bs['locations'], 5)]))))
     else:
         tiles.append(_ov_tile("summary", "📋", "Behaviour summary", body="<p>Not set up in the Behaviour "
                               "Support Tool yet.</p>", span=2, empty=True))
@@ -1660,7 +1690,9 @@ def render_overview():
                  + f"<p class='ov-dim'>Most often after {_esc((det.get('Primary Antecedent') or '').lower())}"
                  f" · {_esc(det.get('Peak Context') or '')}</p>",
             chips=[(det.get("BSEM Domain Priority", ""), "info"), (f"from {hyp['n']} incidents", "info")],
-            span=2, tab="Behaviour"))
+            span=2, tab="Behaviour",
+            more=f"<p>{_esc(redact(hyp['summary']))}</p>"
+                 + _ul_all([f"{k}: {v}" for k, v in det.items() if v])))
     else:
         tiles.append(_ov_tile("hyp", "🔬", "Functional hypothesis",
                               body="<p>Needs at least 3 logged incidents.</p>", span=2, empty=True))
@@ -1678,7 +1710,11 @@ def render_overview():
             body += "<div class='ov-k'>Interests</div><p>" + _esc(", ".join(redact(x) for x in interests[:4])) + "</p>"
         if helps:
             body += "<div class='ov-k'>What helps</div>" + _ul(helps, 2, 45)
-        tiles.append(_ov_tile("about", "🙂", "About the student", body=body, tab="Profile"))
+        more = ((f"<p>{_esc(redact(pf['summary']))}</p>" if pf.get("summary") else "")
+                + _sec("Strengths", _ul_all(strengths)) + _sec("Interests", _ul_all(interests))
+                + _sec("What helps", _ul_all(helps))
+                + _sec("What doesn't help", _ul_all(_as_list(pf.get("what_doesnt_help")))))
+        tiles.append(_ov_tile("about", "🙂", "About the student", body=body, tab="Profile", more=more))
     else:
         tiles.append(_ov_tile("about", "🙂", "About the student",
                               body="<p>No starting profile yet.</p>", tab="Profile", empty=True))
@@ -1699,7 +1735,9 @@ def render_overview():
                               body=bars,
                               chips=[(f"{len(active_goals)} active", "info"),
                                      (f"{declining} declining" if declining else "", "bad")],
-                              tab="Goals"))
+                              tab="Goals",
+                              more="".join(f"<p><b>G{i + 1}</b> {_esc(g.get('smartar_goal') or '—')}</p>"
+                                           for i, (g, _s) in enumerate(goal_rows))))
     else:
         tiles.append(_ov_tile("goals", "🎯", "SMARTAR goals", body="<p>No active goals.</p>",
                               tab="Goals", empty=True))
@@ -1723,78 +1761,78 @@ def render_overview():
                               chips=[("Built in WoT Builder" if wot_view["source"] == "builder"
                                       else "Draft from incident data",
                                       "good" if wot_view["source"] == "builder" else "warn")],
-                              tab="Behaviour"))
+                              tab="Behaviour",
+                              more="".join(
+                                  f"<div class='ov-k' style='color:#fff'>{_esc(lbl)}</div>"
+                                  + "".join(_sec(cl, _ul_all(wot_view['zones'][zid].get(ck) or []))
+                                            for ck, cl in WOT_COLS)
+                                  for zid, lbl, *_ in WOT_ZONE_META if wot_view["zones"].get(zid))))
     else:
         tiles.append(_ov_tile("wot", "🪟", "Window of Tolerance", body="<p>Not built yet.</p>",
                               span=2, tab="Behaviour", empty=True))
 
-    # 6 ── Transition (mini timetable: up to 3 weeks from now)
+    # 6 ── Transition timetable — SAME text as the printed Word timetable
+    #      (transition_utils.build_timetable_docx → doc_day_text), every week,
+    #      with initials in place of the student's name.
     if tt:
         v = tt_view(tt)
         wks = tt_weeks(v)
-        home = v.get("home_school_short") or (tu.school_short_name(v.get("home_school") or "") if tu else "")
-        home_lbl = home if home and len(home) <= 14 else "Home school"
+        short = v.get("home_school_short") or (tu.school_short_name(v.get("home_school") or "") if tu else "")
         this_mon = _monday(TODAY)
-
-        def _wk_mon(w):
+        rows = ""
+        for w in wks:
             try:
-                return _d(w["days"][0]["date"]) or (tu.week_monday(w["year"], w["term"], w["week"]) if tu else None)
+                mon = tu.week_monday(w["year"], w["term"], w["week"]) if tu else _d(w["days"][0]["date"])
             except Exception:
-                return None
-
-        dated = [(w, _wk_mon(w)) for w in wks]
-        dated = [(w, m) for w, m in dated if m]
-        upcoming = [x for x in dated if x[1] >= this_mon]
-        show = upcoming[:3] if upcoming else dated[-3:]
-        if not dated:
-            when_chip = ("No weeks entered yet", "warn")
-        elif upcoming and upcoming[0][1] == this_mon:
-            when_chip = ("From this week", "info")
-        elif upcoming:
-            when_chip = (f"Starts week of {_fmt(upcoming[0][1])}", "info")
-        else:
-            when_chip = ("Transition finished", "good")
-
+                mon = _d((w.get("days") or [{}])[0].get("date"))
+            if not mon:
+                continue
+            cur = " ov-curwk" if mon == this_mon else ""
+            cells = ""
+            for k in range(5):
+                day = (w.get("days") or [{}] * 5)[k] if k < len(w.get("days") or []) else {}
+                d = mon + timedelta(days=k)
+                lines = tu.doc_day_text(day, ini, short) if (tu and day) else [""]
+                lines = [ln for ln in lines if ln]
+                loc = day.get("loc") or ""
+                cls = {"CLC": "clc", "HOME": "home", "OTHER": "other"}.get(loc, "none")
+                today = " ov-today" if d == TODAY else ""
+                txt = "".join(f"<div>{_esc(ln)}</div>" for ln in lines) or "<div class='ov-blank'>&nbsp;</div>"
+                cells += (f'<td class="ov-c-{cls}{today}">'
+                          f'<div class="ov-date"><span class="ov-dn">{DAY_NAMES[k]} </span>'
+                          f'Date: {d:%d/%m}</div>{txt}</td>')
+            rows += (f'<tr class="ov-wkrow{cur}"><th class="ov-wk">Term: {_esc(w.get("term"))}<br>'
+                     f'Week: {_esc(w.get("week"))}{"<span>this week</span>" if cur else ""}</th>{cells}</tr>')
         table = ""
-        if show:
-            head = "".join(f"<th>{d}</th>" for d in ("Mon", "Tue", "Wed", "Thu", "Fri"))
-            rows = ""
-            for w, mon in show:
-                cells = ""
-                for k in range(5):
-                    dd = mon + timedelta(days=k)
-                    day = (tu.day_for(wks, dd) if tu else None) or {}
-                    loc = day.get("loc") or ""
-                    if loc == "CLC":
-                        cls, place = "clc", "CLC"
-                    elif loc == "HOME":
-                        cls, place = "home", home_lbl
-                    elif loc == "OTHER":
-                        cls, place = "other", _short(day.get("other") or "Other", 14)
-                    else:
-                        cls, place = "none", "—" if not loc else "No session"
-                    t = fmt_day_time(day) if cls in ("clc", "home", "other") else ""
-                    lab = (day.get("label") or "").upper()
-                    today = " ov-today" if dd == TODAY else ""
-                    tip = _esc(day_text(day, home_lbl)) if day else ""
-                    short_place = "Home" if cls == "home" else ("No sess." if place == "No session" else place)
-                    cells += (f'<td class="ov-c-{cls}{today}" title="{tip}">'
-                              f'<b><i class="ov-lg">{_esc(place)}</i><i class="ov-sm">{_esc(short_place)}</i></b>'
-                              + (f"<span>{_esc(t)}</span>" if t else "")
-                              + (f"<em>{_esc(lab)}</em>" if lab else "") + "</td>")
-                rows += (f'<tr><th class="ov-wk">T{w.get("term")} W{w.get("week")}'
-                         f'<span>{_fmt(mon)}</span></th>{cells}</tr>')
-            table = f'<table class="ov-tt"><tr><th></th>{head}</tr>{rows}</table>'
+        if rows:
+            head = "".join(f"<th>{d}</th>" for d in DAY_NAMES)
+            table = f'<table class="ov-tt"><tr class="ov-head"><th></th>{head}</tr>{rows}</table>'
+        rec = _d(v.get("recommencement_date"))
+        foot = []
+        if v.get("home_school"):
+            foot.append(f"<b>School:</b> {_esc(v['home_school'])}")
+        if rec and tu:
+            foot.append(f"<b>Recommencement Date at Home School:</b> {_esc(tu.recommencement_text(rec))}")
+        notes = (v.get("notes") or "").strip()
         lcd = tu.last_clc_day(wks) if (tu and wks) else None
+        upcoming = [w for w in wks if (_d((w.get("days") or [{}])[-1].get("date")) or date.min) >= this_mon]
+        if not wks:
+            when_chip = ("No weeks entered yet", "warn")
+        elif not upcoming:
+            when_chip = ("Transition finished", "good")
+        else:
+            when_chip = (f"{len(wks)} week{'s' if len(wks) != 1 else ''}"
+                         + (f" · last CLC day {_fmt(lcd, True)}" if lcd else ""), "info")
         tiles.append(_ov_tile(
             "trans", "🗓️", "Transition timetable",
             big=_esc(re.sub(r"^[^\w]+", "", tt_status(tt)).split(" —")[0]),
-            body=table + f"<p class='ov-dim'>{_esc(v.get('home_school') or home or '')}"
-                 + (f" · last CLC day {_fmt(lcd, True)}" if lcd else "") + "</p>",
-            chips=[when_chip], span=2, tab="Transition"))
+            body=table
+                 + (f"<p class='ov-ttfoot'>{' &nbsp;·&nbsp; '.join(foot)}</p>" if foot else "")
+                 + (f"<p class='ov-ttfoot'>{_esc(redact(notes))}</p>" if notes else ""),
+            chips=[when_chip, ("Same wording as the printed timetable", "info")], span=4, tab="Transition"))
     else:
         tiles.append(_ov_tile("trans", "🗓️", "Transition timetable", body="<p>No timetable yet.</p>",
-                              span=2, tab="Transition", empty=True))
+                              span=4, tab="Transition", empty=True))
 
     # 7 ── Behaviour Support Plan
     if plan:
@@ -1807,7 +1845,8 @@ def render_overview():
             body += "<div><div class='ov-k'>Then</div>" + _ul(resp, 4, 60) + "</div>"
         tiles.append(_ov_tile("plan", "🛟", "Support plan",
                               body=f"<div class='ov-2col'>{body}</div>" if body else "<p>Plan started.</p>",
-                              chips=[_review_chip(plan.get("review_date"))], span=2, tab="Profile"))
+                              chips=[_review_chip(plan.get("review_date"))], span=2, tab="Profile",
+                              more="".join(_sec(lbl, _ul_all(_as_list(plan.get(k)))) for k, lbl in PLAN_FIELDS)))
     else:
         tiles.append(_ov_tile("plan", "🛟", "Support plan", body="<p>Not written yet.</p>",
                               span=2, tab="Profile", empty=True))
@@ -1827,10 +1866,14 @@ def render_overview():
         tiles.append(_ov_tile("safety", "🛡️", "Safety & Risk Plan",
                               big=f"{len(risks)}<small> risks</small>", body=body,
                               chips=[(f"{n_high} high/extreme" if n_high else "", "bad"),
-                                     _review_chip(sp.get("review_date"))], span=2, tab="Profile"))
+                                     _review_chip(sp.get("review_date"))], span=4, tab="Profile",
+                              more=_sec("All risks", _ul_all(
+                                  [f"{r.get('level') or '—'} ({r.get('code') or ''}) — {r['issue']}"
+                                   + (f" · Function: {r['function']}" if r.get('function') else "") for r in risks]))
+                                   + _sec("Priority actions", _ul_all(pa))))
     else:
         tiles.append(_ov_tile("safety", "🛡️", "Safety & Risk Plan", body="<p>None filed.</p>",
-                              span=2, tab="Profile", empty=True))
+                              span=4, tab="Profile", empty=True))
 
     # 9 ── Sensory Overview
     if sens["latest"] and sens_sum:
@@ -1842,7 +1885,10 @@ def render_overview():
                               body=(f"<div>{pills}</div>" if pills else "<p>No high or medium areas.</p>")
                                    + (f"<p class='ov-dim'>Try: {_esc(_short(strat, 70))}</p>" if strat else ""),
                               chips=[("● = high priority", "info") if pills else ("", "info"),
-                                     _review_chip(sens["latest"].get("review_date"))], tab="Profile"))
+                                     _review_chip(sens["latest"].get("review_date"))], tab="Profile",
+                              more=_sec("All areas", _ul_all([f"{a_}: {v_.get('priority', '').title()} ({v_.get('pct', '')}%)"
+                                                               for a_, v_ in sens_sum["areas"]]))
+                                   + _sec("Suggested strategies", _ul_all(sens_sum.get("strategies") or []))))
     else:
         tiles.append(_ov_tile("sensory", "🌈", "Sensory", body="<p>No overview completed.</p>",
                               tab="Profile", empty=True))
@@ -1857,19 +1903,56 @@ def render_overview():
         tiles.append(_ov_tile("trials", "🧪", "Strategy trials",
                               big=f"{len(running)}<small> running</small>", body=body,
                               chips=[(f"{worked} of {len(done)} helped" if done else "", "good")],
-                              tab="Profile"))
+                              tab="Profile",
+                              more=_ul_all([f"{t.get('title') or 'Trial'} — "
+                                            + ("running" if t.get("status") == "Running" else (t.get("outcome") or "concluded"))
+                                            + (f": {t['conclusion']}" if t.get("conclusion") else "")
+                                            for t in running + done])))
     else:
         tiles.append(_ov_tile("trials", "🧪", "Strategy trials", body="<p>None yet.</p>",
                               tab="Profile", empty=True))
 
-    # Order so every row fills: [summary|hyp] [about|goals|sensory|trials] [WoT|transition] [plan|safety]
-    order = [0, 1, 2, 3, 8, 9, 4, 5, 6, 7]
+    # Order so every row fills: [summary|hyp] [about|goals|sensory|trials] [transition] [WoT|plan] [safety]
+    order = [0, 1, 2, 3, 8, 9, 5, 4, 6, 7]
     tiles = [tiles[i] for i in order]
     st.markdown('<div class="ov-grid">' + "".join(tiles) + "</div>", unsafe_allow_html=True)
 
 
 with overview_box:
     render_overview()
+    # Clicking a tile (or Enter/Space on it) opens its tab below and scrolls to it.
+    # Streamlit can't hear clicks on HTML, so a tiny script in a zero-height
+    # component wires the tiles to the real tab buttons on the page.
+    import streamlit.components.v1 as _components
+    _components.html("""
+<script>
+(function () {
+  const doc = window.parent.document;
+  function openTab(name) {
+    const tabs = Array.from(doc.querySelectorAll('[role="tab"]'));
+    const btn = tabs.find(b => b.innerText.trim().toLowerCase().includes(name.toLowerCase()));
+    if (!btn) return;
+    btn.click();
+    setTimeout(() => btn.scrollIntoView({behavior: "smooth", block: "start"}), 60);
+  }
+  function bind() {
+    doc.querySelectorAll('.ov-tile[data-tab]').forEach(t => {
+      if (t.dataset.ovBound) return;
+      t.dataset.ovBound = "1";
+      t.addEventListener("click", e => {
+        if (e.target.closest("details, summary, a")) return;   // "Show all" toggles in place
+        openTab(t.dataset.tab);
+      });
+      t.addEventListener("keydown", e => {
+        if (e.target !== t) return;
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openTab(t.dataset.tab); }
+      });
+    });
+  }
+  bind();
+  new MutationObserver(bind).observe(doc.body, {childList: true, subtree: true});
+})();
+</script>""", height=0)
 
 
 with tab_p:
