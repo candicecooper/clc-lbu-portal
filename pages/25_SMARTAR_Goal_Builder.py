@@ -2953,6 +2953,33 @@ elif view == "🗺️ Program Snapshot":
         "being entered. Expected frequency: an observation on every school day (Mon–Fri)."
     )
 
+    # ── Page-level styling: a dark backdrop behind the "all students at a
+    # glance" summary tiles (so that global zone reads as visually distinct
+    # from the JP/PY/SY program tabs below it), and bigger/bolder JP/PY/SY
+    # tab labels so they read as section headers rather than small nav text.
+    st.markdown(
+        """
+        <style>
+        .stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p {
+            font-size: 1.3rem;
+            font-weight: 700;
+        }
+        .stTabs [data-baseweb="tab-list"] button {
+            padding: 10px 24px;
+        }
+        .st-key-snap_global_tiles {
+            background: linear-gradient(135deg, #0f172a, #1e293b);
+            border-radius: 16px;
+            padding: 20px 18px 16px;
+        }
+        .st-key-snap_global_tiles p, .st-key-snap_global_tiles .stCaption {
+            color: #cbd5e1 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     students = get_students()  # active, on-placement students only
     if not students:
         st.info("No active students set up yet.")
@@ -2971,33 +2998,36 @@ elif view == "🗺️ Program Snapshot":
     # tiles (same look as the per-program KPI row below), and CLICKABLE: pick
     # one to filter the "Active Students" grid in every program tab down to
     # just that group, so the tiles aren't only a count — they're a way in.
-    SNAP_TILE_MEMBERS = render_snapshot_category_tiles(
-        all_snapshots, students, "global", "across all programs"
-    )
-    # The filter choice is read again below (per-program grid filtering) —
-    # re-read here rather than threading a return value, since
-    # render_snapshot_category_tiles() may change it via st.rerun() anyway.
-    active_filter = st.session_state.get("snap_tile_filter", "all")
-
-    no_goal_students = sorted(sn["student"] for sn in all_snapshots if sn["status"] == "no_goal")
-    if no_goal_students:
-        st.caption(f"ℹ️ {len(no_goal_students)} student(s) have no SMARTAR goal set yet: "
-                  f"{', '.join(no_goal_students)}.")
-
-    # ── Attendance-matching diagnostic — so a silent name/program mismatch
-    # with the Behaviour Support Tool is visible, not just a wrong number ──
-    matched, unmatched = attendance_match_coverage(students)
-    if matched:
-        cap = f"🔗 Attendance from the Behaviour Support Tool is linked for {len(matched)}/{len(students)} student(s) — excused (absent / no school) days are excluded from their expected tracking days."
-        if unmatched:
-            cap += f" Not linked for: {', '.join(unmatched)} (check the first name matches exactly, incl. program, in both tools)."
-        st.caption(cap)
-    else:
-        st.caption(
-            "ℹ️ No students could be matched to the Behaviour Support Tool's attendance records yet "
-            "(so absence days aren't currently excluded from expected tracking days — everything below "
-            "assumes every school day as before)."
+    # Wrapped in a keyed container (styled dark above) so this global "all
+    # students at a glance" zone is visually distinct from the program tabs.
+    with st.container(key="snap_global_tiles"):
+        SNAP_TILE_MEMBERS = render_snapshot_category_tiles(
+            all_snapshots, students, "global", "across all programs"
         )
+        # The filter choice is read again below (per-program grid filtering) —
+        # re-read here rather than threading a return value, since
+        # render_snapshot_category_tiles() may change it via st.rerun() anyway.
+        active_filter = st.session_state.get("snap_tile_filter", "all")
+
+        no_goal_students = sorted(sn["student"] for sn in all_snapshots if sn["status"] == "no_goal")
+        if no_goal_students:
+            st.caption(f"ℹ️ {len(no_goal_students)} student(s) have no SMARTAR goal set yet: "
+                      f"{', '.join(no_goal_students)}.")
+
+        # ── Attendance-matching diagnostic — so a silent name/program mismatch
+        # with the Behaviour Support Tool is visible, not just a wrong number ──
+        matched, unmatched = attendance_match_coverage(students)
+        if matched:
+            cap = f"🔗 Attendance from the Behaviour Support Tool is linked for {len(matched)}/{len(students)} student(s) — excused (absent / no school) days are excluded from their expected tracking days."
+            if unmatched:
+                cap += f" Not linked for: {', '.join(unmatched)} (check the first name matches exactly, incl. program, in both tools)."
+            st.caption(cap)
+        else:
+            st.caption(
+                "ℹ️ No students could be matched to the Behaviour Support Tool's attendance records yet "
+                "(so absence days aren't currently excluded from expected tracking days — everything below "
+                "assumes every school day as before)."
+            )
 
     st.markdown("---")
 
@@ -3031,48 +3061,6 @@ elif view == "🗺️ Program Snapshot":
                 prog_tracking = get_tracking_for_goals(
                     prog_goal_ids, window_from.isoformat(), window_to.isoformat()
                 )
-
-                # ── KPI tiles ────────────────────────────────────────────
-                total_students  = len(prog_snaps)
-                goals_tracked   = sum(sn["goal_count"] for sn in prog_snaps)
-                on_track_n      = sum(1 for sn in prog_snaps if sn["status"] == "on_track")
-                attention_n     = total_students - on_track_n
-                all_consistency = [gi["freq"]["consistency_pct"]
-                                   for sn in prog_snaps for gi in sn["goals"]]
-                avg_consistency = round(sum(all_consistency) / len(all_consistency)) if all_consistency else 0
-
-                this_week_from = (window_to - timedelta(days=6)).isoformat()
-                last_week_from = (window_to - timedelta(days=13)).isoformat()
-                last_week_to   = (window_to - timedelta(days=7)).isoformat()
-                entries_this_week = sum(1 for r in prog_tracking if r["session_date"] >= this_week_from)
-                entries_last_week = sum(1 for r in prog_tracking
-                                        if last_week_from <= r["session_date"] <= last_week_to)
-                if entries_last_week:
-                    wow = round((entries_this_week - entries_last_week) / entries_last_week * 100)
-                    wow_str = f"{'+' if wow >= 0 else ''}{wow}% vs last week"
-                else:
-                    wow_str = "No data last week"
-
-                kpis = [
-                    ("ACTIVE STUDENTS",   str(total_students),            f"in {prog}",
-                     "#1d6fa4", "#134e7a"),
-                    ("GOALS TRACKED",     str(goals_tracked),             "active SMARTAR goals",
-                     "#7c3aed", "#5b21b6"),
-                    ("ENTRIES THIS WEEK", str(entries_this_week),         wow_str,
-                     "#0891b2", "#0e7490"),
-                    ("AVG CONSISTENCY",   f"{avg_consistency}%",          "last 14 school days",
-                     "#16a34a", "#166534"),
-                    ("ON TRACK",          f"{on_track_n}/{total_students}", "meeting expected frequency",
-                     "#ca8a04", "#92400e"),
-                    ("NEEDS ATTENTION",   str(attention_n),               "below expected / not started",
-                     "#dc2626", "#991b1b"),
-                ]
-                kpi_cols = st.columns(6)
-                for col, (label, value, sub, c1, c2) in zip(kpi_cols, kpis):
-                    with col:
-                        st.markdown(render_kpi_tile(label, value, sub, c1, c2), unsafe_allow_html=True)
-
-                st.markdown("<br>", unsafe_allow_html=True)
 
                 # ── Program trends — tucked into an expander so the student
                 # tiles below are the main focus of the page ───────────────
