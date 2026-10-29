@@ -211,8 +211,32 @@ st.markdown(f"""
   .ov-pill {{ display:inline-block; background:rgba(255,255,255,.95); color:#5f2a78; border-radius:999px;
               padding:.08rem .5rem; margin:.15rem .2rem .1rem 0; font-size:.72rem; font-weight:700; }}
   .ov-trial {{ font-size:.78rem; margin:.2rem 0; }}
+  .ov-2col {{ display:grid; grid-template-columns:1fr 1fr; gap:.2rem 1rem; }}
+  .ov-wotgrid {{ display:grid; grid-template-columns:1fr 1fr; gap:0 .5rem; }}
+  .ov-tt {{ width:100%; border-collapse:separate; border-spacing:3px; margin:.35rem 0 .2rem;
+            table-layout:fixed; font-size:.72rem; }}
+  .ov-tt th {{ font-size:.66rem; font-weight:700; text-transform:uppercase; letter-spacing:.05em;
+               opacity:.85; padding:0 0 .1rem; text-align:center; border:none; background:none; }}
+  .ov-tt th.ov-wk {{ text-align:left; width:3.6rem; text-transform:none; letter-spacing:0;
+                     font-size:.74rem; opacity:1; }}
+  .ov-tt th.ov-wk span {{ display:block; font-weight:400; opacity:.8; font-size:.66rem; }}
+  .ov-tt td {{ border-radius:6px; padding:.3rem .2rem; text-align:center; line-height:1.2;
+               vertical-align:middle; border:none; overflow:hidden; }}
+  .ov-tt td b {{ display:block; font-size:.74rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+  .ov-tt td span {{ display:block; font-size:.64rem; opacity:.85; white-space:nowrap; }}
+  .ov-tt td em {{ display:block; font-size:.6rem; font-style:normal; font-weight:800; }}
+  .ov-c-clc {{ background:#fff; color:#8f5205; }}
+  .ov-c-home {{ background:#2E7A48; color:#fff; }}
+  .ov-c-other {{ background:#3C4C6B; color:#fff; }}
+  .ov-c-none {{ background:rgba(0,0,0,.14); color:rgba(255,255,255,.75); }}
+  .ov-tt i {{ font-style:normal; }} .ov-tt .ov-sm {{ display:none; }}
+  .ov-tt td.ov-today {{ outline:3px solid #1f2d2d; outline-offset:-1px; }}
   @media (max-width: 1100px) {{ .ov-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
   @media (max-width: 640px) {{ .ov-grid {{ grid-template-columns: 1fr; }}
+                               .ov-2col, .ov-wotgrid {{ grid-template-columns: 1fr; }}
+                               .ov-tt .ov-lg {{ display:none; }} .ov-tt .ov-sm {{ display:inline; }}
+                               .ov-tt td span {{ font-size:.56rem; white-space:normal; }}
+                               .ov-tt th.ov-wk {{ width:2.7rem; }}
                                .ov-tile {{ grid-column: span 1 !important; }} }}
   .wot {{ display:flex; flex-direction:column; gap:.4rem; }}
   .wot-row {{ display:grid; grid-template-columns: 1.1fr 1.4fr 1.4fr 1.4fr; gap:.7rem;
@@ -1590,6 +1614,13 @@ def _ul(items, n=3, cut=70) -> str:
     return "<ul>" + "".join(f"<li>{_esc(_short(redact(x), cut))}</li>" for x in items) + "</ul>"
 
 
+def fmt_day_time(day: dict) -> str:
+    if day.get("full_day"):
+        return "Full day"
+    a, b = (day.get("start") or "").strip(), (day.get("end") or "").strip()
+    return f"{a}–{b}" if a and b else (a or b)
+
+
 def _review_chip(review) -> tuple[str, str]:
     txt, kind = _review_note(review)
     return (txt.replace("Review overdue — was due", "Review overdue ·"), kind)
@@ -1688,40 +1719,82 @@ def render_overview():
                       f'<b>{short_lbl}</b> {_esc(_short(redact(line), 46))}'
                       + (f'<div class="ov-help">✓ {_esc(_short(redact(helps_), 52))}</div>' if helps_ else "")
                       + "</div>")
-        tiles.append(_ov_tile("wot", "🪟", "Window of Tolerance", body=bands,
+        tiles.append(_ov_tile("wot", "🪟", "Window of Tolerance", body=f'<div class="ov-wotgrid">{bands}</div>', span=2,
                               chips=[("Built in WoT Builder" if wot_view["source"] == "builder"
                                       else "Draft from incident data",
                                       "good" if wot_view["source"] == "builder" else "warn")],
                               tab="Behaviour"))
     else:
         tiles.append(_ov_tile("wot", "🪟", "Window of Tolerance", body="<p>Not built yet.</p>",
-                              tab="Behaviour", empty=True))
+                              span=2, tab="Behaviour", empty=True))
 
-    # 6 ── Transition (this week strip)
+    # 6 ── Transition (mini timetable: up to 3 weeks from now)
     if tt:
         v = tt_view(tt)
         wks = tt_weeks(v)
-        mon = _monday(TODAY)
-        strip = ""
-        if tu is not None and wks:
-            for k in range(5):
-                d = tu.day_for(wks, mon + timedelta(days=k))
-                loc = (d or {}).get("loc", "")
-                cls = {"CLC": "clc", "HOME": "home"}.get(loc, "none")
-                strip += (f'<div class="ov-day ov-{cls}"><b>{"MTWTF"[k]}</b>'
-                          f'{"CLC" if loc == "CLC" else "Home" if loc == "HOME" else "—"}</div>')
-        lcd = tu.last_clc_day(wks) if (tu and wks) else None
         home = v.get("home_school_short") or (tu.school_short_name(v.get("home_school") or "") if tu else "")
+        home_lbl = home if home and len(home) <= 14 else "Home school"
+        this_mon = _monday(TODAY)
+
+        def _wk_mon(w):
+            try:
+                return _d(w["days"][0]["date"]) or (tu.week_monday(w["year"], w["term"], w["week"]) if tu else None)
+            except Exception:
+                return None
+
+        dated = [(w, _wk_mon(w)) for w in wks]
+        dated = [(w, m) for w, m in dated if m]
+        upcoming = [x for x in dated if x[1] >= this_mon]
+        show = upcoming[:3] if upcoming else dated[-3:]
+        if not dated:
+            when_chip = ("No weeks entered yet", "warn")
+        elif upcoming and upcoming[0][1] == this_mon:
+            when_chip = ("From this week", "info")
+        elif upcoming:
+            when_chip = (f"Starts week of {_fmt(upcoming[0][1])}", "info")
+        else:
+            when_chip = ("Transition finished", "good")
+
+        table = ""
+        if show:
+            head = "".join(f"<th>{d}</th>" for d in ("Mon", "Tue", "Wed", "Thu", "Fri"))
+            rows = ""
+            for w, mon in show:
+                cells = ""
+                for k in range(5):
+                    dd = mon + timedelta(days=k)
+                    day = (tu.day_for(wks, dd) if tu else None) or {}
+                    loc = day.get("loc") or ""
+                    if loc == "CLC":
+                        cls, place = "clc", "CLC"
+                    elif loc == "HOME":
+                        cls, place = "home", home_lbl
+                    elif loc == "OTHER":
+                        cls, place = "other", _short(day.get("other") or "Other", 14)
+                    else:
+                        cls, place = "none", "—" if not loc else "No session"
+                    t = fmt_day_time(day) if cls in ("clc", "home", "other") else ""
+                    lab = (day.get("label") or "").upper()
+                    today = " ov-today" if dd == TODAY else ""
+                    tip = _esc(day_text(day, home_lbl)) if day else ""
+                    short_place = "Home" if cls == "home" else ("No sess." if place == "No session" else place)
+                    cells += (f'<td class="ov-c-{cls}{today}" title="{tip}">'
+                              f'<b><i class="ov-lg">{_esc(place)}</i><i class="ov-sm">{_esc(short_place)}</i></b>'
+                              + (f"<span>{_esc(t)}</span>" if t else "")
+                              + (f"<em>{_esc(lab)}</em>" if lab else "") + "</td>")
+                rows += (f'<tr><th class="ov-wk">T{w.get("term")} W{w.get("week")}'
+                         f'<span>{_fmt(mon)}</span></th>{cells}</tr>')
+            table = f'<table class="ov-tt"><tr><th></th>{head}</tr>{rows}</table>'
+        lcd = tu.last_clc_day(wks) if (tu and wks) else None
         tiles.append(_ov_tile(
-            "trans", "🗓️", "Transition",
+            "trans", "🗓️", "Transition timetable",
             big=_esc(re.sub(r"^[^\w]+", "", tt_status(tt)).split(" —")[0]),
-            body=(f'<div class="ov-days">{strip}</div>' if strip else "")
-                 + f"<p class='ov-dim'>{_esc(home)}"
+            body=table + f"<p class='ov-dim'>{_esc(v.get('home_school') or home or '')}"
                  + (f" · last CLC day {_fmt(lcd, True)}" if lcd else "") + "</p>",
-            chips=[("This week", "info")] if strip else [], tab="Transition"))
+            chips=[when_chip], span=2, tab="Transition"))
     else:
-        tiles.append(_ov_tile("trans", "🗓️", "Transition", body="<p>No timetable yet.</p>",
-                              tab="Transition", empty=True))
+        tiles.append(_ov_tile("trans", "🗓️", "Transition timetable", body="<p>No timetable yet.</p>",
+                              span=2, tab="Transition", empty=True))
 
     # 7 ── Behaviour Support Plan
     if plan:
@@ -1729,30 +1802,35 @@ def render_overview():
         resp = _as_list(plan.get("response_early_signs")) or _as_list(plan.get("proactive_strategies_additional"))
         body = ""
         if ews:
-            body += "<div class='ov-k'>Watch for</div>" + _ul(ews, 3, 40)
+            body += "<div><div class='ov-k'>Watch for</div>" + _ul(ews, 4, 60) + "</div>"
         if resp:
-            body += "<div class='ov-k'>Then</div>" + _ul(resp, 2, 45)
-        tiles.append(_ov_tile("plan", "🛟", "Support plan", body=body or "<p>Plan started.</p>",
-                              chips=[_review_chip(plan.get("review_date"))], tab="Profile"))
+            body += "<div><div class='ov-k'>Then</div>" + _ul(resp, 4, 60) + "</div>"
+        tiles.append(_ov_tile("plan", "🛟", "Support plan",
+                              body=f"<div class='ov-2col'>{body}</div>" if body else "<p>Plan started.</p>",
+                              chips=[_review_chip(plan.get("review_date"))], span=2, tab="Profile"))
     else:
         tiles.append(_ov_tile("plan", "🛟", "Support plan", body="<p>Not written yet.</p>",
-                              tab="Profile", empty=True))
+                              span=2, tab="Profile", empty=True))
 
     # 8 ── Safety & Risk Plan
     sp = safe.get("parsed") or {}
     if safe["doc"]:
         order = {"EXTREME": 0, "HIGH": 1, "MODERATE": 2, "LOW": 3}
         risks = sorted(sp.get("risks", []), key=lambda r: order.get(r.get("level"), 4))
-        body = "".join(f'<div class="ov-risk"><span class="ov-lv">{_esc((r.get("level") or "—")[:3])}</span>'
-                       f'{_esc(_short(redact(r["issue"]), 42))}</div>' for r in risks[:3])
+        rk = "".join(f'<div class="ov-risk"><span class="ov-lv">{_esc((r.get("level") or "—")[:3])}</span>'
+                     f'{_esc(_short(redact(r["issue"]), 55))}</div>' for r in risks[:4])
+        pa = sp.get("priority_actions") or []
+        body = (f"<div class='ov-2col'><div><div class='ov-k'>Top risks</div>{rk}</div>"
+                + (f"<div><div class='ov-k'>Priority actions</div>{_ul(pa, 3, 60)}</div>" if pa else "")
+                + "</div>")
         n_high = sum(1 for r in risks if r.get("level") in ("EXTREME", "HIGH"))
         tiles.append(_ov_tile("safety", "🛡️", "Safety & Risk Plan",
                               big=f"{len(risks)}<small> risks</small>", body=body,
                               chips=[(f"{n_high} high/extreme" if n_high else "", "bad"),
-                                     _review_chip(sp.get("review_date"))], tab="Profile"))
+                                     _review_chip(sp.get("review_date"))], span=2, tab="Profile"))
     else:
         tiles.append(_ov_tile("safety", "🛡️", "Safety & Risk Plan", body="<p>None filed.</p>",
-                              tab="Profile", empty=True))
+                              span=2, tab="Profile", empty=True))
 
     # 9 ── Sensory Overview
     if sens["latest"] and sens_sum:
@@ -1784,6 +1862,9 @@ def render_overview():
         tiles.append(_ov_tile("trials", "🧪", "Strategy trials", body="<p>None yet.</p>",
                               tab="Profile", empty=True))
 
+    # Order so every row fills: [summary|hyp] [about|goals|sensory|trials] [WoT|transition] [plan|safety]
+    order = [0, 1, 2, 3, 8, 9, 4, 5, 6, 7]
+    tiles = [tiles[i] for i in order]
     st.markdown('<div class="ov-grid">' + "".join(tiles) + "</div>", unsafe_allow_html=True)
 
 
