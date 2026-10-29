@@ -2974,6 +2974,10 @@ elif view == "🗺️ Program Snapshot":
     SNAP_TILE_MEMBERS = render_snapshot_category_tiles(
         all_snapshots, students, "global", "across all programs"
     )
+    # The filter choice is read again below (per-program grid filtering) —
+    # re-read here rather than threading a return value, since
+    # render_snapshot_category_tiles() may change it via st.rerun() anyway.
+    active_filter = st.session_state.get("snap_tile_filter", "all")
 
     no_goal_students = sorted(sn["student"] for sn in all_snapshots if sn["status"] == "no_goal")
     if no_goal_students:
