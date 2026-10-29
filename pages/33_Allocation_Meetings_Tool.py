@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta, date
 import os
-import re
 from io import BytesIO
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
@@ -147,266 +146,6 @@ FIELD_MAP = {
     'Referral_Occurrence': None, 'Referral_ID': None, 'BSE': 'bse', 'Exclusion_Start_Date': 'exclusion_start_date',
 }
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# EXCEL → TOOL IMPORT
-# The tool only ever reads from Supabase, so edits made directly in the master
-# Excel file don't show up here until they're imported with this.
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _field_types_from_db(records):
-    """Work out each Supabase field's type from existing values, so Excel values are
-    converted to what the column expects (e.g. integer columns get ints, not '2.0')."""
-    types = {}
-    for rec in records:
-        for k, v in rec.items():
-            if k not in types and v is not None and v != "":
-                types[k] = type(v)
-    return types
-
-# Supabase date columns. Excel often holds these as typed text in Australian
-# DD/MM/YYYY format (or "NA"), which Postgres can't read — so they're parsed here.
-DATE_FIELDS = {
-    'date_of_birth', 'referral_date', 'meeting_date', 'waitlist_date', 'extension_date',
-    'finishing_date', 'exclusion_end_date', 'proposed_extension_finish_date',
-    'actual_finish_date', 'exclusion_start_date', 'start_after',
-}
-BLANK_MARKERS = {"", "na", "n/a", "n.a.", "nil", "none", "-", "--", "tbc", "tba", "unknown", "?"}
-_BAD_DATE = object()  # sentinel: a value was present but couldn't be read as a date
-
-def _parse_date_value(v):
-    """Return an ISO date string, None for blank/NA, or _BAD_DATE if unreadable."""
-    if v is None:
-        return None
-    if isinstance(v, datetime):
-        return v.date().isoformat()
-    if isinstance(v, date):
-        return v.isoformat()
-    if isinstance(v, (int, float)):
-        if isinstance(v, float) and pd.isna(v):
-            return None
-        if 20000 <= v <= 60000:  # Excel serial date number
-            return (date(1899, 12, 30) + timedelta(days=int(v))).isoformat()
-        return _BAD_DATE
-    text = str(v).strip()
-    if text.lower() in BLANK_MARKERS:
-        return None
-    text = text.split(" 00:00")[0].strip()
-    for fmt in ("%d/%m/%Y", "%d/%m/%y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d",
-                "%d %B %Y", "%d %b %Y", "%B %d %Y", "%Y/%m/%d"):
-        try:
-            return datetime.strptime(text, fmt).date().isoformat()
-        except ValueError:
-            continue
-    return _BAD_DATE
-
-def _meeting_week_from_date(iso_date):
-    """Best-effort 'Week N Term X' label from a meeting date, for rows imported without one."""
-    try:
-        d = datetime.fromisoformat(iso_date).date()
-    except Exception:
-        return None
-    applicable = None
-    for term_name, start in TERM_DATES_2026.items():
-        if start.year == d.year and start <= d:
-            applicable = (term_name, start)
-    if not applicable:
-        return None
-    term_name, start = applicable
-    week = ((d - _monday_of_week(start)).days // 7) + 1
-    return f"Week {max(1, min(week, 10))} {term_name}" if week <= 11 else None
-
-def _detect_date_fields(db_records):
-    """Known date columns, plus any column whose existing values look like ISO dates
-    or whose name says it's a date — catches columns added to the table later."""
-    found = set(DATE_FIELDS)
-    iso = re.compile(r"^\d{4}-\d{2}-\d{2}")
-    for rec in db_records:
-        for k, v in rec.items():
-            if k in found or v is None:
-                continue
-            if isinstance(v, str) and iso.match(v) and k not in ("id", "created_at", "updated_at"):
-                found.add(k)
-    for field in FIELD_MAP.values():
-        if field and field.endswith("_date"):
-            found.add(field)
-    return found
-
-def _wednesday_from_meeting_week(label):
-    """'Week 3 Term 2' -> ISO date of that week's Wednesday (2026 term dates)."""
-    m = re.match(r"^\s*Week\s+(\d+)\s+(Term\s+\d)\s*$", str(label or ""), re.I)
-    if not m:
-        return None
-    term = m.group(2).title()
-    if term not in TERM_DATES_2026:
-        return None
-    return get_wednesday_date(int(m.group(1)), term, 2026).isoformat()
-
-def _write_with_repair(write_fn, payload, max_attempts=4):
-    """
-    Run a Supabase write, repairing the payload if Postgres rejects a value:
-      - a date it can't read (e.g. "30/06/2026" or "NA") is converted or dropped
-      - a brief network hiccup ("Resource temporarily unavailable") is retried
-    Returns (ok, notes, error_text).
-    """
-    import time
-    payload = dict(payload)
-    notes = []
-    last_err = ""
-    for attempt in range(max_attempts):
-        try:
-            write_fn(payload)
-            return True, notes, ""
-        except Exception as e:
-            last_err = str(e)
-            m = re.search(r'(?:out of range|type date|type timestamp[^:]*): "([^"]*)"', last_err)
-            if m:
-                bad = m.group(1)
-                culprits = [k for k, v in payload.items() if str(v) == bad]
-                if not culprits:
-                    break
-                for k in culprits:
-                    fixed = _parse_date_value(bad)
-                    if fixed is None or fixed is _BAD_DATE:
-                        payload.pop(k)
-                        notes.append(f"{k} = {bad!r} skipped (not a date)")
-                    else:
-                        payload[k] = fixed
-                        notes.append(f"{k} converted {bad} → {fixed}")
-                continue
-            if "temporarily unavailable" in last_err.lower() or "errno 11" in last_err.lower() \
-                    or "timed out" in last_err.lower():
-                time.sleep(1 + attempt)
-                continue
-            break
-    return False, notes, last_err
-
-def _excel_to_db_value(v, target_type):
-    if v is None:
-        return None
-    if isinstance(v, float) and pd.isna(v):
-        return None
-    if isinstance(v, (datetime, date)):
-        return v.date().isoformat() if isinstance(v, datetime) else v.isoformat()
-    if isinstance(v, str):
-        v = v.strip()
-        if v == "":
-            return None
-    if target_type is int:
-        try:
-            return int(float(v))
-        except (TypeError, ValueError):
-            return None
-    if target_type is float:
-        try:
-            return float(v)
-        except (TypeError, ValueError):
-            return None
-    if target_type is bool:
-        return str(v).strip().lower() in ("yes", "true", "1", "y")
-    # Text column: whole-number floats from Excel (e.g. year level 7.0) become "7"
-    if isinstance(v, float) and v == int(v):
-        return str(int(v))
-    return str(v)
-
-def _norm_for_compare(v):
-    if v is None:
-        return ""
-    s = str(v).strip()
-    if len(s) >= 10 and s[4:5] == "-" and s[7:8] == "-":
-        return s[:10]  # compare dates on the date part only
-    try:
-        f = float(s)
-        return str(int(f)) if f == int(f) else str(f)
-    except ValueError:
-        return s.lower()
-
-def diff_excel_against_db(uploaded_bytes, db_records):
-    """
-    Read the master workbook and compare every row (matched by Student_Name) against
-    Supabase. Blank Excel cells never overwrite existing data.
-    Returns (sheet_name, changes, new_rows, ambiguous, name_column_found) where
-      changes  = [{"id", "student_name", "fields": {db_field: (old, new)}}]
-      new_rows = [{"student_name", "record": {...}}]   # in Excel but not in the tool
-      ambiguous = [names that match more than one tool record]
-    """
-    wb = openpyxl.load_workbook(BytesIO(uploaded_bytes), data_only=True)
-    sheet_name = next((c for c in ("Data_Model", "Sheet1") if c in wb.sheetnames), wb.sheetnames[0])
-    ws = wb[sheet_name]
-
-    headers = [str(c.value).strip() if c.value is not None else "" for c in ws[1]]
-    if "Student_Name" not in headers:
-        return sheet_name, [], [], [], False
-    name_idx = headers.index("Student_Name")
-
-    by_name = {}
-    for rec in db_records:
-        key = (rec.get("student_name") or "").strip().lower()
-        if key:
-            by_name.setdefault(key, []).append(rec)
-
-    field_types = _field_types_from_db(db_records)
-    date_fields = _detect_date_fields(db_records)
-    changes, new_rows, ambiguous = [], [], []
-
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        raw_name = row[name_idx] if name_idx < len(row) else None
-        name = str(raw_name).strip() if raw_name else ""
-        if not name:
-            continue
-
-        excel_record, warnings = {}, []
-        for idx, header in enumerate(headers):
-            db_field = FIELD_MAP.get(header)
-            if not db_field or idx >= len(row):
-                continue
-            if db_field in date_fields:
-                val = _parse_date_value(row[idx])
-                if val is _BAD_DATE:
-                    warnings.append(f"{header} = {row[idx]!r} isn't a readable date — left unchanged")
-                    continue
-            else:
-                val = _excel_to_db_value(row[idx], field_types.get(db_field))
-            if val is not None:
-                excel_record[db_field] = val
-
-        matches = by_name.get(name.lower(), [])
-        if len(matches) > 1:
-            ambiguous.append(name)
-            continue
-        if not matches:
-            if not excel_record.get("meeting_week"):
-                # meeting_week is required in the database
-                derived = _meeting_week_from_date(excel_record.get("meeting_date", ""))
-                excel_record["meeting_week"] = derived or "Imported from Excel"
-                warnings.append(f"No Meeting_Week in Excel — set to '{excel_record['meeting_week']}'")
-            if not excel_record.get("meeting_date"):
-                # meeting_date is also required in the database
-                fallback = _wednesday_from_meeting_week(excel_record.get("meeting_week"))
-                if fallback:
-                    excel_record["meeting_date"] = fallback
-                    warnings.append(f"No Meeting_Date in Excel — set to {fallback} (Wednesday of that week)")
-                else:
-                    excel_record["meeting_date"] = excel_record.get("referral_date") or date.today().isoformat()
-                    warnings.append(f"No Meeting_Date in Excel — set to {excel_record['meeting_date']} "
-                                    "as a placeholder. Please correct it.")
-            new_rows.append({"student_name": name, "record": excel_record, "warnings": warnings})
-            continue
-
-        db_rec = matches[0]
-        diffs = {}
-        for field, new_val in excel_record.items():
-            if field == "student_name":
-                continue
-            old_val = db_rec.get(field)
-            if _norm_for_compare(old_val) != _norm_for_compare(new_val):
-                diffs[field] = (old_val, new_val)
-        if diffs:
-            changes.append({"id": db_rec["id"], "student_name": db_rec.get("student_name"),
-                            "fields": diffs, "warnings": warnings})
-
-    return sheet_name, changes, new_rows, ambiguous, True
-
 # ══════════════════════════════════════════════════════════════════════════════
 # SCHOOL / PARTNERSHIP LIST — loaded from school_partnerships.csv (same folder)
 # Falls back to a short embedded list if the file isn't deployed yet, so the
@@ -527,6 +266,475 @@ def get_wednesday_date(week_number, term, year):
 
 def get_partnership_from_school(school_name):
     return SCHOOL_PARTNERSHIP_MAP.get(school_name, "")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FORM READER — pre-fills the Referral / Extension Request screens from an
+# uploaded Word or PDF form. Runs entirely inside this app (no outside service).
+# Nothing is saved from here: it only fills the on-screen boxes for review.
+# ══════════════════════════════════════════════════════════════════════════════
+import re as _re
+import difflib as _difflib
+
+_CHK_ON, _CHK_OFF = "☒", "☐"
+
+
+def _docx_cell_texts(file_bytes):
+    """Return one text string per table cell (nested tables kept separate), with
+    Word checkboxes rendered as ☒ (ticked) / ☐ (empty). Also returns any text
+    outside tables."""
+    import docx
+    from docx.oxml.ns import qn
+    W14 = "http://schemas.microsoft.com/office/word/2010/wordml"
+
+    d = docx.Document(BytesIO(file_bytes))
+    w_val = qn("w:val")
+
+    def truthy(el, default=False):
+        if el is None:
+            return default
+        v = el.get(w_val)
+        return v not in ("0", "false", "off")
+
+    def emit(el, out):
+        for ch in el:
+            tag = ch.tag
+            if tag == qn("w:tbl") or tag == qn("w:instrText") or tag == qn("w:drawing") \
+                    or tag.endswith("}Fallback") or tag == qn("w:delText"):
+                continue
+            if tag == qn("w:sdt"):
+                cb = ch.find(qn("w:sdtPr") + "/{%s}checkbox" % W14)
+                if cb is not None:
+                    chk = cb.find("{%s}checked" % W14)
+                    on = chk is not None and chk.get("{%s}val" % W14) in ("1", "true")
+                    out.append(_CHK_ON if on else _CHK_OFF)
+                    continue
+                content = ch.find(qn("w:sdtContent"))
+                if content is not None:
+                    emit(content, out)
+                continue
+            if tag == qn("w:ffData"):
+                cb = ch.find(qn("w:checkBox"))
+                if cb is not None:
+                    c = cb.find(qn("w:checked"))
+                    dflt = cb.find(qn("w:default"))
+                    on = truthy(c) if c is not None else truthy(dflt)
+                    out.append(_CHK_ON if on else _CHK_OFF)
+                continue
+            if tag == qn("w:t"):
+                out.append(ch.text or "")
+            elif tag == qn("w:tab"):
+                out.append(" ")
+            elif tag == qn("w:br"):
+                out.append("\n")
+            elif tag == qn("w:p"):
+                emit(ch, out)
+                out.append("\n")
+            else:
+                emit(ch, out)
+
+    cells = []
+    for tc in d.element.body.iter(qn("w:tc")):
+        out = []
+        emit(tc, out)
+        txt = "".join(out)
+        txt = _re.sub(r"[ \t ]+", " ", txt)
+        txt = _re.sub(r"\n\s*\n+", "\n", txt).strip()
+        if txt:
+            cells.append(txt)
+    loose = []
+    for p in d.paragraphs:
+        if p.text.strip():
+            loose.append(p.text.strip())
+    return cells, loose
+
+
+def _pdf_text_and_fields(file_bytes):
+    """Text of a PDF plus any fillable-form field values. Returns (text, fields, n_chars)."""
+    from pypdf import PdfReader
+    r = PdfReader(BytesIO(file_bytes))
+    text = "\n".join((pg.extract_text() or "") for pg in r.pages)
+    fields = {}
+    try:
+        for k, v in (r.get_fields() or {}).items():
+            val = v.get("/V")
+            if val not in (None, "", "/Off"):
+                fields[str(k)] = str(val)
+    except Exception:
+        pass
+    return text, fields, len(text.strip())
+
+
+def _parse_date_text(s):
+    if not s:
+        return None
+    s = s.strip()
+    m = _re.search(r"(\d{1,2})[./\-\s](\d{1,2})[./\-\s](\d{2,4})", s)
+    if m:
+        d_, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if y < 100:
+            y += 2000
+        try:
+            return date(y, mo, d_)
+        except ValueError:
+            pass
+    try:
+        from dateutil import parser as _dp
+        return _dp.parse(s, dayfirst=True, fuzzy=True).date()
+    except Exception:
+        return None
+
+
+def _after_label(text, label_pattern, stop_patterns=()):
+    """Text following `label:` up to the end of the line (or, if the value runs on
+    to following lines, up to the next stop label)."""
+    m = _re.search(label_pattern + r"\s*:?[ \t]*(.*)", text, flags=_re.I | _re.M)
+    if not m:
+        return ""
+    val = m.group(1).strip()
+    if stop_patterns:
+        rest = text[m.end(1):]
+        for ln in rest.split("\n"):
+            if any(_re.search(sp, ln, flags=_re.I) for sp in stop_patterns) or not ln.strip():
+                if not ln.strip():
+                    continue
+                break
+            val += " " + ln.strip()
+    return _re.sub(r"[_\.]{3,}", "", val).strip(" :-")
+
+
+def _norm_school(s):
+    s = (s or "").lower()
+    s = _re.sub(r"[^a-z0-9 ]", " ", s)
+    s = _re.sub(r"\b(primary|school|ps|p s|r 7|r 12|r 10|area|college|campus|the)\b", " ", s)
+    return _re.sub(r"\s+", " ", s).strip()
+
+
+def match_school(name, schools):
+    """Best match in the 799-school list. Returns (match or '', confident?)."""
+    if not name:
+        return "", False
+    low = {s.lower(): s for s in schools}
+    if name.lower() in low:
+        return low[name.lower()], True
+    nn = _norm_school(name)
+    if not nn:
+        return "", False
+    normed = {s: _norm_school(s) for s in schools}
+    exact = [s for s, n in normed.items() if n == nn]
+    if len(exact) == 1:
+        return exact[0], True
+    close = _difflib.get_close_matches(nn, list(set(normed.values())), n=3, cutoff=0.8)
+    if close:
+        cands = [s for s, n in normed.items() if n == close[0]]
+        return cands[0], len(cands) == 1
+    return "", False
+
+
+def match_student(name, records):
+    """Match a name from a form to one of the allocated-student records."""
+    if not name:
+        return None, False
+    def key(n):
+        n = _re.sub(r"[^a-z ,]", "", (n or "").lower()).strip()
+        if "," in n:
+            last, first = [x.strip() for x in n.split(",", 1)]
+            n = f"{first} {last}"
+        return _re.sub(r"\s+", " ", n)
+    target = key(name)
+    by_key = {}
+    for r in records:
+        by_key.setdefault(key(r.get("student_name")), []).append(r)
+    if target in by_key and len(by_key[target]) == 1:
+        return by_key[target][0], True
+    close = _difflib.get_close_matches(target, list(by_key.keys()), n=1, cutoff=0.8)
+    if close:
+        return by_key[close[0]][0], len(by_key[close[0]]) == 1
+    return None, False
+
+
+def _first_checked(cell, labels):
+    for lab in labels:
+        if _re.search(_CHK_ON + r"\s*" + lab, cell, flags=_re.I):
+            return True
+    return False
+
+
+def parse_referral_docx(file_bytes):
+    cells, _ = _docx_cell_texts(file_bytes)
+    alltext = "\n".join(cells)
+    out, notes = {}, []
+
+    def lab(pattern):
+        for c in cells:
+            m = _re.match(r"\s*" + pattern + r"\s*:?[ \t]*(.*)", c, flags=_re.I | _re.S)
+            if m:
+                v = _re.sub(r"[_\.]{3,}", "", m.group(1)).strip()
+                return v.split("\n")[0].strip() if v else ""
+        return ""
+
+    out["student_name"] = lab(r"Student\s+Name")
+    dob_raw = lab(r"Date of Birth")
+    out["dob"] = _parse_date_text(dob_raw)
+    if dob_raw and not out["dob"]:
+        notes.append(f"Couldn't read the date of birth ('{dob_raw}') — please enter it.")
+    yl = lab(r"Year level")
+    m = _re.search(r"\b(R|Reception|10|[1-9])\b", yl, flags=_re.I)
+    out["year_level"] = ("R" if m and m.group(1).lower().startswith("r") else m.group(1)) if m else ""
+    out["ed_id"] = lab(r"ED\s*ID")
+    out["school_raw"] = lab(r"School")
+    out["partnership_raw"] = lab(r"Partnership")
+
+    for c in cells:
+        if _re.match(r"\s*Exclusion Dates", c, flags=_re.I):
+            continue
+    ex_from = ex_to = ""
+    for c in cells:
+        m1 = _re.match(r"\s*From\s*:?[ \t]*(.*)", c, flags=_re.I | _re.S)
+        m2 = _re.match(r"\s*To\s*:?[ \t]*(.*)", c, flags=_re.I | _re.S)
+        if m1 and not ex_from:
+            ex_from = m1.group(1).strip()
+        if m2 and not ex_to:
+            ex_to = m2.group(1).strip()
+    out["exclusion_start"] = _parse_date_text(ex_from)
+    out["exclusion_end"] = _parse_date_text(ex_to)
+
+    # previous LC placement
+    prev_cell = next((c for c in cells if _re.search(r"Previous LC placement", c, flags=_re.I)), "")
+    prev_names = []
+    for nm, label in (("Beafield", "Beafield"), ("Cowandilla", "Cowandilla"), ("Southern", "Southern")):
+        if _re.search(_CHK_ON + r"\s*" + label, prev_cell, flags=_re.I):
+            prev_names.append(nm)
+    out["prev_clc"] = "Cowandilla" in prev_names
+    out["prev_other_lc_names"] = [n for n in prev_names if n != "Cowandilla"]
+    ym = _re.search(r"Year\s*:?\s*([0-9R,\s/&and]+)$", prev_cell.strip(), flags=_re.I)
+    out["prev_year"] = ym.group(1).strip() if ym else ""
+
+    # flags
+    flagmap = {
+        "flag_eald": r"EALD", "flag_atsi": r"Aboriginal\s*/?\s*TSI",
+        "flag_intervention_custody_order": r"Intervention\s*/?\s*Custody",
+        "flag_dcp_involvement": r"DCP involvement", "flag_child_in_care": r"Child in Care",
+        "flag_swd": r"SWD", "flag_speech_and_lang": r"Speech", "flag_asd": r"ASD",
+        "flag_intellectual": r"Intellectual", "flag_learning_difficulty": r"Learning difficulty",
+        "flag_sensory_processing": r"Sensory processing", "flag_medication": r"Medication",
+        "flag_medical_condition": r"Medical Condition",
+    }
+    flags = {}
+    for k, pat in flagmap.items():
+        flags[k] = any(_first_checked(c, [pat]) for c in cells)
+    out["flags"] = flags
+
+    attends = next((c for c in cells if _re.search(r"Currently attends", c, flags=_re.I)), "")
+    ft = _re.search(r"Full time\s*(" + _CHK_ON + "|" + _CHK_OFF + ")", attends, flags=_re.I)
+    pt = _re.search(r"Part time\s*(" + _CHK_ON + "|" + _CHK_OFF + ")", attends, flags=_re.I)
+    out["attendance"] = "Full-time" if ft and ft.group(1) == _CHK_ON else \
+        "Part-time" if pt and pt.group(1) == _CHK_ON else ""
+
+    iesp = next((c for c in cells if _re.search(r"IESP Funding", c, flags=_re.I)), "")
+    out["iesp_yes"] = bool(_re.search(_CHK_ON + r"\s*Yes", iesp, flags=_re.I))
+    out["iesp_no"] = bool(_re.search(_CHK_ON + r"\s*No\b", iesp, flags=_re.I))
+    out["iesp_grant"] = bool(_re.search(_CHK_ON + r"\s*IESP Grant", iesp, flags=_re.I))
+    cats = set()
+    for ck, num in _re.findall("(" + _CHK_ON + r")\s*(9\s*\+\s*RAAP|[1-9])(?!\d)", iesp, flags=_re.I):
+        cats.add("9plusraap" if "raap" in num.lower() else num)
+    out["categories"] = cats
+
+    med = next((c for c in cells if _re.search(r"Medical Condition", c, flags=_re.I)
+                and _re.search(r"specify", c, flags=_re.I)), "")
+    mm = _re.search(r"specify\s*:?\s*(.*)", med, flags=_re.I | _re.S)
+    out["medical_details"] = _re.sub(r"\s+", " ", mm.group(1)).strip() if mm else ""
+
+    out["referrer"] = lab(r"School referrer")
+    return out, notes
+
+
+def parse_extension_docx(file_bytes):
+    cells, _ = _docx_cell_texts(file_bytes)
+    alltext = "\n".join(cells)
+    out, notes = {}, []
+
+    def block(label, stops):
+        """Text after `label:` that may run over several lines, up to the next label."""
+        for c in cells:
+            m = _re.search(label + r"\s*:?[ \t]*(.*)", c, flags=_re.I | _re.S)
+            if m:
+                v = m.group(1)
+                for sp in stops:
+                    s = _re.search(sp, v, flags=_re.I)
+                    if s:
+                        v = v[:s.start()]
+                v = _re.sub(r"[_\.]{3,}", "", v)
+                return _re.sub(r"\s+", " ", v).strip(" :-")
+        return ""
+
+    out["form_date"] = _parse_date_text(block(r"^\s*Date", [r"Student", r"School"]))
+    out["student_name"] = block(r"Student", [r"ED\s*ID", r"\n"]).split("\n")[0].strip()
+    out["ed_id"] = block(r"ED\s*ID", [r"\bSchool\b"])
+    out["school_raw"] = block(r"(?<![A-Za-z])School(?! Contact)(?! to)", [r"School Contact", r"ED\s*ID"])
+    out["contact"] = block(r"School Contact", [])
+    out["exclusion_start"] = _parse_date_text(block(r"Exclusion start date", [r"Exclusion end"]))
+    out["exclusion_end"] = _parse_date_text(block(r"Exclusion end date", []))
+    req_end_raw = block(r"Requested extension end date(?:\s*\([^)]*\))?", [r"Number of days"])
+    out["proposed_finish"] = _parse_date_text(req_end_raw)
+    if req_end_raw and not out["proposed_finish"]:
+        notes.append(f"Couldn't read the requested end date ('{req_end_raw}').")
+    wk_raw = block(r"Number of days\s*/\s*weeks", [r"Reason for"])
+    out["weeks_raw"] = wk_raw
+    wm = _re.search(r"(\d+(?:\.\d+)?)\s*(week|wk|day)?", wk_raw, flags=_re.I)
+    weeks = ""
+    if wm:
+        unit = (wm.group(2) or "").lower()
+        n = float(wm.group(1))
+        if unit.startswith("day"):
+            weeks = str(max(1, round(n / 5)))
+            notes.append(f"The form says '{wk_raw}' — converted to {weeks} week(s) at 5 school days a week. Please check.")
+        else:
+            weeks = str(int(n)) if n == int(n) else str(n)
+    out["weeks"] = weeks
+    out["reason"] = block(r"Reason for extension", [r"Intended outcomes"])
+    out["outcomes"] = block(r"Intended outcomes of extension", [r"As Principal"])
+    return out, notes
+
+
+def parse_pdf_form(file_bytes, kind):
+    """Best-effort for PDFs that still hold real text. Returns (parsed, notes, readable)."""
+    text, fields, n = _pdf_text_and_fields(file_bytes)
+    if n < 40 and not fields:
+        return {}, [], False
+    out, notes = {}, []
+    def g(pat, stops=()):
+        return _after_label(text, pat, stops)
+    if kind == "referral":
+        out["student_name"] = g(r"Student\s+Name\s*:")
+        out["dob"] = _parse_date_text(g(r"Date of Birth\s*:"))
+        out["year_level"] = (_re.search(r"\b(R|10|[1-9])\b", g(r"Year level\s*:")) or [None, ""])[1] if g(r"Year level\s*:") else ""
+        out["school_raw"] = g(r"(?:^|\s)School\s*:")
+        out["exclusion_start"] = _parse_date_text(g(r"(?:^|\s)From\s*:"))
+        out["exclusion_end"] = _parse_date_text(g(r"(?:^|\s)To\s*:"))
+        out["flags"], out["categories"] = {}, set()
+        out["iesp_yes"] = out["iesp_no"] = out["iesp_grant"] = False
+        out["attendance"] = ""
+        out["prev_clc"] = False
+        out["prev_other_lc_names"] = []
+        out["medical_details"] = ""
+        notes.append("This PDF was read as plain text, so the tick boxes can't be read reliably — "
+                     "please set the support flags, funding and medical sections yourself.")
+    else:
+        out["student_name"] = g(r"(?:^|\s)Student\s*:")
+        out["school_raw"] = g(r"(?:^|\s)School\s*:")
+        out["exclusion_start"] = _parse_date_text(g(r"Exclusion start date"))
+        out["exclusion_end"] = _parse_date_text(g(r"Exclusion end date"))
+        out["proposed_finish"] = _parse_date_text(g(r"Requested extension end date(?:\s*\([^)]*\))?"))
+        wk = g(r"Number of days\s*/\s*weeks")
+        out["weeks_raw"] = wk
+        m = _re.search(r"(\d+)", wk)
+        out["weeks"] = m.group(1) if m else ""
+        out["reason"] = g(r"Reason for extension", [r"Intended outcomes"])
+        out["outcomes"] = g(r"Intended outcomes of extension", [r"As Principal"])
+    return out, notes, True
+
+
+def read_uploaded_form(uploaded, kind):
+    """Read an uploaded form. Returns (parsed or None, notes, status) where status is
+    ok / scan (no readable text) / olddoc / missing (library not installed) / error."""
+    name = uploaded.name.lower()
+    data = uploaded.getvalue()
+    try:
+        if name.endswith(".docx"):
+            fn = parse_referral_docx if kind == "referral" else parse_extension_docx
+            parsed, notes = fn(data)
+            return parsed, notes, "ok"
+        if name.endswith(".doc"):
+            return None, [], "olddoc"
+        if name.endswith(".pdf"):
+            parsed, notes, readable = parse_pdf_form(data, kind)
+            return (parsed, notes, "ok") if readable else (None, [], "scan")
+        return None, [], "scan"
+    except ImportError as e:
+        return None, [str(e)], "missing"
+    except Exception as e:
+        return None, [f"{type(e).__name__}: {e}"], "error"
+
+
+def show_unreadable_form_message(uploaded, status, notes):
+    if status == "scan":
+        st.warning(
+            "📷 This looks like a scan or photo, so there's no text in it for the tool to read. "
+            "It's shown below so you can type the details in from it."
+        )
+        if uploaded.name.lower().endswith((".png", ".jpg", ".jpeg")):
+            st.image(uploaded.getvalue(), use_container_width=True)
+    elif status == "olddoc":
+        st.warning("This is an old-style .doc file. Open it in Word, choose Save As → Word Document (.docx), then upload that.")
+    elif status == "missing":
+        st.error("The form-reading add-on isn't installed on the server yet "
+                 "(`python-docx`, `pypdf` and `python-dateutil` need to be in requirements.txt). "
+                 f"Detail: {' '.join(notes)}")
+    else:
+        st.error(f"Couldn't read that file. {' '.join(notes)}")
+
+
+def apply_referral_prefill(p):
+    """Fill the Referral screen's boxes from a parsed form. Returns warnings."""
+    ss = st.session_state
+    warns = []
+    ss["ref_name"] = p.get("student_name") or ""
+    dob = p.get("dob")
+    if dob and date(2000, 1, 1) <= dob <= date.today():
+        ss["ref_dob"] = dob
+    else:
+        ss["ref_dob"] = None
+        if dob:
+            warns.append(f"Date of birth {dob:%d/%m/%Y} is outside the allowed range — please check it.")
+    ss["ref_year"] = p["year_level"] if p.get("year_level") in YEAR_LEVELS else ""
+    school, confident = match_school(p.get("school_raw", ""), ALL_SCHOOLS)
+    ss["ref_school"] = school
+    if p.get("school_raw") and not school:
+        warns.append(f"School '{p['school_raw']}' wasn't found in the school list — please choose it.")
+    elif school and not confident:
+        warns.append(f"School matched as '{school}' from '{p['school_raw']}' — please confirm.")
+    ss["ref_excl_start"] = p.get("exclusion_start")
+    ss["ref_excl_end"] = p.get("exclusion_end")
+
+    ss["ref_prev_clc"] = "Yes" if p.get("prev_clc") else ""
+    others = p.get("prev_other_lc_names") or []
+    ss["ref_prev_other"] = "Yes" if others else ""
+    ss["ref_other_lc_name"] = ", ".join(others)
+    ss["ref_prev_notes"] = f"Previous placement year: {p['prev_year']}" if p.get("prev_year") else ""
+
+    flags = p.get("flags", {})
+    for _label, _xl, db_col in BOOL_FLAGS:
+        ss[f"draft_{db_col}"] = bool(flags.get(db_col))
+    cats = p.get("categories", set())
+    for i, (_label, _xl, db_col) in enumerate(FUNDING_CATEGORIES, start=1):
+        key = "9plusraap" if db_col == "flag_9plusraap" else str(i)
+        ss[f"draft_{db_col}"] = key in cats
+
+    ss["ref_attendance"] = p.get("attendance") or ""
+    if cats:
+        ss["ref_iesp"] = ""
+    elif p.get("iesp_grant") and "IESP Grant" in IESP_OPTIONS:
+        ss["ref_iesp"] = "IESP Grant"
+    elif p.get("iesp_no") and "No" in IESP_OPTIONS:
+        ss["ref_iesp"] = "No"
+    else:
+        ss["ref_iesp"] = ""
+
+    has_med = bool(flags.get("flag_medical_condition"))
+    ss["ref_has_medical"] = has_med
+    ss["ref_medical_type"] = ""
+    ss["ref_medical_details"] = p.get("medical_details") or ""
+    if has_med:
+        warns.append("Medical condition is ticked — please choose the Condition Type (the form only has free text).")
+    has_meds = bool(flags.get("flag_medication"))
+    ss["ref_has_medication"] = has_meds
+    ss["ref_medication_details"] = ""
+    if has_meds:
+        warns.append("Medication is ticked — the form doesn't name it, so add the details if you have them.")
+    if not p.get("student_name"):
+        warns.append("No student name was found — this may be a blank form, or the name is in a place the tool didn't expect.")
+    return warns
+
 
 def yn(value):
     """Normalise a checkbox/bool into the Yes/'' convention used in the master Excel."""
@@ -1079,23 +1287,55 @@ with tab1:
     else:
         st.subheader("➕ New Referral")
 
+        with st.expander("📄 Upload a completed Referral Form to pre-fill this screen", expanded=False):
+            st.caption(
+                "Upload the Word (.docx) or PDF referral form. The tool reads it inside this app (nothing is "
+                "sent to an outside service) and fills in the boxes below. **Nothing is saved** until you "
+                "check it and press Save Draft."
+            )
+            ref_upload = st.file_uploader(
+                "Referral form", type=["docx", "doc", "pdf", "png", "jpg", "jpeg"],
+                key=f"ref_form_upload_{st.session_state.get('ref_upload_n', 0)}"
+            )
+            if ref_upload is not None:
+                ref_parsed, ref_notes, ref_status = read_uploaded_form(ref_upload, "referral")
+                if ref_status != "ok":
+                    show_unreadable_form_message(ref_upload, ref_status, ref_notes)
+                else:
+                    st.markdown(
+                        f"**Found:** {ref_parsed.get('student_name') or '—'} · "
+                        f"DOB {ref_parsed['dob']:%d/%m/%Y}" if ref_parsed.get("dob") else
+                        f"**Found:** {ref_parsed.get('student_name') or '—'} · DOB —"
+                    )
+                    st.caption(
+                        f"School on form: {ref_parsed.get('school_raw') or '—'} · "
+                        f"Year {ref_parsed.get('year_level') or '—'} · ED ID {ref_parsed.get('ed_id') or '—'}"
+                    )
+                    for n_ in ref_notes:
+                        st.warning(n_)
+                    if st.button("✨ Fill the form below from this file", type="primary", key="ref_apply_prefill"):
+                        warns_ = apply_referral_prefill(ref_parsed)
+                        st.success("Form filled in below — please check every section before saving.")
+                        for w_ in warns_:
+                            st.warning(w_)
+
         with st.form("new_draft", clear_on_submit=True):
             col1, col2, col3 = st.columns(3)
             with col1:
-                student_name = st.text_input("Name *")
+                student_name = st.text_input("Name *", key="ref_name")
             with col2:
-                dob = st.date_input("DOB", value=None, min_value=date(2000, 1, 1), max_value=date.today())
+                dob = st.date_input("DOB", value=None, min_value=date(2000, 1, 1), max_value=date.today(), key="ref_dob")
             with col3:
                 gender = st.selectbox("Gender", [""] + GENDER_OPTIONS)
 
             col1, col2, col3 = st.columns(3)
             with col1:
-                school = st.selectbox("School *", [""] + ALL_SCHOOLS)
+                school = st.selectbox("School *", [""] + ALL_SCHOOLS, key="ref_school")
             with col2:
                 auto_partnership = get_partnership_from_school(school) if school else ""
                 partnership = st.text_input("Partnership", value=auto_partnership, disabled=True)
             with col3:
-                year_level = st.selectbox("Year Level *", [""] + YEAR_LEVELS)
+                year_level = st.selectbox("Year Level *", [""] + YEAR_LEVELS, key="ref_year")
 
             col1, col2 = st.columns(2)
             with col1:
@@ -1107,9 +1347,9 @@ with tab1:
 
             col1, col2 = st.columns(2)
             with col1:
-                exclusion_start_date = st.date_input("Exclusion Start Date", value=None)
+                exclusion_start_date = st.date_input("Exclusion Start Date", value=None, key="ref_excl_start")
             with col2:
-                exclusion_end_date = st.date_input("Exclusion End Date", value=None)
+                exclusion_end_date = st.date_input("Exclusion End Date", value=None, key="ref_excl_end")
 
             needs_priority = st.checkbox(
                 "Needs prioritising against other waiting referrals",
@@ -1126,13 +1366,13 @@ with tab1:
             with st.expander("🏠 Placement History"):
                 pcol1, pcol2, pcol3 = st.columns(3)
                 with pcol1:
-                    previous_clc_placement = st.selectbox("Previous CLC Placement?", YES_NO)
+                    previous_clc_placement = st.selectbox("Previous CLC Placement?", YES_NO, key="ref_prev_clc")
                 with pcol2:
-                    previous_other_lc = st.selectbox("Previous Other LC?", YES_NO)
+                    previous_other_lc = st.selectbox("Previous Other LC?", YES_NO, key="ref_prev_other")
                 with pcol3:
-                    other_lc_name = st.text_input("Other LC Name")
+                    other_lc_name = st.text_input("Other LC Name", key="ref_other_lc_name")
                 total_previous_placements = st.text_input("Total Previous Placements")
-                placement_history_notes = st.text_area("Placement History Notes")
+                placement_history_notes = st.text_area("Placement History Notes", key="ref_prev_notes")
 
             with st.expander("🏷️ Support Flags & Funding"):
                 st.caption("These feed the Dashboard's disability & funding analytics directly.")
@@ -1152,26 +1392,27 @@ with tab1:
 
                 acol1, acol2 = st.columns(2)
                 with acol1:
-                    attendance = st.selectbox("Attendance", ["", "Full-time", "Part-time"])
+                    attendance = st.selectbox("Attendance", ["", "Full-time", "Part-time"], key="ref_attendance")
                 with acol2:
                     iesp_status_if_no_category = st.selectbox(
                         "IESP Funding (if no category ticked above)",
                         [""] + IESP_OPTIONS,
+                        key="ref_iesp",
                         help="Ignored if any funding category above is ticked — that automatically means Yes."
                     )
 
             with st.expander("💊 Medical & Medication"):
                 mcol1, mcol2 = st.columns(2)
                 with mcol1:
-                    has_medical = st.checkbox("Medical Condition")
+                    has_medical = st.checkbox("Medical Condition", key="ref_has_medical")
                     medical_type = st.selectbox(
                         "Condition Type *", [""] + MEDICAL_CONDITION_TYPES,
-                        disabled=not has_medical
+                        disabled=not has_medical, key="ref_medical_type"
                     )
-                    medical_details = st.text_area("Medical Condition Details", disabled=not has_medical)
+                    medical_details = st.text_area("Medical Condition Details", disabled=not has_medical, key="ref_medical_details")
                 with mcol2:
-                    has_medication = st.checkbox("Medication")
-                    medication_details = st.text_area("Medication Details", disabled=not has_medication)
+                    has_medication = st.checkbox("Medication", key="ref_has_medication")
+                    medication_details = st.text_area("Medication Details", disabled=not has_medication, key="ref_medication_details")
 
             bse = st.text_input("BSE")
             queries = st.text_area("Queries/Notes for Meeting")
@@ -1236,6 +1477,7 @@ with tab1:
                             record[db_col] = yn(val)
 
                         supabase.table("allocation_students").insert(record).execute()
+                        st.session_state["ref_upload_n"] = st.session_state.get("ref_upload_n", 0) + 1
                         st.success(f"✅ Draft saved for {student_name}!")
                         st.balloons()
                     except Exception as e:
@@ -1297,73 +1539,83 @@ with tab2:
             st.caption("Log the request details — no outcome yet. This moves them into Extension Decision once saved.")
 
             eligible = [r for r in allocated_data if not _has_pending_request(r)]
-
-            # ── Missing-student finder: explains exactly why a name isn't in the dropdown ──
-            with st.expander("🔎 Can't find a student? Search here to see why"):
-                lookup = st.text_input("Type part of the student's name", key="ext_missing_lookup")
-                if lookup.strip():
-                    matches = [r for r in all_students.data
-                               if lookup.strip().lower() in (r.get("student_name") or "").lower()]
-                    if not matches:
-                        st.warning(
-                            "No row with that name exists in `allocation_students` at all. "
-                            "Check the spelling, or add them through New Allocations (or the Excel sync) first."
-                        )
-                    for r in matches:
-                        name = r.get("student_name") or "(no name)"
-                        outcome = r.get("outcome")
-                        status = r.get("current_status")
-                        if outcome is None or str(outcome).strip() == "":
-                            reason = ("Still a **draft** in New Allocations (no outcome recorded). "
-                                      "Finalise them as *Allocated* in New Allocations → Stage 2 first.")
-                        elif str(outcome).strip().lower() != "allocated":
-                            reason = (f"Outcome is **{outcome!r}**, not *Allocated*, so they aren't treated "
-                                      "as a placed student. Correct the outcome if this is wrong.")
-                        elif str(status or "").strip().lower() == "inactive":
-                            reason = ("Marked **Inactive** in Current_Status, so they're hidden. "
-                                      "Change Current_Status back to Active if they're still attending.")
-                        elif _has_pending_request(r):
-                            reason = (f"Already has an **open request** (weeks: {clean_num_display(r.get('extension_weeks')) or '—'}, "
-                                      f"proposed finish: {r.get('proposed_extension_finish_date') or '—'}) with no decision date. "
-                                      "Find them under **✅ Extension Decision** instead. If that request is old "
-                                      "imported data rather than a real request, use the button below to clear it.")
-                        else:
-                            reason = "Should be in the dropdown — look for their name with the school and year level beside it."
-                        st.markdown(f"**{name}** — {r.get('school') or 'no school'}: {reason}")
-
-                        if (str(outcome or "").strip().lower() == "allocated" and _has_pending_request(r)):
-                            if st.button(f"🧹 Clear stale request for {name}", key=f"clear_stale_{r['id']}"):
-                                try:
-                                    supabase.table("allocation_students").update({
-                                        "extension_weeks": None,
-                                        "proposed_extension_finish_date": None,
-                                    }).eq("id", r["id"]).execute()
-                                    st.success(f"Cleared — {name} will now appear in the dropdown.")
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Error: {e}")
-
             if eligible:
                 sorted_students = sorted(eligible, key=lambda r: (r.get('student_name') or '').lower())
-                options = {}
-                for r in sorted_students:
-                    label = f"{r.get('student_name') or '(no name)'} — {r.get('school') or 'no school'} (Year {r.get('year_level') or '?'})"
-                    # Two rows with identical name/school/year would otherwise overwrite each
-                    # other in this dict and silently drop a student from the list.
-                    if label in options:
-                        label = f"{label} [record {r['id']}]"
-                    options[label] = r
-                chosen = st.selectbox(f"Select allocated student ({len(options)} total — type to search)", list(options.keys()))
+                options = {
+                    f"{r['student_name']} — {r.get('school', 'no school')} (Year {r.get('year_level', '?')})": r
+                    for r in sorted_students
+                }
+                ext_pf = st.session_state.get("ext_prefill") or {}
+
+                with st.expander("📄 Upload a completed Extension Request Form to pre-fill this screen", expanded=False):
+                    st.caption(
+                        "Upload the Word (.docx) or PDF request form. It's read inside this app (nothing is sent "
+                        "to an outside service) and fills in the student, weeks, finish date and reason. "
+                        "**Nothing is saved** until you check it and press Save Extension Request."
+                    )
+                    ext_upload = st.file_uploader(
+                        "Extension request form", type=["docx", "doc", "pdf", "png", "jpg", "jpeg"],
+                        key=f"ext_form_upload_{st.session_state.get('ext_upload_n', 0)}"
+                    )
+                    if ext_upload is not None:
+                        ext_parsed, ext_notes, ext_status = read_uploaded_form(ext_upload, "extension")
+                        if ext_status != "ok":
+                            show_unreadable_form_message(ext_upload, ext_status, ext_notes)
+                        else:
+                            matched_rec, matched_ok = match_student(ext_parsed.get("student_name"), eligible)
+                            st.markdown(f"**Found:** {ext_parsed.get('student_name') or '—'}")
+                            fin_ = ext_parsed.get("proposed_finish")
+                            st.caption(
+                                f"School on form: {ext_parsed.get('school_raw') or '—'} · "
+                                f"Requested end date: {fin_:%d/%m/%Y}" if fin_ else
+                                f"School on form: {ext_parsed.get('school_raw') or '—'} · Requested end date: —"
+                            )
+                            st.caption(f"Weeks on form: {ext_parsed.get('weeks_raw') or '—'}")
+                            for n_ in ext_notes:
+                                st.warning(n_)
+                            if st.button("✨ Fill the form below from this file", type="primary", key="ext_apply_prefill"):
+                                label_ = next((k for k, v in options.items() if matched_rec and v["id"] == matched_rec["id"]), None)
+                                reason_parts = []
+                                if ext_parsed.get("reason"):
+                                    reason_parts.append(f"Reason: {ext_parsed['reason']}")
+                                if ext_parsed.get("outcomes"):
+                                    reason_parts.append(f"Intended outcomes: {ext_parsed['outcomes']}")
+                                st.session_state["ext_prefill"] = {
+                                    "label": label_,
+                                    "weeks": ext_parsed.get("weeks") or "",
+                                    "finish": ext_parsed.get("proposed_finish"),
+                                    "reason": "\n".join(reason_parts),
+                                }
+                                ext_pf = st.session_state["ext_prefill"]
+                                st.success("Form filled in below — please check it before saving.")
+                                if not label_:
+                                    already = match_student(ext_parsed.get("student_name"), allocated_data)[0]
+                                    if already:
+                                        st.warning(f"'{ext_parsed.get('student_name')}' is already allocated but has a request waiting "
+                                                   "for a decision (see Extension Decision), so they aren't in this list.")
+                                    else:
+                                        st.warning(f"Couldn't match '{ext_parsed.get('student_name') or 'the student'}' to an active "
+                                                   "allocated student — please choose them from the list.")
+                                elif not matched_ok:
+                                    st.warning("Student matched on a close name — please confirm it's the right one.")
+                                if not ext_parsed.get("weeks"):
+                                    st.warning("No number of weeks was found on the form — please enter it.")
+                                if not ext_parsed.get("proposed_finish"):
+                                    st.warning("No requested end date was found — please enter it.")
+
+                _opt_keys = list(options.keys())
+                _idx = _opt_keys.index(ext_pf["label"]) if ext_pf.get("label") in _opt_keys else 0
+                chosen = st.selectbox(f"Select allocated student ({len(options)} total — type to search)", _opt_keys, index=_idx)
                 record = options[chosen]
 
                 with st.form("extension_request_form"):
                     col1, col2 = st.columns(2)
                     with col1:
-                        ext_weeks = st.text_input("Extension Weeks Requested")
+                        ext_weeks = st.text_input("Extension Weeks Requested", value=ext_pf.get("weeks", ""))
                     with col2:
-                        proposed_finish = st.date_input("Proposed Extension Finish Date", value=None)
+                        proposed_finish = st.date_input("Proposed Extension Finish Date", value=ext_pf.get("finish"))
 
-                    ext_comm = st.text_area("Reason for request / communication so far")
+                    ext_comm = st.text_area("Reason for request / communication so far", value=ext_pf.get("reason", ""))
                     ext_owner = st.selectbox("Focus Teacher", [""] + STAFF_NAMES)
 
                     if st.form_submit_button("💾 Save Extension Request", type="primary", use_container_width=True):
@@ -1378,6 +1630,8 @@ with tab2:
                             if not result.data:
                                 st.error("⚠️ The update ran but returned no confirmation — nothing may have been saved.")
                             else:
+                                st.session_state.pop("ext_prefill", None)
+                                st.session_state["ext_upload_n"] = st.session_state.get("ext_upload_n", 0) + 1
                                 st.session_state["last_extension_saved"] = {
                                     "name": result.data[0].get("student_name"),
                                     "detail": f"Request logged, {clean_num_display(result.data[0].get('extension_weeks'))} weeks requested",
@@ -1394,13 +1648,11 @@ with tab2:
             pending = [r for r in allocated_data if _has_pending_request(r)]
             if pending:
                 sorted_pending = sorted(pending, key=lambda r: (r.get('student_name') or '').lower())
-                options = {}
-                for r in sorted_pending:
-                    label = (f"{r.get('student_name') or '(no name)'} — {r.get('school') or 'no school'} "
-                             f"(requested {clean_num_display(r.get('extension_weeks')) or '?'} wks)")
-                    if label in options:
-                        label = f"{label} [record {r['id']}]"
-                    options[label] = r
+                options = {
+                    f"{r['student_name']} — {r.get('school', 'no school')} "
+                    f"(requested {r.get('extension_weeks') or '?'} wks)": r
+                    for r in sorted_pending
+                }
                 chosen = st.selectbox(f"Select pending request ({len(options)} total)", list(options.keys()))
                 record = options[chosen]
 
@@ -1869,105 +2121,6 @@ with tab6:
         st.stop()
 
     st.success("✅ Access granted")
-
-    # ── Excel → Tool import ──────────────────────────────────────────────────
-    with st.expander("📥 Update the tool from the master Excel file", expanded=True):
-        st.caption(
-            "Use this after editing students directly in the master Excel file. The tool only reads "
-            "its own database, so Excel edits don't appear here until they're imported. Students are "
-            "matched by name. Blank Excel cells are ignored — they never wipe data in the tool. "
-            "You'll see every change before anything is saved."
-        )
-        import_file = st.file_uploader(
-            "Upload master Excel file (e.g. CLC_Allocation_Dashboard_2026_WithNames.xlsx)",
-            type=["xlsx"], key="excel_import_upload"
-        )
-        if import_file:
-            try:
-                db_records = supabase.table("allocation_students").select("*").execute().data
-                sheet_name, changes, new_rows, ambiguous, name_found = diff_excel_against_db(
-                    import_file.getvalue(), db_records
-                )
-                if not name_found:
-                    st.error(f"No `Student_Name` column found in sheet **{sheet_name}** — check the header row.")
-                else:
-                    st.write(f"Reading sheet **{sheet_name}**.")
-
-                    if ambiguous:
-                        st.warning(
-                            "These names match more than one record in the tool, so they were skipped "
-                            "to avoid updating the wrong student: " + ", ".join(sorted(set(ambiguous)))
-                        )
-
-                    if not changes and not new_rows:
-                        st.success("✅ The tool already matches the Excel file — nothing to import.")
-
-                    selected_ids = []
-                    if changes:
-                        st.markdown(f"**{len(changes)} existing student(s) have changes in Excel:**")
-                        for ch in changes:
-                            with st.container(border=True):
-                                keep = st.checkbox(
-                                    f"Update **{ch['student_name']}** ({len(ch['fields'])} field(s))",
-                                    value=True, key=f"imp_{ch['id']}"
-                                )
-                                st.dataframe(pd.DataFrame([
-                                    {"Field": f, "In tool now": "" if o is None else str(o), "From Excel": str(n)}
-                                    for f, (o, n) in ch["fields"].items()
-                                ]), hide_index=True, use_container_width=True)
-                                for w in ch.get("warnings", []):
-                                    st.caption(f"⚠️ {w}")
-                                if keep:
-                                    selected_ids.append(ch["id"])
-
-                    add_new = False
-                    if new_rows:
-                        st.markdown(f"**{len(new_rows)} student(s) are in Excel but not in the tool:**")
-                        st.write(", ".join(r["student_name"] for r in new_rows))
-                        for nr in new_rows:
-                            for w in nr.get("warnings", []):
-                                st.caption(f"⚠️ {nr['student_name']}: {w}")
-                        add_new = st.checkbox("Also add these as new records in the tool", value=False)
-
-                    if (changes or new_rows) and st.button("📥 Import selected changes", type="primary",
-                                                           use_container_width=True):
-                        done, failed, fixed_notes = [], [], []
-                        for ch in changes:
-                            if ch["id"] not in selected_ids:
-                                continue
-                            payload = {f: n for f, (o, n) in ch["fields"].items()}
-                            ok, notes, err = _write_with_repair(
-                                lambda p, _id=ch["id"]: supabase.table("allocation_students")
-                                .update(p).eq("id", _id).execute(),
-                                payload,
-                            )
-                            (done if ok else failed).append(
-                                ch["student_name"] if ok else f"{ch['student_name']}: {err}")
-                            fixed_notes.extend(f"{ch['student_name']}: {n}" for n in notes)
-                        if add_new:
-                            for nr in new_rows:
-                                ok, notes, err = _write_with_repair(
-                                    lambda p: supabase.table("allocation_students").insert(p).execute(),
-                                    nr["record"],
-                                )
-                                (done if ok else failed).append(
-                                    f"{nr['student_name']} (new)" if ok else f"{nr['student_name']}: {err}")
-                                fixed_notes.extend(f"{nr['student_name']}: {n}" for n in notes)
-                        if done:
-                            st.success(f"✅ Imported {len(done)}: " + ", ".join(done))
-                        if fixed_notes:
-                            with st.expander(f"⚠️ {len(fixed_notes)} value(s) adjusted or skipped during import"):
-                                for n in fixed_notes:
-                                    st.write(n)
-                        for f in failed:
-                            st.error(f"❌ {f}")
-            except Exception as e:
-                st.error(f"Import error: {e}")
-                import traceback
-                st.code(traceback.format_exc())
-
-    st.markdown("---")
-    st.subheader("Manage Dropdown Lists")
 
     MANAGED_LISTS = {
         "Focus Teacher": ("focus_teacher", DEFAULT_STAFF_NAMES),
