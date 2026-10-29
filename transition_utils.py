@@ -592,12 +592,15 @@ def build_timetable_docx(header: dict, weeks: list[dict], sensitive: dict) -> by
     _label_value(m, "School", header.get("home_school", ""))
     _label_value(h.cell(2, 0), "Home School Contact Person", header.get("home_school_contact", ""))
     _label_value(h.cell(2, 1), "BSC", header.get("bsc", ""))
-    _label_value(h.cell(3, 0), "Year Level", header.get("year_level", ""))
-    yl = h.cell(3, 1)
-    _label_value(yl, "EDID", sensitive.get("edid", ""))
-    p = yl.add_paragraph(); p.paragraph_format.space_after = Pt(0)
-    r = p.add_run("DOB: "); r.bold = True; r.font.size = Pt(10); r.font.name = FONT
-    r = p.add_run(sensitive.get("dob", "")); r.font.size = Pt(10); r.font.name = FONT
+    if sensitive.get("edid") or sensitive.get("dob"):
+        _label_value(h.cell(3, 0), "Year Level", header.get("year_level", ""))
+        yl = h.cell(3, 1)
+        _label_value(yl, "EDID", sensitive.get("edid", ""))
+        p = yl.add_paragraph(); p.paragraph_format.space_after = Pt(0)
+        r = p.add_run("DOB: "); r.bold = True; r.font.size = Pt(10); r.font.name = FONT
+        r = p.add_run(sensitive.get("dob", "")); r.font.size = Pt(10); r.font.name = FONT
+    else:  # no EDID/DOB → just Year Level across the row
+        _label_value(h.cell(3, 0).merge(h.cell(3, 1)), "Year Level", header.get("year_level", ""))
     m = h.cell(4, 0).merge(h.cell(4, 1))
     _label_value(m, "Recommencement Date at Home School", recommencement_text(rec))
     for row in h.rows:
