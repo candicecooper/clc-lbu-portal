@@ -6610,6 +6610,168 @@ def render_demand_avoidance_section(full_df):
             st.markdown(f"- Instead of *\"{_instead}\"* try *\"{_try}\"*")
 
 
+# ============================================
+# TRANSITION IMPACT — before vs after starting to split time between sites
+# ============================================
+# Reads this student's Transition Timetable from the students-register
+# Supabase project via transition_utils (the same shared module Student
+# Snapshot uses — lives in a different project than this tool's own
+# incidents/critical_incidents data, hence the separate client). Splits
+# this student's existing full_df (already loaded for the page) on the
+# first date their timetable has them away from CLC at all, and compares
+# incident rate/severity either side of that date. Shows nothing if the
+# Transition Timetables tool isn't deployed, or this student has no
+# timetable on file, or that timetable has no days away from CLC yet.
+def _transition_weeks_from(view: dict) -> list:
+    """Mirrors Student Snapshot's _loads()+tt_weeks(): accept weeks stored
+    as a JSON string or already a list/dict, then sort if tu can."""
+    raw = view.get("weeks")
+    if raw is None:
+        weeks = []
+    elif isinstance(raw, (list, dict)):
+        weeks = raw
+    else:
+        try:
+            weeks = json.loads(raw)
+        except Exception:
+            weeks = []
+    return weeks or []
+
+
+def render_transition_impact_section(student, full_df):
+    try:
+        import transition_utils as tu
+    except Exception:
+        return  # Transition Timetables tool not deployed on this portal
+
+    ini = initials_from_name(student.get("name", ""))
+    if not ini:
+        return
+
+    try:
+        _tclient = tu.get_students_client()
+        _rows = (_tclient.table(tu.TABLE_TIMETABLES).select("*")
+                 .eq("student_initials", ini).order("updated_at", desc=True).execute().data or [])
+    except Exception:
+        return  # students-register project unreachable — stay quiet rather than alarm staff
+    if not _rows:
+        return  # no Transition Timetable on file for this student
+
+    tt = None
+    for _want in ("published", "active", "draft", "complete"):
+        tt = next((r for r in _rows if r.get("status") == _want), None)
+        if tt:
+            break
+    tt = tt or _rows[0]
+
+    try:
+        view = tu.live_view(tt) if tu.is_live(tt) else tt
+    except Exception:
+        view = tt
+    weeks = _transition_weeks_from(view)
+    try:
+        weeks = tu.sort_weeks(weeks)
+    except Exception:
+        pass
+    if not weeks:
+        return
+
+    split_date = None
+    for _wk in weeks:
+        for _d in (_wk.get("days") or []):
+            _loc = _d.get("loc")
+            if _loc and _loc != "CLC" and _d.get("date"):
+                try:
+                    _dd = date.fromisoformat(str(_d["date"])[:10])
+                except Exception:
+                    continue
+                if split_date is None or _dd < split_date:
+                    split_date = _dd
+    if split_date is None:
+        return  # timetable on file, but no day away from CLC recorded yet
+
+    today = date.today()
+    pl_start = None
+    if student.get("placement_start"):
+        try:
+            pl_start = date.fromisoformat(str(student["placement_start"])[:10])
+        except Exception:
+            pl_start = None
+    before_start = pl_start if (pl_start and pl_start < split_date) else (split_date - timedelta(days=70))
+
+    def _school_days(a, b):
+        n, d = 0, a
+        while d <= b:
+            if d.weekday() < 5:
+                n += 1
+            d += timedelta(days=1)
+        return n
+
+    days_before = _school_days(before_start, split_date - timedelta(days=1))
+    days_after = _school_days(split_date, today)
+    if days_before < 5 or days_after < 5:
+        return  # not enough school time either side yet for a meaningful comparison
+
+    st.markdown("### 🚌 Before vs After Starting to Split Time Between Sites")
+    _status_note = {"published": "published", "active": "active", "draft": "draft (not yet published)",
+                     "complete": "completed"}.get(tt.get("status"), tt.get("status") or "on file")
+    st.caption(
+        f"{ini}'s Transition Timetable ({_status_note}) first has them away from CLC from "
+        f"**{split_date.strftime('%-d %b %Y')}**. Comparing incidents before that date to incidents since, "
+        "as a rate per school week so the two periods are comparable even though they're different lengths."
+    )
+
+    dp = full_df["date_parsed"].dt.date
+    before_df = full_df[(dp >= before_start) & (dp < split_date)]
+    after_df = full_df[(dp >= split_date) & (dp <= today)]
+    wk_before, wk_after = days_before / 5, days_after / 5
+
+    n_crit_before = int((before_df["incident_type"] == "Critical").sum()) if "incident_type" in before_df.columns else 0
+    n_crit_after = int((after_df["incident_type"] == "Critical").sum()) if "incident_type" in after_df.columns else 0
+    rate_before, rate_after = len(before_df) / wk_before, len(after_df) / wk_after
+    sev_before = before_df["severity"].mean() if len(before_df) else None
+    sev_after = after_df["severity"].mean() if len(after_df) else None
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("Incidents / school week", f"{rate_after:.1f}",
+                   delta=f"{rate_after - rate_before:+.1f} vs {rate_before:.1f} before", delta_color="inverse")
+    with c2:
+        if sev_before is not None and sev_after is not None:
+            st.metric("Average severity", f"{sev_after:.1f}",
+                       delta=f"{sev_after - sev_before:+.1f} vs {sev_before:.1f} before", delta_color="inverse")
+        else:
+            st.metric("Average severity", f"{sev_after:.1f}" if sev_after is not None else "—")
+    with c3:
+        st.metric("Critical incidents / week", f"{n_crit_after / wk_after:.2f}",
+                   delta=f"{(n_crit_after / wk_after) - (n_crit_before / wk_before):+.2f} vs before",
+                   delta_color="inverse")
+
+    _wk_b = before_df.groupby(before_df["date_parsed"].dt.to_period("W").apply(lambda p: p.start_time)).size()
+    _wk_a = after_df.groupby(after_df["date_parsed"].dt.to_period("W").apply(lambda p: p.start_time)).size()
+    fig = go.Figure()
+    fig.add_bar(x=list(_wk_b.index), y=list(_wk_b.values), name="Before", marker_color="#6b7c7c")
+    fig.add_bar(x=list(_wk_a.index), y=list(_wk_a.values), name="After (two sites)", marker_color="#C8760A")
+    fig.add_vline(x=split_date, line_dash="dash", line_color="#c0392b",
+                  annotation_text="Transition begins", annotation_position="top")
+    fig.update_layout(title=dict(text="Incidents per week", font=dict(size=14)), height=280,
+                       margin=dict(l=10, r=10, t=40, b=10),
+                       legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
+    st.plotly_chart(fig, use_container_width=True)
+
+    if rate_before == 0:
+        _verdict = "No incidents in the comparable period before the transition began." if rate_after == 0 else \
+                   "No incidents before the transition began, but incidents since — worth a closer look."
+    elif rate_after > rate_before * 1.15:
+        _verdict = f"Incident rate is up {((rate_after / rate_before) - 1) * 100:.0f}% since starting to split time between sites."
+    elif rate_after < rate_before * 0.85:
+        _verdict = f"Incident rate is down {(1 - (rate_after / rate_before)) * 100:.0f}% since starting to split time between sites."
+    else:
+        _verdict = "Incident rate is broadly similar before and after — managing the two sites doesn't look like the main driver here."
+    st.markdown(f"**{_verdict}** ({len(before_df)} incidents / {wk_before:.0f} school weeks before vs "
+                f"{len(after_df)} / {wk_after:.0f} school weeks after.)")
+    st.markdown("---")
+
 
 # ============================================
 # SCREEN CAPTURE -> PRINTABLE HTML
@@ -9633,6 +9795,8 @@ def _render_student_analysis_page_inner():
     st.markdown("### 🧭 Demand-Avoidant Presentations — Perceived Choice Approach")
     render_demand_avoidance_section(full_df)
     st.markdown("---")
+
+    render_transition_impact_section(student, full_df)
 
     st.markdown("### 👁️ View, Edit & Print an Incident")
     st.caption("Look up any single incident for this student, correct details (e.g. a wrong date), and print or download a summary.")
