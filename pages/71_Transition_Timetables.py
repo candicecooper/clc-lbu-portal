@@ -58,7 +58,7 @@ st.markdown("""
 
 st.title("🔁 Transition Timetables")
 st.caption("Build and share a student's CLC ↔ home school transition timetable. "
-           "Stored with initials only — full name, EDID and DOB are added at export and never saved.")
+           "Stored with initials only — the full name is typed in when you download and is never saved.")
 
 client = tu.get_students_client()
 if client is None:
@@ -330,6 +330,31 @@ def confidential_gate() -> bool:
 # ──────────────────────────────────────────────────────────────────────────
 # Shared renderers
 # ──────────────────────────────────────────────────────────────────────────
+def download_block(rec: dict, key: str, label: str = "⬇️ Download timetable (Word)"):
+    """Full name (typed, never saved) + Word download of the whole timetable."""
+    ss.setdefault("tt_names", {})
+    ini = rec.get("student_initials") or ""
+    nk = f"dlname_{key}"
+    if nk not in ss:
+        ss[nk] = ss.tt_names.get(ini, "")
+    c1, c2 = st.columns([2, 2])
+    full = c1.text_input("Student's full name (for the printout — not saved)", key=nk,
+                         placeholder="e.g. Abigail Warne")
+    if full.strip():
+        ss.tt_names[ini] = full.strip()
+    parts = full.split()
+    sens = {"full_name": full.strip() or ini, "preferred_name": parts[0] if parts else ini, "edid": "", "dob": ""}
+    try:
+        data = tu.build_timetable_docx(rec, rec.get("weeks") or [], sens)
+    except Exception as e:
+        c2.error(f"Couldn't build the Word file: {e}")
+        return
+    c2.markdown("<div style='height:1.75rem'></div>", unsafe_allow_html=True)
+    c2.download_button(label, data=data, file_name=tu.export_filename(sens, ini),
+                       mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                       key=f"dlb_{key}")
+
+
 def cell_html(day: dict | None, home_short: str, is_today=False) -> str:
     if not day or day.get("loc") == tu.LOC_NONE:
         return f'<td class="tt-none{" tt-today" if is_today else ""}">—</td>'
@@ -339,33 +364,6 @@ def cell_html(day: dict | None, home_short: str, is_today=False) -> str:
     lab = f'<span class="tt-label">{html.escape(day["label"].upper())}</span>' if day.get("label") else ""
     return (f'<td class="{cls}{" tt-today" if is_today else ""}">{html.escape(place)}'
             f'<br><small>{html.escape(tr)}</small>{lab}</td>')
-
-
-def stepdown_chart(weeks: list[dict], height=220):
-    import altair as alt
-    rows = []
-    order = ["At CLC", "Home school – part day", "Home school – full day", "Other"]
-    for i, w in enumerate(tu.sort_weeks(weeks)):
-        lab = f"T{w['term']} W{w['week']}" + (f" '{str(w['year'])[2:]}" if w["year"] != date.today().year else "")
-        for cat, n in tu.week_summary(w).items():
-            if n:
-                rows.append({"Week": lab, "i": i, "Where": cat, "Days": n, "o": order.index(cat)})
-    if not rows:
-        return
-    df = pd.DataFrame(rows)
-    chart = alt.Chart(df).mark_bar(size=26).encode(
-        x=alt.X("Week:N", sort=alt.SortField("i"), title=None, axis=alt.Axis(labelAngle=0)),
-        y=alt.Y("sum(Days):Q", title="Days", scale=alt.Scale(domain=[0, 5]), axis=alt.Axis(tickCount=5)),
-        color=alt.Color("Where:N", sort=order, title=None,
-                        scale=alt.Scale(domain=order, range=["#4a8f3c", "#f5d76e", "#d4a106", "#b0bec5"]),
-                        legend=alt.Legend(orient="bottom")),
-        order=alt.Order("o:Q"),
-        tooltip=["Week", "Where", "Days"],
-    ).properties(height=height)
-    try:
-        st.altair_chart(chart, width="stretch")
-    except TypeError:
-        st.altair_chart(chart)
 
 
 def stepdown_sentence(weeks: list[dict]) -> str:
@@ -417,18 +415,31 @@ if view == VIEWS[0]:
     if not rows:
         st.info("No students have transition days scheduled this week.")
     else:
+        st.caption(f"**{len(rows)} student(s) transitioning this week.** Yellow = at home school · "
+                   "Green = at CLC · — = no session. Published timetables only.")
         head = "".join(f"<th>{d}<br><small>{(mon + timedelta(days=i)).strftime('%d/%m')}</small></th>"
                        for i, d in enumerate(tu.DAY_NAMES))
-        body = ""
         for tt in rows:
             short = tt.get("home_school_short") or tu.school_short_name(tt.get("home_school", ""))
-            cells = "".join(cell_html(tu.day_for(tt["weeks"], mon + timedelta(days=i)), short,
-                                      is_today=(mon + timedelta(days=i) == today)) for i in range(5))
-            body += (f'<tr><td class="stu">{html.escape(tt.get("student_initials", ""))} · '
-                     f'{html.escape(tt.get("program", ""))}<br><small>{html.escape(short)}</small></td>{cells}</tr>')
-        st.markdown(f'<table class="tt-grid"><tr><th>Student</th>{head}</tr>{body}</table>',
-                    unsafe_allow_html=True)
-        st.caption("Yellow = at home school. Green = at CLC. Published timetables only.")
+            with st.container(border=True):
+                rd = tt.get("recommencement_date")
+                lc = tu.last_clc_day(tt.get("weeks") or [])
+                st.markdown(
+                    f"#### {html.escape(tt.get('student_initials', ''))} · {html.escape(tt.get('program', ''))}"
+                    f" — {html.escape(tt.get('home_school') or 'home school')}")
+                st.caption(" · ".join(x for x in [
+                    f"Contact: {tt.get('home_school_contact')}" if tt.get("home_school_contact") else "",
+                    f"BSC: {tt.get('bsc')}" if tt.get("bsc") else "",
+                    f"Last CLC day: {lc.strftime('%a %d/%m')}" if lc else "",
+                    f"Back at home school full time: {date.fromisoformat(rd).strftime('%a %d/%m')}" if rd else "",
+                ] if x))
+                cells = "".join(cell_html(tu.day_for(tt["weeks"], mon + timedelta(days=i)), short,
+                                          is_today=(mon + timedelta(days=i) == today)) for i in range(5))
+                st.markdown(f'<table class="tt-grid"><tr>{head}</tr><tr>{cells}</tr></table>',
+                            unsafe_allow_html=True)
+                if tt.get("notes"):
+                    st.caption(f"📝 {tt['notes']}")
+                download_block(tt, f"wk_{tt.get('id')}")
     if n_drafts:
         st.caption(f"📝 {n_drafts} draft timetable(s) not shown — they appear here once published.")
 
@@ -438,29 +449,11 @@ if view == VIEWS[0]:
         lines = []
         for e in tu.where_is_everyone(tts, bday):
             d = e["day"]
-            if d["loc"] == tu.LOC_CLC and not d.get("label"):
+            if (d["loc"] == tu.LOC_CLC and not d.get("label")) or d["loc"] == tu.LOC_NONE:
                 continue
             lines.append(f"{e['initials']} · {e['program']} — {tu.short_day_text(d, 'Home school')}")
         st.write("\n".join(f"- {l}" for l in lines) if lines else "_Nothing to flag — everyone on a transition is at CLC._")
         st.caption("Initials only. The Bulletin can pull these with `transition_utils.bulletin_lines_for()`.")
-
-    # Coming up
-    st.markdown("#### ⏰ Coming up (next 14 days)")
-    soon = []
-    for tt in tts:
-        lc = tu.last_clc_day(tt.get("weeks") or [])
-        rec = date.fromisoformat(tt["recommencement_date"]) if tt.get("recommencement_date") else None
-        who = f"**{tt.get('student_initials')} · {tt.get('program')}**"
-        if lc and today <= lc <= today + timedelta(days=14):
-            soon.append((lc, f"{who} — last day at CLC **{lc.strftime('%a %d/%m')}**"))
-        if rec and today <= rec <= today + timedelta(days=14):
-            soon.append((rec, f"{who} — back at home school full time **{rec.strftime('%a %d/%m')}** "
-                              f"→ Admin: start exit process (archive folder, comms log export)."))
-    if soon:
-        for _, txt in sorted(soon):
-            st.markdown(f"- {txt}")
-    else:
-        st.caption("No last days or recommencements in the next fortnight.")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -511,14 +504,15 @@ elif view == VIEWS[1]:
             if tt.get("notes"):
                 a.caption(tt["notes"])
             with b:
-                stepdown_chart(wk, height=200)
-                sent = stepdown_sentence(wk)
-                if sent:
-                    st.markdown(sent)
+                lc_ = tu.last_clc_day(wk)
+                st.markdown(f"**{len(wk)} week(s)**" + (f" · last CLC day **{lc_.strftime('%a %d/%m')}**" if lc_ else ""))
+            short_ = tt.get("home_school_short") or tu.school_short_name(tt.get("home_school", ""))
+            st.markdown(weeks_preview_html(wk, short_), unsafe_allow_html=True)
+            download_block(tt, f"ls_{tt['id']}")
 
             bc = st.columns(5)
             if bc[0].button("✏️ Edit / export", key=f"ed_{tt['id']}"):
-                load_into_editor(tt, flash=f"Loaded {tt.get('student_initials')}. Add full name/EDID/DOB in the export box if you need the Word file.")
+                load_into_editor(tt, flash=f"Loaded {tt.get('student_initials')}.")
                 st.rerun()
             stt = tt.get("status")
             if stt == tu.DRAFT or tu.has_unpublished_changes(tt) or stt == "active":
@@ -574,7 +568,7 @@ elif view == VIEWS[1]:
                     hc = st.columns([3, 1])
                     hc[0].markdown(f"**v{h.get('version')}** — {str(h.get('saved_at', ''))[:16].replace('T', ' ')} "
                                    f"by {h.get('saved_by') or '—'}" + (f" — _{h['change_note']}_" if h.get("change_note") else "")
-                                   + f"  ·  {stepdown_sentence(snap.get('weeks') or []) or ''}")
+                                   + f"  ·  {len(snap.get('weeks') or [])} week(s)")
                     if hc[1].button("Open this version", key=f"hv_{h.get('id')}"):
                         rec_ = dict(tt); rec_.update(snap); rec_["id"] = tt["id"]; rec_["version"] = tt.get("version")
                         load_into_editor(rec_, flash=f"Opened v{h.get('version')} — saving will make it the current version.")
@@ -591,6 +585,12 @@ elif view == VIEWS[2]:
                "it connects to This Week, the Bulletin lines, the Document Archive and the email alerts.")
     st.caption("🔒 The Word files aren't stored. Only initials are saved. The full name, EDID and DOB in the file are "
                "kept for this session only, so you can re-export the Word version from the editor.")
+    _rv = getattr(tu, "READER_VERSION", None)
+    if _rv:
+        st.caption(f"Word reader: {_rv} · loaded from `{tu.__file__}`")
+    else:
+        st.error("⚠️ The portal is still using an OLD `transition_utils.py` (it can only read one layout). "
+                 f"Replace `{tu.__file__}` in GitHub with the new one, then wait for Render to redeploy.")
     ss.setdefault("tt_up_nonce", 0)
     ss.setdefault("tt_up_done", {})
     files = st.file_uploader("Word timetables (.docx)", type=["docx"], accept_multiple_files=True,
@@ -632,7 +632,7 @@ elif view == VIEWS[2]:
                                f"**BSC:** {html.escape(rec.get('bsc') or '—')}")
                 rd = rec.get("recommencement_date")
                 cc[3].markdown(f"**Recommencement:** {tu.recommencement_text(date.fromisoformat(rd)) if rd else '—'}  \n"
-                               + (stepdown_sentence(rec["weeks"]) or f"{len(rec['weeks'])} week(s)"))
+                               + f"{len(rec['weeks'])} week(s)")
                 if not rec.pop("_on_register"):
                     st.caption(f"ℹ️ {rec['student_initials'] or 'This student'} isn't on the Student Register — "
                                "check the initials and program.")
@@ -820,17 +820,10 @@ elif view == VIEWS[3]:
         ac[3].button("➕ Add week (all CLC)", on_click=cb_add_week, args=(False,))
         ac[4].button("📋 Add week — copy last week's pattern", on_click=cb_add_week, args=(True,), disabled=not dr["weeks"])
 
-    # ── Preview
     if dr["weeks"]:
-        st.markdown("#### Step-down")
-        pc = st.columns([2, 1])
-        with pc[0]:
-            stepdown_chart(dr["weeks"])
-        sent = stepdown_sentence(dr["weeks"])
-        pc[1].markdown(sent or "Add more weeks to see the step-down.")
         lc = tu.last_clc_day(dr["weeks"])
         if lc:
-            pc[1].markdown(f"Last scheduled CLC day: **{lc.strftime('%a %d/%m/%Y')}**")
+            st.caption(f"Last scheduled CLC day: **{lc.strftime('%a %d/%m/%Y')}**")
 
     # ── Save / publish
     st.markdown("#### Save & publish")
@@ -884,26 +877,13 @@ elif view == VIEWS[3]:
                 load_into_editor(row, sensitive=ss.tt_sensitive, flash=msg)
                 st.rerun()
 
-    # ── Word export
+    # ── Word export (full name typed here, never saved)
     if dr["weeks"]:
-        with st.expander("📄 Word export (CLC layout)", expanded=bool(ss.tt_sensitive.get("full_name"))):
-            st.caption("🔒 These details go into the Word file only. They are not saved anywhere and clear "
-                       "when you close the page.")
-            sens = ss.tt_sensitive
-            ec = st.columns(4)
-            sens["full_name"] = ec[0].text_input("Student's full name", value=sens.get("full_name", ""), key=k("x_full"))
-            sens["preferred_name"] = ec[1].text_input("Name used in timetable", value=sens.get("preferred_name", ""),
-                                                      key=k("x_pref"), placeholder="e.g. Abi")
-            sens["edid"] = ec[2].text_input("EDID", value=sens.get("edid", ""), key=k("x_edid"))
-            sens["dob"] = ec[3].text_input("DOB", value=sens.get("dob", ""), key=k("x_dob"), placeholder="dd/mm/yyyy")
-            try:
-                data = tu.build_timetable_docx(dr, dr["weeks"], sens)
-                st.download_button("⬇️ Download Word timetable", data=data,
-                                   file_name=tu.export_filename(sens, dr["student_initials"]),
-                                   mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                   type="primary", key=k("dl"))
-            except Exception as e:
-                st.error(f"Couldn't build the Word file: {e}")
+        st.markdown("#### 🖨️ Print / download")
+        if ss.tt_sensitive.get("full_name"):
+            ss.setdefault("tt_names", {})
+            ss.tt_names.setdefault(dr["student_initials"], ss.tt_sensitive["full_name"])
+        download_block(dr, f"ed_{ss.tt_nonce}")
 
 
 # ══════════════════════════════════════════════════════════════════════════
