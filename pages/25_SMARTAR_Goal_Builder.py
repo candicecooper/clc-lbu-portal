@@ -1739,13 +1739,33 @@ elif view == "📋 Goal Builder":
         new_prog = c2.selectbox("Program", PROGRAMS, key="new_prog")
         if c3.button("Add Student", type="primary"):
             if new_name.strip():
-                sb.table("smartar_students").insert({
-                    "student_name": new_name.strip(),
-                    "program":      new_prog,
-                    "active":       True,
-                }).execute()
-                st.success(f"✅ {new_name.strip()} added to {new_prog}.")
-                st.rerun()
+                _clean_new_name = new_name.strip()
+                # Goals/tracking are matched to a student purely by this text
+                # field — a second student with the exact same text (even an
+                # *archived* one, since their goal history is kept) would
+                # silently merge both students' SMARTAR goals together.
+                _clash = next(
+                    (s for s in get_students(include_archived=True)
+                     if s["student_name"].strip().lower() == _clean_new_name.lower()),
+                    None,
+                )
+                if _clash:
+                    _status_word = "an active" if _clash.get("active") else "an archived"
+                    st.error(
+                        f"**{_clean_new_name}** already exists as {_status_word} student "
+                        f"in {_clash.get('program', '?')} — adding another student with "
+                        f"the exact same name would merge their SMARTAR goals together. "
+                        f"Add something to tell them apart (e.g. a last-initial: "
+                        f"\"{_clean_new_name} E.\")."
+                    )
+                else:
+                    sb.table("smartar_students").insert({
+                        "student_name": _clean_new_name,
+                        "program":      new_prog,
+                        "active":       True,
+                    }).execute()
+                    st.success(f"✅ {_clean_new_name} added to {new_prog}.")
+                    st.rerun()
             else:
                 st.warning("Please enter a student name.")
 
@@ -3301,17 +3321,37 @@ elif view == "⚙️ Admin Panel":
         new_sprog = col2.selectbox("Program", PROGRAMS, key="admin_new_prog")
         if col3.button("Add Student", type="primary", key="admin_add_student"):
             if new_sname.strip():
-                try:
-                    sb.table("smartar_students").insert({
-                        "student_name":    new_sname.strip(),
-                        "program":         new_sprog,
-                        "active":          True,
-                        "placement_ended": False,
-                    }).execute()
-                    st.success(f"Added {new_sname.strip()} to {new_sprog}.")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error: {e}")
+                _clean_sname = new_sname.strip()
+                # Same guard as Goal Builder's "Add New Student" — goals are
+                # matched purely by this text, so an exact duplicate (even an
+                # archived student, whose goal history is kept) would merge
+                # two different students' SMARTAR goals together.
+                _clash = next(
+                    (s for s in get_students(include_archived=True)
+                     if s["student_name"].strip().lower() == _clean_sname.lower()),
+                    None,
+                )
+                if _clash:
+                    _status_word = "an active" if _clash.get("active") else "an archived"
+                    st.error(
+                        f"**{_clean_sname}** already exists as {_status_word} student "
+                        f"in {_clash.get('program', '?')} — adding another student with "
+                        f"the exact same name would merge their SMARTAR goals together. "
+                        f"Add something to tell them apart (e.g. a last-initial: "
+                        f"\"{_clean_sname} E.\")."
+                    )
+                else:
+                    try:
+                        sb.table("smartar_students").insert({
+                            "student_name":    _clean_sname,
+                            "program":         new_sprog,
+                            "active":          True,
+                            "placement_ended": False,
+                        }).execute()
+                        st.success(f"Added {_clean_sname} to {new_sprog}.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
             else:
                 st.warning("Please enter a student name.")
 
