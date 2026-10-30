@@ -485,6 +485,14 @@ def _first_checked(cell, labels):
     return False
 
 
+def _docx_body_image_count(file_bytes):
+    """Pictures placed in the body of the document (e.g. a pasted signature)."""
+    import docx
+    from docx.oxml.ns import qn
+    d = docx.Document(BytesIO(file_bytes))
+    return len(list(d.element.body.iter(qn("w:drawing")))) + len(list(d.element.body.iter(qn("w:pict"))))
+
+
 def parse_referral_docx(file_bytes):
     cells, _ = _docx_cell_texts(file_bytes)
     alltext = "\n".join(cells)
@@ -571,6 +579,14 @@ def parse_referral_docx(file_bytes):
     out["medical_details"] = _re.sub(r"\s+", " ", mm.group(1)).strip() if mm else ""
 
     out["referrer"] = lab(r"School referrer")
+
+    cons = next((c for c in cells if _re.search(r"consents? to Learning Centre", c, flags=_re.I)), "")
+    out["consent_yes"] = bool(_re.search(_CHK_ON + r"\s*Yes", cons, flags=_re.I))
+    out["consent_no"] = bool(_re.search(_CHK_ON + r"\s*No\b", cons, flags=_re.I))
+    out["verbal_consent_stated"] = bool(_re.search(
+        r"verbal(ly)?\s+(consent|agree|permission|approval)|(consent|agree|permission)\w*[^.\n]{0,40}verbal", alltext, flags=_re.I))
+    sig_text = bool(_re.search(r"signature\s*:?\s*[A-Za-z]|signed\s*(by)?\s*:?\s*[A-Za-z]{3}", alltext, flags=_re.I))
+    out["signature_found"] = _docx_body_image_count(file_bytes) > 0 or sig_text
     return out, notes
 
 
@@ -644,6 +660,8 @@ def parse_pdf_form(file_bytes, kind):
         out["prev_clc"] = False
         out["prev_other_lc_names"] = []
         out["medical_details"] = ""
+        out["consent_yes"] = out["consent_no"] = out["signature_found"] = False
+        out["verbal_consent_stated"] = bool(_re.search(r"verbal(ly)?\s+(consent|agree|permission)", text, flags=_re.I))
         notes.append("This PDF was read as plain text, so the tick boxes can't be read reliably — "
                      "please set the support flags, funding and medical sections yourself.")
     else:
@@ -758,6 +776,21 @@ def apply_referral_prefill(p):
     ss["ref_medication_details"] = ""
     if has_meds:
         warns.append("Medication is ticked — the form doesn't name it, so add the details if you have them.")
+    if p.get("consent_no"):
+        ss["ref_consent"], ss["ref_consent_details"] = "", ""
+        warns.append("🚫 The form says the parent/caregiver does NOT consent to placement. Do not proceed without consent.")
+    elif p.get("consent_yes") and p.get("signature_found"):
+        ss["ref_consent"], ss["ref_consent_details"] = "Signed consent", "Signature found on the uploaded referral form."
+    elif p.get("verbal_consent_stated"):
+        ss["ref_consent"], ss["ref_consent_details"] = "Verbal consent", "Verbal consent stated on the uploaded referral form — add who gave it and when."
+        warns.append("Verbal consent is mentioned on the form — please add who gave it and when in Consent details.")
+    else:
+        ss["ref_consent"], ss["ref_consent_details"] = "", ""
+        warns.append(
+            "⚠️ Parent/caregiver consent: " + ("'Yes' is ticked but " if p.get("consent_yes") else "no consent tick was found and ")
+            + "no signature or verbal-consent statement was found on the form. Check the original; "
+            "then choose Signed or Verbal consent below, or hold the referral until consent is confirmed."
+        )
     if not p.get("student_name"):
         warns.append("No student name was found — this may be a blank form, or the name is in a place the tool didn't expect.")
     return warns
@@ -1441,6 +1474,18 @@ with tab1:
                     has_medication = st.checkbox("Medication", key="ref_has_medication")
                     medication_details = st.text_area("Medication Details", disabled=not has_medication, key="ref_medication_details")
 
+            ccol1, ccol2 = st.columns(2)
+            with ccol1:
+                parent_consent = st.selectbox(
+                    "Parent/Caregiver consent to placement *", ["", "Signed consent", "Verbal consent"],
+                    key="ref_consent",
+                    help="A referral can't be saved without evidence of consent: either signed on the form, or verbal consent recorded here."
+                )
+            with ccol2:
+                parent_consent_details = st.text_input(
+                    "Consent details (who / when — required for verbal consent)", key="ref_consent_details"
+                )
+
             bse = st.text_input("BSE")
             queries = st.text_area("Queries/Notes for Meeting")
 
@@ -1448,6 +1493,10 @@ with tab1:
             if submitted:
                 if not student_name or not school or not year_level:
                     st.error("Please fill required fields (Name, School, Year Level)")
+                elif not parent_consent:
+                    st.error("Please record parent/caregiver consent — either Signed consent, or Verbal consent with details.")
+                elif parent_consent == "Verbal consent" and not parent_consent_details.strip():
+                    st.error("Verbal consent needs details — who gave it and when.")
                 elif has_medical and not medical_type:
                     st.error("Please select a Medical Condition Type — required when Medical Condition is checked")
                 elif needs_priority and not priority_level:
@@ -1494,6 +1543,8 @@ with tab1:
                             ),
                             "queries": queries,
                             "bse": bse or None,
+                            "parent_consent": parent_consent,
+                            "parent_consent_details": parent_consent_details or None,
                             "exclusion_start_date": exclusion_start_date.isoformat() if exclusion_start_date else None,
                             "exclusion_end_date": exclusion_end_date.isoformat() if exclusion_end_date else None,
                             "outcome": None,
