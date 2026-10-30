@@ -430,6 +430,14 @@ def match_school(name, schools):
     return "", False
 
 
+def is_allocated_outcome(v):
+    """True for 'Allocated' including small typos like 'alloated' (but not 'Not Allocated')."""
+    t = str(v or "").strip().lower()
+    if not t or t.startswith("not") or "not " in t:
+        return False
+    return t == "allocated" or _difflib.SequenceMatcher(None, t, "allocated").ratio() >= 0.85
+
+
 def match_student(name, records):
     """Match a name from a form to one of the records. Forgiving about middle names,
     'Surname, First' order, extra words and small spelling differences.
@@ -598,14 +606,15 @@ def parse_extension_docx(file_bytes):
         notes.append(f"Couldn't read the requested end date ('{req_end_raw}').")
     wk_raw = block(r"Number of days\s*/\s*weeks", [r"Reason for"])
     out["weeks_raw"] = wk_raw
-    wm = _re.search(r"(\d+(?:\.\d+)?)\s*(week|wk|day)?", wk_raw, flags=_re.I)
+    wm = _re.search(r"(\d+(?:\.\d+)?)\s*(?:calendar\s+|school\s+)?(week|wk|day)?", wk_raw, flags=_re.I)
     weeks = ""
     if wm:
         unit = (wm.group(2) or "").lower()
         n = float(wm.group(1))
         if unit.startswith("day"):
-            weeks = str(max(1, round(n / 5)))
-            notes.append(f"The form says '{wk_raw}' — converted to {weeks} week(s) at 5 school days a week. Please check.")
+            per = 7 if "calendar" in wk_raw.lower() else 5
+            weeks = str(max(1, round(n / per)))
+            notes.append(f"The form says '{wk_raw}' — converted to {weeks} week(s) at {per} days a week. Please check.")
         else:
             weeks = str(int(n)) if n == int(n) else str(n)
     out["weeks"] = weeks
@@ -1523,7 +1532,7 @@ with tab2:
         all_students = supabase.table("allocation_students").select("*").execute()
 
         def _is_active(r):
-            if str(r.get("outcome", "")).strip().lower() != "allocated":
+            if not is_allocated_outcome(r.get("outcome")):
                 return False
             if str(r.get("current_status", "")).strip().lower() == "inactive":
                 return False
@@ -1545,7 +1554,7 @@ with tab2:
                 outcome_counts[key] = outcome_counts.get(key, 0) + 1
             st.write("Breakdown by `outcome` value (exact, including hidden spaces/case):")
             st.write(outcome_counts)
-            allocated_total = sum(1 for r in all_students.data if str(r.get("outcome", "")).strip().lower() == "allocated")
+            allocated_total = sum(1 for r in all_students.data if is_allocated_outcome(r.get("outcome")))
             st.write(
                 f"Of {allocated_total} allocated student(s), {len(allocated_data)} are considered "
                 f"**active** and shown below; {allocated_total - len(allocated_data)} are excluded "
@@ -1614,7 +1623,7 @@ with tab2:
                                     elif not anyrec:
                                         st.warning(f"I read the name as '{fn_}', but nobody in the database is close to that. "
                                                    "Please choose the student from the list (the name on the form may be spelled differently).")
-                                    elif str(anyrec.get("outcome", "")).strip().lower() != "allocated":
+                                    elif not is_allocated_outcome(anyrec.get("outcome")):
                                         st.warning(f"Found '{anyrec.get('student_name')}' but their outcome is "
                                                    f"'{anyrec.get('outcome') or 'not yet decided'}', not Allocated, so they can't have an extension.")
                                     elif str(anyrec.get("current_status", "")).strip().lower() == "inactive":
