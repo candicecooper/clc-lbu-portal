@@ -5962,6 +5962,7 @@ def render_program_students_page():
                                 supabase.table('students').update({'archived': True}).eq('id', stu['id']).execute()
                             except Exception as e:
                                 st.error(f"Archive failed: {e}")
+                        generate_and_archive_behaviour_summary(stu)
                         st.rerun()
 
 
@@ -7049,6 +7050,217 @@ def build_print_html(student, full_df, records, supports_trialled="", supports_s
     return doc.encode("utf-8")
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# SHARED INCIDENT DATA + STATS — used by the Analysis page itself AND by
+# generate_and_archive_behaviour_summary() below (the auto-archive-on-student-
+# archive path), so a report generated outside the Analysis page always shows
+# identical numbers to what staff would see on that page.
+# ══════════════════════════════════════════════════════════════════════════
+def build_student_full_df(student_id):
+    """Builds the combined regular + critical incident dataframe for one
+    student: normalises location/session, maps ABCH free-text behaviour to
+    a canonical clinical label, and recomputes session from precise time
+    boundaries. Returns (full_df, dropped_nat) — full_df is empty if this
+    student has no incident data on file at all."""
+    quick = [i for i in st.session_state.incidents if i["student_id"] == student_id]
+    crit = [c for c in st.session_state.critical_incidents if c["student_id"] == student_id]
+    if not quick and not crit:
+        return pd.DataFrame(), 0
+
+    quick_df = pd.DataFrame(quick) if quick else pd.DataFrame()
+    crit_df = pd.DataFrame(crit) if crit else pd.DataFrame()
+
+    if not quick_df.empty:
+        quick_df["incident_type"] = "Quick"
+        quick_df["date_parsed"] = _parse_dates(quick_df["date"])
+        if "location" in quick_df.columns:
+            quick_df["location"] = quick_df["location"].apply(normalise_location)
+        if "intervention" in quick_df.columns:
+            quick_df["intervention_str"] = quick_df["intervention"].apply(lambda x: ", ".join(x) if isinstance(x, list) else str(x))
+
+    if not crit_df.empty:
+        crit_df["incident_type"] = "Critical"
+        _crit_dates_a = crit_df["created_at"] if "created_at" in crit_df.columns else pd.Series(
+            [datetime.now().isoformat()] * len(crit_df), index=crit_df.index
+        )
+        crit_df["date_parsed"] = _parse_dates(_crit_dates_a)
+        crit_df["severity"] = crit_df["severity"].fillna(5).astype(int) if "severity" in crit_df.columns else 5
+        crit_df["antecedent"] = crit_df["ABCH_primary"].apply(lambda d: d.get("context","") if isinstance(d, dict) else "")
+        # Keyword map: ABCH free-text → canonical clinical behaviour label
+        _CRIT_BEH_KEYWORDS = [
+            # (keyword list, canonical label) — checked in order; first match wins
+            (["self-harm","self harm","hurt himself","hurt herself","scratch","bite himself",
+              "bite herself","bang head","banged head","hit himself","hit herself"],
+             "Self-injurious behaviour"),
+            (["threw","throw","thrown","hurled","launched","flung","pushed chair",
+              "knocked over","flipped","tipped","toppled","pushed desk","flipped table",
+              "knocked chair"],
+             "Throwing objects"),
+            (["destroyed","broke","smashed","kicked wall","punched wall","ripped","torn",
+              "property damage","damaged"],
+             "Property destruction"),
+            (["hit peer","hit a peer","hit student","punch peer","punched peer",
+              "kicked peer","kicked a student","shoved peer","pushed peer","bit peer",
+              "grabbed peer","scratched peer","attacked peer","spat at peer"],
+             "Physical aggression toward peer"),
+            (["hit staff","hit teacher","hit adult","punch staff","punched teacher",
+              "kicked staff","kicked teacher","kicked adult","shoved staff","pushed staff",
+              "bit staff","grabbed staff","scratched staff","spat at staff","spat at teacher",
+              "hit the teacher","struck","swung at"],
+             "Physical aggression toward adult"),
+            (["growl","growled","snarl","snarled","scream at","screamed at","yell at",
+              "yelled at","swore at","sworn at","sworn towards","sworn toward",
+              "verbal abuse","verbally abused","name call","called names","insulted",
+              "threatened","said he would","said she would","told them he would",
+              "told them she would"],
+             "Verbal aggression toward peer"),
+            (["swore at teacher","swore at staff","swore at adult","yelled at teacher",
+              "yelled at staff","yelled at adult","screamed at teacher","screamed at staff",
+              "verbal abuse toward staff","abused staff","abused teacher","abused adult",
+              "threatened staff","threatened teacher","threatened adult"],
+             "Verbal aggression toward adult"),
+            (["ran from","ran out","left the room","left class","left the class",
+              "walked out","walked away","fled","ran away","elopement","eloped",
+              "absconded","left the building","left the school","left school grounds"],
+             "Unsanctioned departure (elopement)"),
+            (["refus","refused","refusing","won't","will not","not going to",
+              "declined to","passive","non-complian","non complian","wouldn't"],
+             "Task refusal / passive non-compliance"),
+            (["shut down","shutdown","withdrew","withdrawal","stopped responding",
+              "stopped talking","silent","mute","unresponsive","disengaged",
+              "curled up","head down","under desk"],
+             "Shutdown / complete withdrawal"),
+            (["noise","noises","sound","sounds","humming","clicking","tapping",
+              "inappropriate sound","disruptive sound","loud noise"],
+             "Inappropriate vocalisation / noises"),
+            (["verbal refus","said no","said 'no'","stated he would not",
+              "stated she would not","verbally refus"],
+             "Verbal refusal of instruction"),
+        ]
+
+        def _clean_crit_beh(d):
+            """Map ABCH free-text behaviour to a canonical clinical label."""
+            raw = d.get("behaviour","") if isinstance(d, dict) else ""
+            if not raw or not raw.strip():
+                return "Behaviour (see ABCH form)"
+            raw_lower = raw.lower()
+            for known in BEHAVIOUR_TYPES:
+                if not known.startswith("---") and known.lower() == raw_lower.strip():
+                    return known
+            for keywords, label in _CRIT_BEH_KEYWORDS:
+                if any(kw in raw_lower for kw in keywords):
+                    return label
+            for known in BEHAVIOUR_TYPES:
+                if not known.startswith("---") and known.lower() in raw_lower:
+                    return known
+            short = raw.strip()[:50].replace("\n"," ")
+            return f"{short}…" if len(raw.strip()) > 50 else short
+        crit_df["behaviour_type"] = crit_df["ABCH_primary"].apply(_clean_crit_beh)
+        crit_df["time"] = crit_df["ABCH_primary"].apply(lambda d: d.get("time", "09:00:00") if isinstance(d, dict) else "09:00:00")
+        for _col in ["location", "session"]:
+            if _col not in crit_df.columns:
+                crit_df[_col] = crit_df["ABCH_primary"].apply(lambda d: d.get(_col, "") if isinstance(d, dict) else "")
+        if "location" in crit_df.columns:
+            crit_df["location"] = crit_df["location"].apply(normalise_location)
+
+    full_df = pd.concat([quick_df, crit_df], ignore_index=True).sort_values("date_parsed")
+    _dropped_nat = int(full_df["date_parsed"].isna().sum()) if "date_parsed" in full_df.columns else 0
+    if _dropped_nat > 0:
+        full_df = full_df.dropna(subset=["date_parsed"])
+    if "time" not in full_df.columns:
+        full_df["time"] = "09:00:00"
+    else:
+        full_df["time"] = full_df["time"].fillna("09:00:00")
+    full_df["hour"] = pd.to_datetime(full_df["time"], format="%H:%M:%S", errors="coerce").dt.hour.fillna(9).astype(int)
+    full_df["day_of_week"] = full_df["date_parsed"].dt.day_name()
+
+    def _session_precise(t_str):
+        try:
+            parts = str(t_str).split(":")
+            tm = int(parts[0]) * 60 + int(parts[1])
+            if tm < 11 * 60: return "Morning"
+            elif tm <= 13 * 60 + 30: return "Middle"
+            else: return "Afternoon"
+        except:
+            return "Morning"
+    full_df["session"] = full_df["time"].apply(_session_precise)
+    return full_df, _dropped_nat
+
+
+def compute_analysis_stats(full_df):
+    """Same derived stats shown on the Analysis page: top behaviour/
+    antecedent/location/session and the risk score/level. Shared so the
+    auto-archived report always matches what staff see on that page."""
+    if len(full_df) == 0:
+        return "Unknown", "Unknown", "Unknown", "Unknown", 0, "LOW"
+    top_beh = full_df["behaviour_type"].mode()[0]
+    top_ant = full_df["antecedent"].mode()[0]
+    top_loc = full_df["location"].mode()[0]
+    top_session = full_df["session"].mode()[0]
+    recent = full_df.tail(7)
+    risk_score = min(100, int(
+        (len(recent) / 7 * 10) +
+        (recent["severity"].mean() * 8) +
+        (len(full_df[full_df["incident_type"] == "Critical"]) / len(full_df) * 50)
+    ))
+    risk_level = "LOW" if risk_score < 30 else "MODERATE" if risk_score < 60 else "HIGH"
+    return top_beh, top_ant, top_loc, top_session, risk_score, risk_level
+
+
+def generate_and_archive_behaviour_summary(student) -> bool:
+    """Generates the same Behaviour Summary Word report as the manual
+    '📄 Behaviour Summary (Word)' download on the Analysis page, and pushes
+    it straight to the Document Archive. Called when a student is archived
+    in this tool, so their behaviour documentation always lands in the
+    Document Archive at that moment — matching how the Communication Log
+    already auto-exports on student archive. Never raises: on any failure
+    it shows a warning (the student archive itself has already happened
+    by the time this runs) and returns False."""
+    if not _ARCHIVE_AVAILABLE:
+        return False
+    student_id = student.get("id")
+    if not student_id:
+        return False
+    try:
+        full_df, _ = build_student_full_df(student_id)
+        if full_df.empty:
+            return False  # nothing recorded for this student — nothing to archive
+        top_beh, top_ant, top_loc, top_session, risk_score, risk_level = compute_analysis_stats(full_df)
+        _supports_trialled = st.session_state.get(f"supports_trialled_{student_id}", "")
+        _supports_success = st.session_state.get(f"supports_success_{student_id}", "")
+        _trial_date = st.session_state.get(f"supports_trial_date_{student_id}")
+        _before_after = compute_before_after(full_df, _trial_date) if _trial_date else None
+        docx_file = generate_behaviour_analysis_plan_docx(
+            student, full_df, top_ant, top_beh, top_loc, top_session, risk_score, risk_level,
+            supports_trialled=_supports_trialled, supports_success=_supports_success,
+            before_after=_before_after)
+        if not docx_file:
+            return False
+        _bs_date = datetime.now().strftime("%Y%m%d")
+        _bs_initials = initials_from_name(student.get("name", ""))
+        _bs_creator = (
+            st.session_state.current_user.get("email")
+            or st.session_state.current_user.get("name", "unknown")
+        ) if st.session_state.get("current_user") else "unknown"
+        archive_once(
+            guard_key=f"behreport_archive_{student_id}_{_bs_date}",
+            source_tool="Behaviour Support Tool",
+            doc_type="Behaviour Report",
+            title=f"Behaviour Summary — {_bs_initials}",
+            file_bytes=docx_file.getvalue(),
+            filename=f"BehaviourSummary_{_bs_initials}_{_bs_date}.docx",
+            student_initials=_bs_initials,
+            created_by=_bs_creator,
+            notes="Auto-archived when the student was archived.",
+        )
+        st.success(f"📁 Behaviour Summary for {_bs_initials} saved to the Document Archive.")
+        return True
+    except Exception as e:
+        st.warning(f"The student was archived, but the Behaviour Summary couldn't be saved to the "
+                   f"Document Archive: {e}")
+        return False
+
+
 def render_student_analysis_page():
     """Draws the Analysis page, recording what is shown so a printable copy can be built."""
     screen_capture_start()
@@ -7436,141 +7648,13 @@ def _render_student_analysis_page_inner():
         _att_html += "</div>"
         st.markdown(_att_html, unsafe_allow_html=True)
 
-    quick = [i for i in st.session_state.incidents if i["student_id"] == student_id]
-    crit = [c for c in st.session_state.critical_incidents if c["student_id"] == student_id]
-
-    if not quick and not crit:
+    full_df, _dropped_nat = build_student_full_df(student_id)
+    if full_df.empty:
         st.info("No incident data available yet. Suggestions from the Starting Profile can still be trialled from day one.")
         render_strategy_trials(student, pd.DataFrame())
         if st.button("↩️ Back", key="back_no_data"):
             go_to("program_students", selected_program=student["program"])
         return
-
-    quick_df = pd.DataFrame(quick) if quick else pd.DataFrame()
-    crit_df = pd.DataFrame(crit) if crit else pd.DataFrame()
-
-    if not quick_df.empty:
-        quick_df["incident_type"] = "Quick"
-        quick_df["date_parsed"] = _parse_dates(quick_df["date"])
-        if "location" in quick_df.columns:
-            quick_df["location"] = quick_df["location"].apply(normalise_location)
-        if "intervention" in quick_df.columns:
-            quick_df["intervention_str"] = quick_df["intervention"].apply(lambda x: ", ".join(x) if isinstance(x, list) else str(x))
-
-    if not crit_df.empty:
-        crit_df["incident_type"] = "Critical"
-        _crit_dates_a = crit_df["created_at"] if "created_at" in crit_df.columns else pd.Series(
-            [datetime.now().isoformat()] * len(crit_df), index=crit_df.index
-        )
-        crit_df["date_parsed"] = _parse_dates(_crit_dates_a)
-        crit_df["severity"] = crit_df["severity"].fillna(5).astype(int) if "severity" in crit_df.columns else 5
-        crit_df["antecedent"] = crit_df["ABCH_primary"].apply(lambda d: d.get("context","") if isinstance(d, dict) else "")
-        # Keyword map: ABCH free-text → canonical clinical behaviour label
-        _CRIT_BEH_KEYWORDS = [
-            # (keyword list, canonical label) — checked in order; first match wins
-            (["self-harm","self harm","hurt himself","hurt herself","scratch","bite himself",
-              "bite herself","bang head","banged head","hit himself","hit herself"],
-             "Self-injurious behaviour"),
-            (["threw","throw","thrown","hurled","launched","flung","pushed chair",
-              "knocked over","flipped","tipped","toppled","pushed desk","flipped table",
-              "knocked chair"],
-             "Throwing objects"),
-            (["destroyed","broke","smashed","kicked wall","punched wall","ripped","torn",
-              "property damage","damaged"],
-             "Property destruction"),
-            (["hit peer","hit a peer","hit student","punch peer","punched peer",
-              "kicked peer","kicked a student","shoved peer","pushed peer","bit peer",
-              "grabbed peer","scratched peer","attacked peer","spat at peer"],
-             "Physical aggression toward peer"),
-            (["hit staff","hit teacher","hit adult","punch staff","punched teacher",
-              "kicked staff","kicked teacher","kicked adult","shoved staff","pushed staff",
-              "bit staff","grabbed staff","scratched staff","spat at staff","spat at teacher",
-              "hit the teacher","struck","swung at"],
-             "Physical aggression toward adult"),
-            (["growl","growled","snarl","snarled","scream at","screamed at","yell at",
-              "yelled at","swore at","sworn at","sworn towards","sworn toward",
-              "verbal abuse","verbally abused","name call","called names","insulted",
-              "threatened","said he would","said she would","told them he would",
-              "told them she would"],
-             "Verbal aggression toward peer"),
-            (["swore at teacher","swore at staff","swore at adult","yelled at teacher",
-              "yelled at staff","yelled at adult","screamed at teacher","screamed at staff",
-              "verbal abuse toward staff","abused staff","abused teacher","abused adult",
-              "threatened staff","threatened teacher","threatened adult"],
-             "Verbal aggression toward adult"),
-            (["ran from","ran out","left the room","left class","left the class",
-              "walked out","walked away","fled","ran away","elopement","eloped",
-              "absconded","left the building","left the school","left school grounds"],
-             "Unsanctioned departure (elopement)"),
-            (["refus","refused","refusing","won't","will not","not going to",
-              "declined to","passive","non-complian","non complian","wouldn't"],
-             "Task refusal / passive non-compliance"),
-            (["shut down","shutdown","withdrew","withdrawal","stopped responding",
-              "stopped talking","silent","mute","unresponsive","disengaged",
-              "curled up","head down","under desk"],
-             "Shutdown / complete withdrawal"),
-            (["noise","noises","sound","sounds","humming","clicking","tapping",
-              "inappropriate sound","disruptive sound","loud noise"],
-             "Inappropriate vocalisation / noises"),
-            (["verbal refus","said no","said 'no'","stated he would not",
-              "stated she would not","verbally refus"],
-             "Verbal refusal of instruction"),
-        ]
-
-        def _clean_crit_beh(d):
-            """Map ABCH free-text behaviour to a canonical clinical label."""
-            raw = d.get("behaviour","") if isinstance(d, dict) else ""
-            if not raw or not raw.strip():
-                return "Behaviour (see ABCH form)"
-            raw_lower = raw.lower()
-            # 1. Direct match against known BEHAVIOUR_TYPES
-            for known in BEHAVIOUR_TYPES:
-                if not known.startswith("---") and known.lower() == raw_lower.strip():
-                    return known
-            # 2. Keyword map — first match wins
-            for keywords, label in _CRIT_BEH_KEYWORDS:
-                if any(kw in raw_lower for kw in keywords):
-                    return label
-            # 3. Partial known-type match
-            for known in BEHAVIOUR_TYPES:
-                if not known.startswith("---") and known.lower() in raw_lower:
-                    return known
-            # 4. Fallback — use truncated description tagged as narrative
-            short = raw.strip()[:50].replace("\n"," ")
-            return f"{short}…" if len(raw.strip()) > 50 else short
-        crit_df["behaviour_type"] = crit_df["ABCH_primary"].apply(_clean_crit_beh)
-        crit_df["time"] = crit_df["ABCH_primary"].apply(lambda d: d.get("time", "09:00:00") if isinstance(d, dict) else "09:00:00")
-        for _col in ["location", "session"]:
-            if _col not in crit_df.columns:
-                crit_df[_col] = crit_df["ABCH_primary"].apply(lambda d: d.get(_col, "") if isinstance(d, dict) else "")
-        if "location" in crit_df.columns:
-            crit_df["location"] = crit_df["location"].apply(normalise_location)
-
-    full_df = pd.concat([quick_df, crit_df], ignore_index=True).sort_values("date_parsed")
-    # Drop any record with an unparseable/missing date — a handful of charts
-    # below call .strftime() on date_parsed directly, which crashes on NaT
-    # (pandas' null timestamp). A record with no valid date can't be
-    # meaningfully plotted by date anyway.
-    _dropped_nat = int(full_df["date_parsed"].isna().sum()) if "date_parsed" in full_df.columns else 0
-    if _dropped_nat > 0:
-        full_df = full_df.dropna(subset=["date_parsed"])
-    if "time" not in full_df.columns:
-        full_df["time"] = "09:00:00"
-    else:
-        full_df["time"] = full_df["time"].fillna("09:00:00")
-    full_df["hour"] = pd.to_datetime(full_df["time"], format="%H:%M:%S", errors="coerce").dt.hour.fillna(9).astype(int)
-    full_df["day_of_week"] = full_df["date_parsed"].dt.day_name()
-    # Always recompute session using precise time boundaries
-    def _session_precise(t_str):
-        try:
-            parts = str(t_str).split(":")
-            tm = int(parts[0]) * 60 + int(parts[1])
-            if tm < 11 * 60: return "Morning"
-            elif tm <= 13 * 60 + 30: return "Middle"
-            else: return "Afternoon"
-        except:
-            return "Morning"
-    full_df["session"] = full_df["time"].apply(_session_precise)
 
     quick_only_df = full_df[full_df['incident_type'] == 'Quick'].copy() if 'Quick' in full_df['incident_type'].values else pd.DataFrame()
     crit_only_df = full_df[full_df['incident_type'] == 'Critical'].copy() if 'Critical' in full_df['incident_type'].values else pd.DataFrame()
@@ -9377,19 +9461,8 @@ def _render_student_analysis_page_inner():
     st.markdown("---")
 
     # ── Derived metrics (used in multiple sections below) ─────────────────────
-    top_beh     = full_df["behaviour_type"].mode()[0] if len(full_df) > 0 else "Unknown"
-    top_ant     = full_df["antecedent"].mode()[0] if len(full_df) > 0 else "Unknown"
-    top_loc     = full_df["location"].mode()[0] if len(full_df) > 0 else "Unknown"
-    top_session = full_df["session"].mode()[0] if len(full_df) > 0 else "Unknown"
+    top_beh, top_ant, top_loc, top_session, risk_score, risk_level = compute_analysis_stats(full_df)
     top_beh_clinical = get_clinical_behaviour(top_beh)
-
-    recent = full_df.tail(7)
-    risk_score = min(100, int(
-        (len(recent) / 7 * 10) +
-        (recent["severity"].mean() * 8) +
-        (len(full_df[full_df["incident_type"] == "Critical"]) / len(full_df) * 50)
-    ))
-    risk_level = "LOW" if risk_score < 30 else "MODERATE" if risk_score < 60 else "HIGH"
     risk_color = "#10b981" if risk_level == "LOW" else "#f59e0b" if risk_level == "MODERATE" else "#ef4444"
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -10946,6 +11019,7 @@ def render_admin_portal():
                                 s["archived"] = True
                                 try:
                                     supabase.table("students").update({"archived": True}).eq("id", s["id"]).execute()
+                                    generate_and_archive_behaviour_summary(s)
                                     st.session_state.students = load_students_from_db()
                                     st.rerun()
                                 except Exception as e:
@@ -11033,6 +11107,7 @@ def render_admin_portal():
                                     st.success(f"✅ {student['name']} archived")
                                 except Exception as e:
                                     st.error(f"Archive failed: {e}")
+                            generate_and_archive_behaviour_summary(student)
                             st.rerun()
                 if st.session_state.get("editing_student") == student['id']:
                     with st.expander("✏️ Edit Student Details", expanded=True):
