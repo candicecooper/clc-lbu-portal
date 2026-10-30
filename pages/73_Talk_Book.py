@@ -170,9 +170,9 @@ ss.setdefault("tb_sid", None)
 ss.setdefault("tb_sid_for", None)
 
 
-def process_outbox() -> str | None:
+def process_outbox(comp_key: str = "tb_comp") -> str | None:
     """Save anything the book has sent since the last rerun. Returns a notice for the book."""
-    v = ss.get("tb_comp")
+    v = ss.get(comp_key)
     if not isinstance(v, dict) or not v.get("inst"):
         return None
     ack = ss.tb_acks.setdefault(v["inst"], {"seq": 0, "save": 0})
@@ -210,7 +210,8 @@ def process_outbox() -> str | None:
     return notice
 
 
-notice = process_outbox()
+notice = process_outbox("tb_comp")
+helper_notice = process_outbox("tb_helper_comp")
 
 # ──────────────────────────────────────────────────────────────────────────
 # Page
@@ -221,7 +222,7 @@ students = load_students()
 labels = {r["initials"]: f'{r["initials"]}' + (f' ({r["program"]})' if r.get("program") else "") for r in students}
 PRACTICE = "— Practice / shared book (no logging) —"
 
-tab_book, tab_notes, tab_review = st.tabs(["💬 Talk Book", "📝 Trial notes", "📊 Trial review"])
+tab_book, tab_helper, tab_notes, tab_review = st.tabs(["💬 Talk Book", "🧰 Helper Books", "📝 Trial notes", "📊 Trial review"])
 
 with tab_book:
     c1, c2, c3 = st.columns([2, 2, 1.4])
@@ -292,6 +293,179 @@ with tab_book:
                     st.rerun()
                 except Exception as exc:  # noqa: BLE001
                     st.error(f"Could not reset: {exc}")
+
+# ── Helper Books ─────────────────────────────────────────────────────────
+with tab_helper:
+    try:
+        import helper_book as hb
+    except ModuleNotFoundError:
+        hb = None
+        st.error("**helper_book.py is missing from the GitHub repo.** Upload it to the main (top) folder "
+                 "of clc-lbu-portal, next to talk_book_component.py.")
+    if hb is not None and not hb.symbols():
+        st.warning("**data/talk_book/symbols.json is missing.** Upload it into the data/talk_book folder "
+                   "so the Helper Books can show symbols.")
+    if hb is not None:
+        st.markdown("A small, personal book of big squares for one student: how they feel, what they need, "
+                    "how to ask for help and what they can do when they're upset. Use it on screen or print "
+                    "it as a pocket booklet.")
+        h1, h2 = st.columns([2, 3])
+        with h1:
+            h_student = st.selectbox("Student", list(labels) or ["(no students on the register)"],
+                                     format_func=lambda k: labels.get(k, k), key="hb_student")
+        hkey = f"helper:{h_student}"
+        if ss.get("hb_loaded_for") != h_student:
+            row = load_profile(hkey) if h_student in labels else None
+            ss.hb_data = (row or {}).get("data") or hb.default_helper()
+            ss.hb_saved = bool(row)
+            ss.hb_loaded_for = h_student
+            ss.hb_ver = ss.get("hb_ver", 0) + 1
+        data = ss.hb_data
+        v = ss.hb_ver
+        with h2:
+            st.write("")
+            st.caption(f"Showing **{h_student}'s helper book**." if ss.hb_saved else
+                       f"{h_student} doesn't have a helper book yet. This is the starter book; "
+                       f"change anything, then **Save**.")
+
+        sub_setup, sub_use, sub_print = st.tabs(["✏️ Set up", "💬 Use with student", "🖨️ Print"])
+
+        with sub_setup:
+            data["title"] = st.text_input("Book title", value=data.get("title", "My Helper Book"), key=f"hb_title_{v}")
+            sym_opts = [""] + hb.symbol_options()
+            colours = list(hb.PAGE_COLOURS)
+            for pi, pg in enumerate(data["pages"]):
+                with st.expander(f'{"✅" if pg.get("on", True) else "⬜"}  {pg.get("title") or "Untitled page"}',
+                                 expanded=False):
+                    a, b, c, d = st.columns([3, 1.4, 1, 1])
+                    pg["title"] = a.text_input("Page title", value=pg.get("title", ""), key=f"hb_pt_{v}_{pi}")
+                    pg["colour"] = b.selectbox("Colour", colours,
+                                               index=colours.index(pg.get("colour")) if pg.get("colour") in colours else 0,
+                                               key=f"hb_pc_{v}_{pi}")
+                    with c:
+                        st.write("")
+                        pg["on"] = st.checkbox("Include", value=pg.get("on", True), key=f"hb_on_{v}_{pi}")
+                    with d:
+                        st.write("")
+                        if st.button("🗑️ Remove page", key=f"hb_rm_{v}_{pi}"):
+                            data["pages"].pop(pi)
+                            ss.hb_ver += 1
+                            st.rerun()
+                    for si, sq in enumerate(pg["squares"]):
+                        x1, x2, x3, x4, x5 = st.columns([0.6, 2, 2.4, 2.4, 0.5])
+                        img = hb.square_image(sq)
+                        if img:
+                            x1.markdown(f'<img src="{img}" style="height:46px;max-width:100%;object-fit:contain;'
+                                        f'background:#fff;border-radius:6px">', unsafe_allow_html=True)
+                        else:
+                            x1.markdown(f'<div style="font-size:32px">{sq.get("icon") or "▫️"}</div>',
+                                        unsafe_allow_html=True)
+                        sq["label"] = x2.text_input("Words on the square", value=sq.get("label", ""),
+                                                    key=f"hb_l_{v}_{pi}_{si}", label_visibility="collapsed" if si else "visible")
+                        sq["say"] = x3.text_input("Spoken as (optional)", value=sq.get("say", ""),
+                                                  key=f"hb_s_{v}_{pi}_{si}", label_visibility="collapsed" if si else "visible",
+                                                  placeholder="same as the words")
+                        cur_sym = sq.get("sym") or ""
+                        sq["sym"] = x4.selectbox("Symbol (type to search)", sym_opts,
+                                                 index=sym_opts.index(cur_sym) if cur_sym in sym_opts else 0,
+                                                 format_func=hb.symbol_label, key=f"hb_y_{v}_{pi}_{si}",
+                                                 label_visibility="collapsed" if si else "visible") or None
+                        with x5:
+                            if not si:
+                                st.write("")
+                                st.write("")
+                            if st.button("✕", key=f"hb_x_{v}_{pi}_{si}", help="Remove this square"):
+                                pg["squares"].pop(si)
+                                ss.hb_ver += 1
+                                st.rerun()
+                    a, b = st.columns([1, 2])
+                    with a:
+                        if len(pg["squares"]) < hb.MAX_SQUARES and st.button("➕ Add a square", key=f"hb_add_{v}_{pi}"):
+                            pg["squares"].append({"label": "", "sym": None, "icon": "", "say": "", "photo": None})
+                            ss.hb_ver += 1
+                            st.rerun()
+                        if len(pg["squares"]) >= hb.MAX_SQUARES:
+                            st.caption(f"{hb.MAX_SQUARES} squares is the most a page can hold.")
+                    with b:
+                        named = [f"{i + 1}. {s.get('label') or '(blank)'}" for i, s in enumerate(pg["squares"])]
+                        if named:
+                            which = st.selectbox("Use a photo instead of the symbol for", named, key=f"hb_pw_{v}_{pi}")
+                            up = st.file_uploader("Photo (e.g. a staff member or the break space)",
+                                                  type=["jpg", "jpeg", "png", "webp"], key=f"hb_pu_{v}_{pi}")
+                            idx = named.index(which)
+                            pcol1, pcol2 = st.columns(2)
+                            if up and pcol1.button("Use this photo", key=f"hb_pp_{v}_{pi}"):
+                                pg["squares"][idx]["photo"] = hb.photo_to_data_url(up.getvalue())
+                                ss.hb_ver += 1
+                                st.rerun()
+                            if pg["squares"][idx].get("photo") and pcol2.button("Remove photo", key=f"hb_pr_{v}_{pi}"):
+                                pg["squares"][idx]["photo"] = None
+                                ss.hb_ver += 1
+                                st.rerun()
+            a, b, c = st.columns([2, 1.2, 1.2])
+            with a:
+                new_title = st.text_input("Add a page", placeholder="e.g. At lunch time", key=f"hb_np_{v}")
+            with b:
+                st.write("")
+                if st.button("➕ Add page", key=f"hb_npb_{v}") and new_title.strip():
+                    data["pages"].append({"title": new_title.strip(), "colour": "Blue", "on": True, "squares": []})
+                    ss.hb_ver += 1
+                    st.rerun()
+            st.divider()
+            a, b, c = st.columns([1.3, 1.6, 3])
+            with a:
+                if st.button("💾 Save helper book", type="primary", key="hb_save",
+                             disabled=h_student not in labels):
+                    try:
+                        save_profile(hkey, data, ss.tb_staff)
+                        ss.hb_saved = True
+                        st.success(f"Saved {h_student}'s helper book.")
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(f"Could not save: {exc}")
+            with b:
+                if st.button("↩️ Start again from the starter book", key="hb_reset"):
+                    ss.hb_data = hb.default_helper()
+                    ss.hb_ver += 1
+                    st.rerun()
+            c.caption("Changes aren't kept until you press **Save**. Photos are stored with the "
+                      "student's book (initials only).")
+
+        with sub_use:
+            st.caption("Big squares, one topic at a time. Tap a square to say it; tap the message bar or "
+                       "**Say it** to say the whole message. Taps are logged against the student's initials "
+                       "when **Log words** is on (Talk Book tab).")
+            _talk_book(
+                student=h_student if h_student in labels else None,
+                logging=bool(h_student in labels and ss.get("tb_log", True)),
+                profile={}, profile_key=None, profile_label=f"{h_student}'s helper book",
+                helper=hb.for_component(data), helper_rev=f"{h_student}-{ss.hb_ver}",
+                acks=ss.tb_acks, notice=helper_notice, key="tb_helper_comp", default=None,
+            )
+
+        with sub_print:
+            a, b = st.columns(2)
+            with a:
+                layout = st.radio("Layout", ["pocket", "a4"], key="hb_layout",
+                                  format_func=lambda k: {"pocket": "Pocket booklet: 4 small pages per A4 sheet "
+                                                                   "(cut, stack and staple or ring)",
+                                                         "a4": "Full size: one page per A4 sheet "
+                                                               "(desk, wall or break space)"}[k])
+                cover_name = st.text_input("Name on the cover (printed only, not saved)", key="hb_cover")
+            with b:
+                titles = [p["title"] for p in data["pages"] if p.get("on", True)]
+                chosen = st.multiselect("Pages to print", titles, default=titles, key=f"hb_pick_{v}")
+            if st.button("Make the PDF", type="primary", key="hb_pdf"):
+                try:
+                    ss.hb_pdf = hb.build_pdf(data, layout=layout, name=cover_name.strip(), page_titles=chosen)
+                except Exception as exc:  # noqa: BLE001
+                    ss.hb_pdf = None
+                    st.error(f"Could not make the PDF: {exc}")
+            if ss.get("hb_pdf"):
+                st.download_button("⬇️ Download the helper book (PDF)", ss.hb_pdf,
+                                   file_name=f"helper_book_{h_student}_{layout}.pdf", mime="application/pdf")
+                st.caption("Print at 100% (actual size). For the pocket booklet, cut along the dashed lines, "
+                           "stack the pages in order (cover on top), then staple or use a ring. "
+                           "Laminating makes it last.")
 
 # ── Trial notes ──────────────────────────────────────────────────────────
 with tab_notes:
