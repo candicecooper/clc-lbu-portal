@@ -46,6 +46,27 @@ try:
 except Exception:
     _ARCHIVE_AVAILABLE = False
 
+
+def _student_archive_initials(student) -> str:
+    """The Document Archive / Student Register code for this student.
+
+    Students synced from the Student Register already carry their
+    register code verbatim in `name` (see archive_utils.sync_behaviour_create,
+    which sets name=first_name=the register code) — and that code can be
+    3-4 letters when a 2-letter clash was disambiguated (e.g. "LAB" so it
+    doesn't collide with an existing "LA"). Running an already-a-code name
+    like "LAB" back through initials_from_name() truncates it to the first
+    two characters ("LA"), silently filing documents under the WRONG/
+    colliding folder. Mirrors the same already-a-code vs. full-name check
+    archive_utils.import_from_smartar() uses: a short (2-4 char), single-
+    token, letters-only name is treated as a code and kept as-is; anything
+    else (a real "Firstname L." name, for legacy students entered directly
+    in this tool) still goes through initials_from_name() as before."""
+    raw = (student.get("name") or "").strip()
+    if raw and " " not in raw and raw.replace("-", "").isalpha() and 2 <= len(raw) <= 4:
+        return raw.upper()
+    return initials_from_name(raw) or ""
+
 # ══════════════════════════════════════════════════════════════════════════
 # SHARED GROQ HELPER
 # Model fallback chain (openai/gpt-oss-120b -> qwen/qwen3.6-27b ->
@@ -6645,7 +6666,7 @@ def render_transition_impact_section(student, full_df):
     except Exception:
         return  # Transition Timetables tool not deployed on this portal
 
-    ini = initials_from_name(student.get("name", ""))
+    ini = _student_archive_initials(student)
     if not ini:
         return
 
@@ -7253,7 +7274,7 @@ def generate_and_archive_behaviour_summary(student) -> bool:
             }
             return False
         _bs_date = datetime.now().strftime("%Y%m%d")
-        _bs_initials = initials_from_name(student.get("name", ""))
+        _bs_initials = _student_archive_initials(student)
         _bs_creator = (
             st.session_state.current_user.get("email")
             or st.session_state.current_user.get("name", "unknown")
@@ -10413,7 +10434,7 @@ def _render_student_analysis_page_inner():
             _bs_local_name = f"BehaviourSummary_{student['name'].replace(' ', '_')}_{_bs_date}.docx"
             _dl_kwargs = {}
             if _ARCHIVE_AVAILABLE:
-                _bs_initials = initials_from_name(student["name"])
+                _bs_initials = _student_archive_initials(student)
                 _bs_creator = (
                     st.session_state.current_user.get("email")
                     or st.session_state.current_user.get("name", "unknown")
