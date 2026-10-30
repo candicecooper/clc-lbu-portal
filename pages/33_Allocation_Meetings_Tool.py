@@ -431,25 +431,43 @@ def match_school(name, schools):
 
 
 def match_student(name, records):
-    """Match a name from a form to one of the allocated-student records."""
+    """Match a name from a form to one of the records. Forgiving about middle names,
+    'Surname, First' order, extra words and small spelling differences.
+    Returns (record or None, confident?)."""
     if not name:
         return None, False
-    def key(n):
-        n = _re.sub(r"[^a-z ,]", "", (n or "").lower()).strip()
+    def toks(n):
+        n = (n or "").lower()
         if "," in n:
-            last, first = [x.strip() for x in n.split(",", 1)]
+            last, first = n.split(",", 1)
             n = f"{first} {last}"
-        return _re.sub(r"\s+", " ", n)
-    target = key(name)
-    by_key = {}
+        n = _re.sub(r"[^a-z' \-]", " ", n).replace("-", " ")
+        return [t for t in n.split() if t not in ("mr", "ms", "miss", "student")]
+    tt = toks(name)
+    if not tt:
+        return None, False
+    scored = []
     for r in records:
-        by_key.setdefault(key(r.get("student_name")), []).append(r)
-    if target in by_key and len(by_key[target]) == 1:
-        return by_key[target][0], True
-    close = _difflib.get_close_matches(target, list(by_key.keys()), n=1, cutoff=0.8)
-    if close:
-        return by_key[close[0]][0], len(by_key[close[0]]) == 1
-    return None, False
+        rt = toks(r.get("student_name"))
+        if not rt:
+            continue
+        if rt == tt:
+            score = 1.0
+        elif set(tt) <= set(rt) or set(rt) <= set(tt):
+            score = 0.95
+        elif tt[0] == rt[0] and tt[-1] == rt[-1]:
+            score = 0.93
+        else:
+            score = _difflib.SequenceMatcher(None, " ".join(tt), " ".join(rt)).ratio()
+            if tt[-1] == rt[-1] and score < 0.8:   # same surname, similar first name
+                score = max(score, _difflib.SequenceMatcher(None, tt[0], rt[0]).ratio() * 0.9)
+        scored.append((score, r))
+    scored.sort(key=lambda x: -x[0])
+    if not scored or scored[0][0] < 0.75:
+        return None, False
+    top = scored[0][0]
+    ties = [r for sc, r in scored if sc >= top - 0.001]
+    return scored[0][1], (len(ties) == 1 and top >= 0.9)
 
 
 def _first_checked(cell, labels):
@@ -1589,13 +1607,24 @@ with tab2:
                                 ext_pf = st.session_state["ext_prefill"]
                                 st.success("Form filled in below — please check it before saving.")
                                 if not label_:
-                                    already = match_student(ext_parsed.get("student_name"), allocated_data)[0]
-                                    if already:
-                                        st.warning(f"'{ext_parsed.get('student_name')}' is already allocated but has a request waiting "
-                                                   "for a decision (see Extension Decision), so they aren't in this list.")
+                                    fn_ = ext_parsed.get("student_name") or "the student"
+                                    anyrec = match_student(ext_parsed.get("student_name"), all_students.data)[0]
+                                    if not ext_parsed.get("student_name"):
+                                        st.warning("No student name was found on the form — please choose the student from the list.")
+                                    elif not anyrec:
+                                        st.warning(f"I read the name as '{fn_}', but nobody in the database is close to that. "
+                                                   "Please choose the student from the list (the name on the form may be spelled differently).")
+                                    elif str(anyrec.get("outcome", "")).strip().lower() != "allocated":
+                                        st.warning(f"Found '{anyrec.get('student_name')}' but their outcome is "
+                                                   f"'{anyrec.get('outcome') or 'not yet decided'}', not Allocated, so they can't have an extension.")
+                                    elif str(anyrec.get("current_status", "")).strip().lower() == "inactive":
+                                        st.warning(f"Found '{anyrec.get('student_name')}' but their Current Status is Inactive, "
+                                                   "so they're not in the active list.")
+                                    elif _has_pending_request(anyrec):
+                                        st.warning(f"'{anyrec.get('student_name')}' already has a request waiting for a decision "
+                                                   "(see Extension Decision), so they aren't in this list.")
                                     else:
-                                        st.warning(f"Couldn't match '{ext_parsed.get('student_name') or 'the student'}' to an active "
-                                                   "allocated student — please choose them from the list.")
+                                        st.warning(f"Found '{anyrec.get('student_name')}' but couldn't place them in the list — please choose them.")
                                 elif not matched_ok:
                                     st.warning("Student matched on a close name — please confirm it's the right one.")
                                 if not ext_parsed.get("weeks"):
