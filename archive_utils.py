@@ -364,6 +364,22 @@ def rename_student(old_initials: str, new_initials: str) -> int:
         return 0
 
 
+def move_document(record_id: str, new_initials: str) -> bool:
+    """Move exactly ONE archived document to a different student's folder
+    — for splitting two different students who ended up sharing the same
+    initials (unlike rename_student(), which moves every record under the
+    old initials and would move both students' documents together)."""
+    try:
+        client = _get_client()
+        client.table(TABLE).update(
+            {"student_initials": new_initials.strip().upper()}
+        ).eq("id", record_id).execute()
+        return True
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Could not move document: {exc}")
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Behaviour Support tool sync (its `students` table, same project)
 # ---------------------------------------------------------------------------
@@ -689,8 +705,11 @@ def register_student(
     created_by: str = "unknown",
 ) -> dict | None:
     """Add a student on arrival, identified by INITIALS + PROGRAM only
-    (no names are stored anywhere). Refuses a duplicate of an ACTIVE
-    student's initials so folders never collide."""
+    (no names are stored anywhere). Refuses a duplicate of ANY existing
+    student's initials — active OR archived — so folders never collide.
+    (Archived students' document-archive folders and SMARTAR/Behaviour
+    history are retained permanently, so a reused code would still
+    merge a new student's records into a departed student's old ones.)"""
     try:
         client = _get_client()
         ini = re.sub(r"[^A-Za-z0-9]", "", (initials or "")).upper()
@@ -698,12 +717,16 @@ def register_student(
             st.error("Initials are required (at least 2 letters, e.g. JT).")
             return None
 
-        active = fetch_register("active")
-        if any(s["initials"] == ini for s in active):
+        existing_all = fetch_register(None)  # active AND archived
+        clash = next((s for s in existing_all if s["initials"] == ini), None)
+        if clash:
+            status_word = "an active" if clash.get("status") == "active" else "a former"
             st.error(
-                f"Initials **{ini}** are already used by an active student. "
-                "Add a third letter to make them unique (e.g. first two "
-                "letters of the surname)."
+                f"Initials **{ini}** were already used by {status_word} student "
+                "(their SMARTAR goals, behaviour records, and Document Archive "
+                "folder are kept permanently under that code, so reusing it would "
+                "merge a new student's records into theirs). Add a third letter "
+                "to make them unique (e.g. first two letters of the surname)."
             )
             return None
 
