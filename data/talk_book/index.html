@@ -147,6 +147,18 @@ body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset
 @media (prefers-reduced-motion:reduce){.tile{transition:none}.tile:active{transform:none}}
 html,body{height:auto!important}
 .app{min-height:0!important}
+[hidden]{display:none!important}
+.hb-tabs{display:flex;flex-wrap:wrap;gap:8px;padding-block:0 10px}
+.hb-tab{border:3px solid transparent;border-radius:12px;padding:10px 16px;font-weight:700;font-size:17px;cursor:pointer;color:#17202b;box-shadow:var(--shadow)}
+.hb-tab[aria-current="true"]{border-color:var(--ink);transform:translateY(-1px)}
+.hb-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;padding:14px;border-radius:16px;border:4px solid var(--hb,#c4c9cf);background:var(--board-2)}
+.hb-sq{background:var(--tile);border:3px solid var(--hb,#c4c9cf);border-radius:14px;min-height:190px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:10px;cursor:pointer;box-shadow:var(--shadow);font:inherit;color:var(--ink)}
+.hb-sq:active{transform:scale(.97)}
+.hb-sq img{max-height:120px;max-width:90%;object-fit:contain;background:#fff;border-radius:8px;padding:3px}
+.hb-sq .hi{font-size:72px;line-height:1}
+.hb-sq .hl{font-size:21px;font-weight:700;line-height:1.15;text-align:center}
+.hb-nav{display:flex;justify-content:space-between;gap:10px;padding-block:12px 0}
+@media (max-width:640px){.hb-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:8px}.hb-sq{min-height:150px}.hb-sq img{max-height:84px}.hb-sq .hl{font-size:17px}.hb-tab{font-size:15px;padding:8px 12px}}
 .who{background:var(--chip);border-radius:999px;padding:4px 12px;font-size:13px;font-weight:700}
 .who.log{background:#1f7a4d;color:#fff}
 .scrim{align-items:flex-start!important}
@@ -336,6 +348,8 @@ const save=()=>{
 window.addEventListener('message',ev=>{
   const d=ev.data; if(!d||d.type!=='streamlit:render') return;
   const a=d.args||{}; const first=!SL.live; SL.live=true; SL.args=a;
+  const hrev=a.helper?(a.helper_rev||JSON.stringify(a.helper).length):'';
+  if(hrev!==SL.hrev){SL.hrev=hrev; HELPER=a.helper||null; SL.sig=null}
   const ack=(a.acks||{})[INST]||{};
   if(ack.seq!=null) SL.events=SL.events.filter(e=>e.seq>ack.seq);
   if(ack.save!=null&&SL.pendingSave&&SL.pendingSave.seq<=ack.save){SL.pendingSave=null;toast('Saved to the portal')}
@@ -383,6 +397,7 @@ const spoken = l => l.replace(/\(.*?\)/g,'').split(/,| \/ /)[0].replace(/\.\.\.|
 
 /* ---------- message strip ---------- */
 let MSG=[];
+let HELPER=null, hcur=0;
 function renderMsg(){
   const m=$('#msg'); m.replaceChildren();
   MSG.forEach(w=>{
@@ -391,9 +406,9 @@ function renderMsg(){
   });
   m.scrollLeft=m.scrollWidth;
 }
-const secOf=()=>BOOK[cur]?BOOK[cur].title:listOf(cur).title;
-function addWord(t){MSG.push({label:t.label,icon:t.icon,img:t.img,say:t.say||spoken(t.label)});renderMsg();if(S.settings.speakTap)say(t.say||spoken(t.label));logEvent('word',{w:t.label,p:cur,c:secOf()})}
-function sayAll(){const s=sentence();if(!s)return;say(s);logEvent('say',{w:s,p:cur,c:secOf()})}
+const secOf=()=>HELPER?('Helper: '+((HELPER.pages[hcur]||{}).title||'')):(BOOK[cur]?BOOK[cur].title:listOf(cur).title);
+function addWord(t){MSG.push({label:t.label,icon:t.icon,img:t.img,say:t.say||spoken(t.label)});renderMsg();if(S.settings.speakTap)say(t.say||spoken(t.label));logEvent('word',{w:t.label,p:HELPER?('H'+(hcur+1)):cur,c:secOf()})}
+function sayAll(){const s=sentence();if(!s)return;say(s);logEvent('say',{w:s,p:HELPER?('H'+(hcur+1)):cur,c:secOf()})}
 const sentence=()=>MSG.map(w=>w.spell?w.label.toLowerCase():w.say).join(' ');
 $('#sayBtn').onclick=sayAll;
 $('#msg').onclick=sayAll;
@@ -438,6 +453,8 @@ function navCol(id,back){
   return col;
 }
 function render(){
+  ['#homeBtn','#catBtn','#idxBtn','#editBtn'].forEach(s=>{const b=$(s);if(b)b.hidden=!!HELPER});
+  if(HELPER){renderHelper();return}
   document.body.classList.toggle('editing',editing);
   const id=cur, isList=/L$/.test(id) && !BOOK[id], c=catOf(id);
   const title=isList?listOf(id).title:BOOK[id].title;
@@ -456,6 +473,24 @@ function render(){
   if(p.stub && ![...Array(12).keys()].some(i=>tileAt(id,i))){
     board.append(el('div',{class:'note'},el('b',{},'This page is empty. '),'It was linked from the paper book but not in the pages provided. Turn on ',el('b',{},'Edit book'),' and tap a square to add words and pictures.'));
   }
+}
+function renderHelper(){
+  editing=false; document.body.classList.remove('editing');
+  const pages=HELPER.pages||[]; if(hcur>=pages.length) hcur=0; const pg=pages[hcur]||{title:'',squares:[],colour:'#c4c9cf'};
+  const head=$('#head'); head.replaceChildren(
+    el('div',{class:'tab',style:'background:#1A7A7A;color:#fff'},el('span',{},HELPER.title||'My Helper Book')),
+    ...(SL.live?[el('span',{class:'who'+(SL.args.logging&&SL.student?' log':'')},SL.student?(SL.student+(SL.args.logging?' · logging words':' · not logging')):'Preview')]:[]));
+  const board=$('#board'); board.replaceChildren(); board.className='';
+  const tabs=el('div',{class:'hb-tabs',role:'tablist'});
+  pages.forEach((p,i)=>tabs.append(el('button',{type:'button',class:'hb-tab',role:'tab','aria-current':i===hcur?'true':'false',style:'background:'+p.colour,onclick:()=>{hcur=i;render()}},p.title)));
+  const grid=el('div',{class:'hb-grid',style:'--hb:'+pg.colour});
+  (pg.squares||[]).forEach(s=>grid.append(el('button',{type:'button',class:'hb-sq',onclick:()=>addWord({label:s.label,img:s.img,icon:s.icon,say:s.say})},
+     s.img?el('img',{src:s.img,alt:''}):el('span',{class:'hi','aria-hidden':'true'},s.icon||''), el('span',{class:'hl'},s.label))));
+  if(!(pg.squares||[]).length) grid.append(el('div',{class:'note'},'This page has no squares yet. Add some in Set up.'));
+  const nav=el('div',{class:'hb-nav'},
+    el('button',{type:'button',class:'tbtn',disabled:hcur===0,onclick:()=>{hcur=Math.max(0,hcur-1);render()}},'◀ Back'),
+    el('button',{type:'button',class:'tbtn',disabled:hcur>=pages.length-1,onclick:()=>{hcur=Math.min(pages.length-1,hcur+1);render()}},'Next ▶'));
+  board.append(tabs,grid,nav);
 }
 function renderList(id){
   const base=listOf(id); const groups=(S.lists[id]||base.groups).map(g=>[g[0],[...g[1]]]);
