@@ -454,14 +454,14 @@ with tab_helper:
             with b:
                 titles = [p["title"] for p in data["pages"] if p.get("on", True)]
                 chosen = st.multiselect("Pages to print", titles, default=titles, key=f"hb_pick_{v}")
-            if st.button("Make the PDF", type="primary", key="hb_pdf"):
+            if st.button("Make the PDF", type="primary", key="hb_make_pdf_btn"):
                 try:
-                    ss.hb_pdf = hb.build_pdf(data, layout=layout, name=cover_name.strip(), page_titles=chosen)
+                    ss.hb_pdf_bytes = hb.build_pdf(data, layout=layout, name=cover_name.strip(), page_titles=chosen)
                 except Exception as exc:  # noqa: BLE001
-                    ss.hb_pdf = None
+                    ss.hb_pdf_bytes = None
                     st.error(f"Could not make the PDF: {exc}")
-            if ss.get("hb_pdf"):
-                st.download_button("⬇️ Download the helper book (PDF)", ss.hb_pdf,
+            if ss.get("hb_pdf_bytes"):
+                st.download_button("⬇️ Download the helper book (PDF)", ss.hb_pdf_bytes,
                                    file_name=f"helper_book_{h_student}_{layout}.pdf", mime="application/pdf")
                 st.caption("Print at 100% (actual size). For the pocket booklet, cut along the dashed lines, "
                            "stack the pages in order (cover on top), then staple or use a ring. "
