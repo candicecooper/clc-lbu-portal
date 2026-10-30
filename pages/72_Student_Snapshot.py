@@ -118,6 +118,19 @@ TODAY = datetime.now(ADELAIDE_TZ).date()
 st.markdown(f"""
 <style>
   .block-container {{ padding-top: 1.4rem; }}
+  /* The portal's .streamlit/config.toml uses a dark theme (white text) while
+     theme.py paints the page light — so give this page dark text explicitly. */
+  [data-testid="stMain"] {{ color:#1f2d2d; }}
+  [data-testid="stMain"] h4, [data-testid="stMain"] h5 {{ color:#1a2e2e !important; }}
+  [data-testid="stMain"] [data-testid="stCaptionContainer"],
+  [data-testid="stMain"] [data-testid="stCaptionContainer"] * {{ color:#5a6b6b !important; }}
+  [data-testid="stMain"] [data-testid="stExpander"] summary,
+  [data-testid="stMain"] [data-testid="stExpander"] summary * {{ color:#1f2d2d !important; }}
+  [data-testid="stMain"] [data-testid="stExpander"] details {{ background:#fff; }}
+  [data-testid="stMain"] [data-testid="stMetricDelta"] {{ font-weight:600; }}
+  [data-testid="stMain"] [data-testid="stWidgetLabel"] p {{ color:#2d4a4a; }}
+  [data-testid="stMain"] [data-testid="stAlert"] [data-testid="stMarkdownContainer"],
+  [data-testid="stMain"] [data-testid="stAlert"] [data-testid="stMarkdownContainer"] * {{ color:#1f2d2d !important; }}
   .snap-head {{
       background: linear-gradient(135deg, {TEAL} 0%, #145f5f 100%);
       color: white; border-radius: 12px; padding: 1rem 1.3rem; margin: .4rem 0 1rem;
@@ -229,7 +242,7 @@ st.markdown(f"""
   .ov-trial {{ font-size:.78rem; margin:.2rem 0; }}
   .ov-2col {{ display:grid; grid-template-columns:1fr 1fr; gap:.2rem 1rem; }}
   .ov-wotgrid {{ display:grid; grid-template-columns:1fr 1fr; gap:0 .5rem; }}
-  .ov-tt {{ width:100%; border-collapse:separate; border-spacing:4px; margin:.35rem 0 .2rem;
+  .ov-tt {{ width:100%; border-collapse:separate !important; border-spacing:4px !important; margin:.35rem 0 .2rem;
             table-layout:fixed; font-size:.8rem; }}
   .ov-tt th {{ font-size:.72rem; font-weight:700; text-transform:uppercase; letter-spacing:.05em;
                padding:0 0 .1rem; text-align:center; border:none; background:none; color:#fff; }}
@@ -239,7 +252,8 @@ st.markdown(f"""
                           text-transform:uppercase; background:#fff; color:#8f5205; border-radius:999px;
                           padding:.05rem .4rem; }}
   .ov-tt td {{ border-radius:7px; padding:.4rem .45rem; text-align:center; line-height:1.3;
-               vertical-align:top; border:none; }}
+               vertical-align:top; border:none !important; }}
+  .ov-tt, .ov-tt tr, .ov-tt th {{ border:none !important; background:none; }}
   .ov-tt td .ov-date {{ font-size:.68rem; font-weight:700; opacity:.75; margin-bottom:.15rem; }}
   .ov-tt td .ov-dn {{ display:none; }}
   .ov-c-clc {{ background:#fff; color:#5a3a06; }}
@@ -247,9 +261,14 @@ st.markdown(f"""
   .ov-c-other {{ background:#3C4C6B; color:#fff; font-weight:600; }}
   .ov-c-none {{ background:rgba(0,0,0,.14); color:rgba(255,255,255,.8); }}
   .ov-curwk th.ov-wk {{ color:#fff; }}
+  .tt-light .ov-tt th {{ color:#1f2d2d; }}
+  .tt-light .ov-tt th.ov-wk span {{ background:{AMBER}; color:#fff; }}
+  .tt-light .ov-c-clc {{ background:#e8f2f2; color:#1f2d2d; }}
+  .tt-light .ov-c-none {{ background:#eef0f0; color:#8a9a9a; }}
   .ov-ttfoot {{ font-size:.8rem; margin:.35rem 0 0; opacity:.95; }}
   .ov-tt td.ov-today {{ outline:3px solid #1f2d2d; outline-offset:-1px; }}
-  @media (max-width: 1100px) {{ .ov-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
+  @media (max-width: 1100px) {{ .ov-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+                                .ov-tile[style*="span 3"], .ov-tile[style*="span 4"] {{ grid-column: span 2 !important; }} }}
   @media (max-width: 640px) {{ .ov-grid {{ grid-template-columns: 1fr; }}
                                .ov-2col, .ov-wotgrid {{ grid-template-columns: 1fr; }}
                                .ov-tt, .ov-tt tbody, .ov-tt tr, .ov-tt td, .ov-tt th {{ display:block !important; width:100% !important; box-sizing:border-box; }}
@@ -1054,14 +1073,6 @@ def tt_status(tt: dict) -> str:
     return str(tt.get("status") or "—").title()
 
 
-def week_counts(week: dict) -> dict:
-    if tu is not None:
-        return tu.week_summary(week)
-    out = Counter(d.get("loc") for d in week.get("days", []))
-    return {"At CLC": out.get("CLC", 0), "Home school – part day": out.get("HOME", 0),
-            "Home school – full day": 0, "Other": out.get("OTHER", 0)}
-
-
 def day_text(day: dict, home_short: str) -> str:
     if tu is not None:
         return tu.short_day_text(day, home_short or "Home school")
@@ -1111,8 +1122,9 @@ def render_wot(zones: dict, draft: bool = False, limit: int = 6):
 
 def plot_layout(fig, height=300):
     fig.update_layout(
-        height=height, margin=dict(l=10, r=10, t=30, b=10),
-        plot_bgcolor="white", paper_bgcolor="white",
+        height=height, margin=dict(l=10, r=10, t=36, b=36),
+        plot_bgcolor="white", paper_bgcolor="white", font_color="#1f2d2d",
+        title_font_color="#1f2d2d", hoverlabel=dict(bgcolor="white", font_color="#1f2d2d"),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
         font=dict(size=12),
     )
@@ -1256,18 +1268,22 @@ def build_summary_docx(stu: dict, period_lbl: str, start: date, end: date,
             f"Last CLC day: {_fmt(tu.last_clc_day(weeks), True) if (tu and weeks) else '—'}"
         )
         if weeks:
-            t = doc.add_table(rows=1, cols=5)
+            short = view.get("home_school_short") or (tu.school_short_name(view.get("home_school") or "") if tu else "")
+            t = doc.add_table(rows=1, cols=6)
             t.style = "Light Grid Accent 1"
-            for c, txt in zip(t.rows[0].cells, ["Week", "At CLC", "Home – part", "Home – full", "Other"]):
+            for c, txt in zip(t.rows[0].cells, ["", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]):
                 c.text = txt
             for w in weeks:
-                wc = week_counts(w)
+                try:
+                    mon = tu.week_monday(w["year"], w["term"], w["week"])
+                except Exception:
+                    mon = _d((w.get("days") or [{}])[0].get("date"))
                 r = t.add_row().cells
-                r[0].text = f"T{w['term']} W{w['week']} {w['year']}"
-                r[1].text = str(wc["At CLC"])
-                r[2].text = str(wc["Home school – part day"])
-                r[3].text = str(wc["Home school – full day"])
-                r[4].text = str(wc["Other"])
+                r[0].text = f"Term: {w['term']}\nWeek: {w['week']}"
+                for k in range(5):
+                    day = (w.get("days") or [])[k] if k < len(w.get("days") or []) else {}
+                    lines = [ln for ln in (tu.doc_day_text(day, stu["initials"], short) if (tu and day) else []) if ln]
+                    r[k + 1].text = "\n".join([f"Date: {mon + timedelta(days=k):%d/%m}"] + lines) if mon else "\n".join(lines)
 
     doc.add_paragraph()
     p = doc.add_paragraph("Initials only — no names, EDID or DOB. Generated from the CLC-LBU portal.")
@@ -1503,7 +1519,7 @@ def hbar(counter: Counter, title: str, colour: str, n: int = 6):
                          hovertemplate="%{y}: %{x}<extra></extra>"))
     f.update_layout(title=dict(text=title, font=dict(size=14)), showlegend=False)
     f.update_xaxes(visible=False)
-    st.plotly_chart(plot_layout(f, 60 + 34 * len(items)), use_container_width=True)
+    st.plotly_chart(theme=None, figure_or_data=plot_layout(f, 60 + 34 * len(items)), use_container_width=True)
 
 
 def period_summary_text() -> str:
@@ -1613,7 +1629,9 @@ OV_THEME = {
 
 def _ov_tile(key: str, icon: str, label: str, big: str = "", body: str = "",
              chips: list[tuple[str, str]] | None = None, span: int = 1, tab: str = "",
-             empty: bool = False, more: str = "") -> str:
+             empty: bool = False, more: str = "") -> dict:
+    """Returns {"html", "span", "empty", "label"} — the span is filled in by
+    layout_tiles() once empty tiles have been dropped."""
     c1, c2 = OV_THEME["empty" if empty else key]
     chip_html = "".join(
         f'<span class="ov-chip ov-{kind}">{_esc(txt)}</span>' for txt, kind in (chips or []) if txt)
@@ -1621,8 +1639,8 @@ def _ov_tile(key: str, icon: str, label: str, big: str = "", body: str = "",
                  f'<div class="ov-more-body">{more}</div></details>') if more else ""
     click = (f' data-tab="{_esc(tab)}" role="button" tabindex="0" '
              f'title="Open the {_esc(tab)} tab"') if tab else ""
-    return (
-        f'<div class="ov-tile{" ov-click" if tab else ""}"{click} style="grid-column:span {span};'
+    html = (
+        f'<div class="ov-tile{" ov-click" if tab else ""}"{click} style="grid-column:span __SPAN__;'
         f'background:linear-gradient(135deg,{c1} 0%,{c2} 100%)">'
         f'<div class="ov-top"><span class="ov-ico">{icon}</span><span class="ov-lbl">{_esc(label)}</span>'
         f'{f"<span class=ov-tab>Open {_esc(tab)} ›</span>" if tab else ""}</div>'
@@ -1630,6 +1648,33 @@ def _ov_tile(key: str, icon: str, label: str, big: str = "", body: str = "",
         f'<div class="ov-body">{body}</div>{more_html}'
         f'{f"<div class=ov-chips>{chip_html}</div>" if chip_html else ""}</div>'
     )
+    return {"html": html, "span": span, "empty": empty, "label": label}
+
+
+def layout_tiles(tiles: list[dict], cols: int = 4) -> str:
+    """Pack tiles into rows of `cols`, in order. When a tile won't fit, the
+    row is closed and its tiles are widened so every row fills edge to edge
+    (no gaps left by tiles that were hidden)."""
+    rows, row, used = [], [], 0
+    for t in tiles:
+        sp = min(t["span"], cols)
+        if used + sp > cols:
+            rows.append(row)
+            row, used = [], 0
+        row.append(dict(t, span=sp))
+        used += sp
+    if row:
+        rows.append(row)
+    out = []
+    for row in rows:
+        extra = cols - sum(t["span"] for t in row)
+        i = 0
+        while extra > 0:          # share the spare columns out, first tile first
+            row[i % len(row)]["span"] += 1
+            extra -= 1
+            i += 1
+        out += [t["html"].replace("__SPAN__", str(t["span"])) for t in row]
+    return "".join(out)
 
 
 def _ul_all(items) -> str:
@@ -1653,11 +1698,45 @@ def _review_chip(review) -> tuple[str, str]:
     return (txt.replace("Review overdue — was due", "Review overdue ·"), kind)
 
 
+def printed_timetable_html(wks: list[dict], short: str) -> str:
+    """The transition timetable with the SAME day wording as the printed
+    Word timetable (transition_utils.doc_day_text), initials for the name."""
+    this_mon = _monday(TODAY)
+    rows = ""
+    for w in wks:
+        try:
+            mon = tu.week_monday(w["year"], w["term"], w["week"]) if tu else _d(w["days"][0]["date"])
+        except Exception:
+            mon = _d((w.get("days") or [{}])[0].get("date"))
+        if not mon:
+            continue
+        cur = " ov-curwk" if mon == this_mon else ""
+        cells = ""
+        for k in range(5):
+            day = (w.get("days") or [])[k] if k < len(w.get("days") or []) else {}
+            d = mon + timedelta(days=k)
+            lines = tu.doc_day_text(day, ini, short) if (tu and day) else [""]
+            lines = [ln for ln in lines if ln]
+            loc = day.get("loc") or ""
+            cls = {"CLC": "clc", "HOME": "home", "OTHER": "other"}.get(loc, "none")
+            today = " ov-today" if d == TODAY else ""
+            txt = "".join(f"<div>{_esc(ln)}</div>" for ln in lines) or "<div class='ov-blank'>&nbsp;</div>"
+            cells += (f'<td class="ov-c-{cls}{today}">'
+                      f'<div class="ov-date"><span class="ov-dn">{DAY_NAMES[k]} </span>'
+                      f'Date: {d:%d/%m}</div>{txt}</td>')
+        rows += (f'<tr class="ov-wkrow{cur}"><th class="ov-wk">Term: {_esc(w.get("term"))}<br>'
+                 f'Week: {_esc(w.get("week"))}{"<span>this week</span>" if cur else ""}</th>{cells}</tr>')
+    if not rows:
+        return ""
+    head = "".join(f"<th>{d}</th>" for d in DAY_NAMES)
+    return f'<table class="ov-tt"><tr class="ov-head"><th></th>{head}</tr>{rows}</table>'
+
+
 def render_overview():
     tiles = []
 
-    # 1 ── Behaviour summary (wide)
-    if beh["student_ids"]:
+    # 1 ── Behaviour summary (wide) — hidden only if no incident has ever been logged
+    if beh["student_ids"] and (beh["incidents"] or beh["critical"]):
         sents = re.split(r"(?<=\.)\s+", redact(period_summary_text()))
         arrow = "▲" if delta > 0 else "▼" if delta < 0 else "="
         tiles.append(_ov_tile(
@@ -1779,34 +1858,7 @@ def render_overview():
         wks = tt_weeks(v)
         short = v.get("home_school_short") or (tu.school_short_name(v.get("home_school") or "") if tu else "")
         this_mon = _monday(TODAY)
-        rows = ""
-        for w in wks:
-            try:
-                mon = tu.week_monday(w["year"], w["term"], w["week"]) if tu else _d(w["days"][0]["date"])
-            except Exception:
-                mon = _d((w.get("days") or [{}])[0].get("date"))
-            if not mon:
-                continue
-            cur = " ov-curwk" if mon == this_mon else ""
-            cells = ""
-            for k in range(5):
-                day = (w.get("days") or [{}] * 5)[k] if k < len(w.get("days") or []) else {}
-                d = mon + timedelta(days=k)
-                lines = tu.doc_day_text(day, ini, short) if (tu and day) else [""]
-                lines = [ln for ln in lines if ln]
-                loc = day.get("loc") or ""
-                cls = {"CLC": "clc", "HOME": "home", "OTHER": "other"}.get(loc, "none")
-                today = " ov-today" if d == TODAY else ""
-                txt = "".join(f"<div>{_esc(ln)}</div>" for ln in lines) or "<div class='ov-blank'>&nbsp;</div>"
-                cells += (f'<td class="ov-c-{cls}{today}">'
-                          f'<div class="ov-date"><span class="ov-dn">{DAY_NAMES[k]} </span>'
-                          f'Date: {d:%d/%m}</div>{txt}</td>')
-            rows += (f'<tr class="ov-wkrow{cur}"><th class="ov-wk">Term: {_esc(w.get("term"))}<br>'
-                     f'Week: {_esc(w.get("week"))}{"<span>this week</span>" if cur else ""}</th>{cells}</tr>')
-        table = ""
-        if rows:
-            head = "".join(f"<th>{d}</th>" for d in DAY_NAMES)
-            table = f'<table class="ov-tt"><tr class="ov-head"><th></th>{head}</tr>{rows}</table>'
+        table = printed_timetable_html(wks, short)
         rec = _d(v.get("recommencement_date"))
         foot = []
         if v.get("home_school"):
@@ -1912,10 +1964,14 @@ def render_overview():
         tiles.append(_ov_tile("trials", "🧪", "Strategy trials", body="<p>None yet.</p>",
                               tab="Profile", empty=True))
 
-    # Order so every row fills: [summary|hyp] [about|goals|sensory|trials] [transition] [WoT|plan] [safety]
+    # Display order (tiles with nothing recorded are left out; layout_tiles fills each row)
     order = [0, 1, 2, 3, 8, 9, 5, 4, 6, 7]
     tiles = [tiles[i] for i in order]
-    st.markdown('<div class="ov-grid">' + "".join(tiles) + "</div>", unsafe_allow_html=True)
+    shown = [t for t in tiles if not t["empty"]]
+    if shown:
+        st.markdown('<div class="ov-grid">' + layout_tiles(shown) + "</div>", unsafe_allow_html=True)
+    else:
+        st.info(f"Nothing has been recorded for {ini} in the portal tools yet.")
 
 
 with overview_box:
@@ -2117,7 +2173,7 @@ with tab_g:
                           annotation_text="60%", annotation_position="right")
             fig.update_yaxes(range=[0, 105], ticksuffix="%")
             fig.update_layout(title=dict(text="Sessions at Expected or better, by week", font=dict(size=14)))
-            st.plotly_chart(plot_layout(fig, 300), use_container_width=True)
+            st.plotly_chart(theme=None, figure_or_data=plot_layout(fig, 300), use_container_width=True)
         else:
             st.info("No goal tracking recorded in this period.")
 
@@ -2227,7 +2283,7 @@ with tab_b:
             fig.update_layout(barmode="stack",
                               title=dict(text="Incidents by week", font=dict(size=14)))
             fig.update_xaxes(tickformat="%-d %b")
-            st.plotly_chart(plot_layout(fig, 280), use_container_width=True)
+            st.plotly_chart(theme=None, figure_or_data=plot_layout(fig, 280), use_container_width=True)
 
             g1, g2 = st.columns(2)
             with g1:
@@ -2248,7 +2304,7 @@ with tab_b:
                     sf.update_xaxes(tickformat="%-d %b")
                     sf.update_layout(title=dict(text="Average severity by week", font=dict(size=14)),
                                      showlegend=False)
-                    st.plotly_chart(plot_layout(sf, 260), use_container_width=True)
+                    st.plotly_chart(theme=None, figure_or_data=plot_layout(sf, 260), use_container_width=True)
 
             # When — session × day heat strip
             z = [[sum(1 for i in bs["inc"]
@@ -2263,7 +2319,7 @@ with tab_b:
             ))
             hm.update_yaxes(autorange="reversed")
             hm.update_layout(title=dict(text="When incidents happen (session × day)", font=dict(size=14)))
-            st.plotly_chart(plot_layout(hm, 230), use_container_width=True)
+            st.plotly_chart(theme=None, figure_or_data=plot_layout(hm, 230), use_container_width=True)
         else:
             st.success("No incidents recorded in this period.")
 
@@ -2340,53 +2396,11 @@ with tab_t:
             st.markdown(f"<span class='muted'>📝 {_esc(view['notes'])}</span>", unsafe_allow_html=True)
 
         if weeks:
-            # Step-down chart
-            labels_w = [f"T{w['term']} W{w['week']}" for w in weeks]
-            wc = [week_counts(w) for w in weeks]
-            fig = go.Figure()
-            for key, colour in (("At CLC", TEAL), ("Home school – part day", "#e8a54b"),
-                                ("Home school – full day", GREEN), ("Other", "#9aa9a9")):
-                vals = [c[key] for c in wc]
-                if any(vals):
-                    fig.add_bar(x=labels_w, y=vals, name=key, marker_color=colour)
-            fig.update_layout(barmode="stack",
-                              title=dict(text="Step-down: days per week", font=dict(size=14)))
-            fig.update_yaxes(range=[0, 5], dtick=1)
-            st.plotly_chart(plot_layout(fig, 260), use_container_width=True)
-
-            # This week + next week
-            this_mon = _monday(TODAY)
-            next_mon = this_mon + timedelta(days=7)
-            for title, mon in (("This week", this_mon), ("Next week", next_mon)):
-                days = [tu.day_for(weeks, mon + timedelta(days=i)) if tu else None for i in range(5)]
-                if not any(days):
-                    continue
-                st.markdown(f"**{title}** — week of {_fmt(mon, True)}")
-                cols = st.columns(5)
-                for i, d in enumerate(days):
-                    dd = mon + timedelta(days=i)
-                    if not d:
-                        bg, txt = "#f4f8f8", "—"
-                    else:
-                        loc = d.get("loc")
-                        bg = TEAL_LIGHT if loc == "CLC" else AMBER_LIGHT if loc == "HOME" else "#eef0f0"
-                        txt = _esc(day_text(d, home_short))
-                    border = f"2px solid {TEAL}" if dd == TODAY else "1px solid #d6e4e4"
-                    cols[i].markdown(
-                        f'<div class="day-cell" style="background:{bg};border:{border}">'
-                        f'<div class="dn">{dd:%a %-d}</div>{txt}</div>',
-                        unsafe_allow_html=True,
-                    )
-
-            with st.expander("Full timetable, week by week"):
-                rows = []
-                for w in weeks:
-                    row = {"Week": f"T{w['term']} W{w['week']} {w['year']}"}
-                    for d in w.get("days", []):
-                        dd = _d(d.get("date"))
-                        row[dd.strftime("%a") if dd else "?"] = day_text(d, home_short)
-                    rows.append(row)
-                st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+            st.markdown(f'<div class="tt-light">{printed_timetable_html(weeks, home_short)}</div>',
+                        unsafe_allow_html=True)
+            st.caption("Same wording as the printed transition timetable (initials in place of the name).")
+        else:
+            st.info("No weeks have been entered on this timetable yet.")
 
         if len(tr["timetables"]) > 1:
             st.caption(f"{len(tr['timetables'])} timetables on file for {ini}; showing the most current.")
