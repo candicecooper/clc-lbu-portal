@@ -41,7 +41,7 @@ def init_supabase() -> Client:
 supabase: Client = init_supabase()
 
 try:
-    from archive_utils import archive_once, initials_from_name
+    from archive_utils import archive_once, archive_document, initials_from_name
     _ARCHIVE_AVAILABLE = True
 except Exception:
     _ARCHIVE_AVAILABLE = False
@@ -7213,9 +7213,20 @@ def generate_and_archive_behaviour_summary(student) -> bool:
     it straight to the Document Archive. Called when a student is archived
     in this tool, so their behaviour documentation always lands in the
     Document Archive at that moment — matching how the Communication Log
-    already auto-exports on student archive. Never raises: on any failure
-    it shows a warning (the student archive itself has already happened
-    by the time this runs) and returns False."""
+    already auto-exports on student archive.
+
+    Does NOT call archive_once() — that helper only sets a session flag
+    and toasts on success, it never tells the caller whether the archive
+    actually happened, which previously let this function report success
+    even when archive_document() had failed. Calls archive_document()
+    directly instead and only reports success when it actually returns an
+    inserted record. The result is queued as a one-shot banner
+    (`st.session_state["_archive_notice"]`) rendered in main() on the next
+    run, since every call site here does `st.rerun()` immediately after —
+    a message shown before that rerun would otherwise just flash and
+    vanish. Never raises: on any failure the student archive itself has
+    already happened by the time this runs, so it only queues a warning
+    and returns False."""
     if not _ARCHIVE_AVAILABLE:
         return False
     student_id = student.get("id")
@@ -7235,6 +7246,11 @@ def generate_and_archive_behaviour_summary(student) -> bool:
             supports_trialled=_supports_trialled, supports_success=_supports_success,
             before_after=_before_after)
         if not docx_file:
+            st.session_state["_archive_notice"] = {
+                "kind": "warning",
+                "msg": "The student was archived, but the Behaviour Summary document "
+                       "couldn't be generated, so nothing was saved to the Document Archive.",
+            }
             return False
         _bs_date = datetime.now().strftime("%Y%m%d")
         _bs_initials = initials_from_name(student.get("name", ""))
@@ -7242,8 +7258,10 @@ def generate_and_archive_behaviour_summary(student) -> bool:
             st.session_state.current_user.get("email")
             or st.session_state.current_user.get("name", "unknown")
         ) if st.session_state.get("current_user") else "unknown"
-        archive_once(
-            guard_key=f"behreport_archive_{student_id}_{_bs_date}",
+        _guard_flag = f"_archived_behreport_archive_{student_id}_{_bs_date}"
+        if st.session_state.get(_guard_flag):
+            return True  # already archived earlier this session — don't duplicate
+        rec = archive_document(
             source_tool="Behaviour Support Tool",
             doc_type="Behaviour Report",
             title=f"Behaviour Summary — {_bs_initials}",
@@ -7253,11 +7271,27 @@ def generate_and_archive_behaviour_summary(student) -> bool:
             created_by=_bs_creator,
             notes="Auto-archived when the student was archived.",
         )
-        st.success(f"📁 Behaviour Summary for {_bs_initials} saved to the Document Archive.")
-        return True
+        if rec:
+            st.session_state[_guard_flag] = True
+            st.session_state["_archive_notice"] = {
+                "kind": "success",
+                "msg": f"📁 Behaviour Summary for {_bs_initials} saved to the Document Archive.",
+            }
+            return True
+        st.session_state["_archive_notice"] = {
+            "kind": "warning",
+            "msg": f"The student was archived, but the Behaviour Summary for {_bs_initials} "
+                   f"could NOT be saved to the Document Archive (the error, if any, should have "
+                   f"shown just above the Archive button). Please re-check the Document Archive "
+                   f"and re-save manually from the student's Analysis page if it's missing.",
+        }
+        return False
     except Exception as e:
-        st.warning(f"The student was archived, but the Behaviour Summary couldn't be saved to the "
-                   f"Document Archive: {e}")
+        st.session_state["_archive_notice"] = {
+            "kind": "warning",
+            "msg": f"The student was archived, but the Behaviour Summary couldn't be saved to "
+                   f"the Document Archive: {e}",
+        }
         return False
 
 
@@ -12658,6 +12692,9 @@ def main():
             st.rerun()
         return
     persist_login_to_url()
+    _archive_notice = st.session_state.pop("_archive_notice", None)
+    if _archive_notice:
+        (st.success if _archive_notice.get("kind") == "success" else st.warning)(_archive_notice["msg"])
     if page == "landing":                  render_landing_page()
     elif page == "program_students":        render_program_students_page()
     elif page == "incident_log":            render_incident_log_page()
