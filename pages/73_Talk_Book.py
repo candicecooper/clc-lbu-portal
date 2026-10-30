@@ -34,7 +34,6 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 
 st.set_page_config(page_title="Talk Book", page_icon="💬", layout="wide")
 
@@ -53,10 +52,6 @@ except Exception:  # noqa: BLE001
         if subtitle:
             st.caption(subtitle)
 
-from staff_auth import require_staff_auth  # noqa: E402
-
-require_staff_auth("Talk Book", "💬")
-
 from archive_utils import _get_client, fetch_register  # noqa: E402
 
 ADL = ZoneInfo("Australia/Adelaide")
@@ -65,13 +60,19 @@ T_PROFILES = "talk_book_profiles"
 T_USAGE = "talk_book_usage"
 T_TRIALS = "talk_book_trials"
 
-COMP_DIR = _ROOT / "data" / "talk_book"
-if not (COMP_DIR / "index.html").exists():
+try:
+    import talk_book_component as _tbc
+except ModuleNotFoundError:
+    st.error("**talk_book_component.py is missing from the GitHub repo.** Upload it to the main (top) "
+             "folder of clc-lbu-portal, next to staff_auth.py, then wait for Render to redeploy.")
+    st.stop()
+
+if not _tbc.AVAILABLE:
     st.error("**data/talk_book/index.html is missing from the GitHub repo.** Create the folder "
              "`data/talk_book` and upload `index.html` into it, then wait for Render to redeploy.")
     st.stop()
 
-_talk_book = components.declare_component("clc_talk_book", path=str(COMP_DIR))
+_talk_book = _tbc.talk_book
 
 SECTIONS = ["Page 1 / Starters", "Tell", "Like / Don't like", "Something's wrong", "Body", "Categories",
             "Questions", "People", "Actions", "Activities", "Places", "Special events", "Health",
