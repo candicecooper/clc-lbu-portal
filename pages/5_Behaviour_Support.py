@@ -6792,6 +6792,48 @@ def render_transition_impact_section(student, full_df):
         _verdict = "Incident rate is broadly similar before and after — managing the two sites doesn't look like the main driver here."
     st.markdown(f"**{_verdict}** ({len(before_df)} incidents / {wk_before:.0f} school weeks before vs "
                 f"{len(after_df)} / {wk_after:.0f} school weeks after.)")
+
+    # ── Attendance before vs after the same split date ─────────────────────
+    # Reuses the student's existing attendance model (the same one behind
+    # the Attendance tab) rather than anything incident-specific, so this
+    # reads the actual recorded schedule/exceptions for this student.
+    try:
+        _att_state = attendance_state(student.get("id"))
+        if _att_state.get("schedule") or _att_state.get("exceptions"):
+            _sm_before = attendance_summary(_att_state, before_start, split_date - timedelta(days=1))
+            _sm_after = attendance_summary(_att_state, split_date, today)
+            if _sm_before["expected"] and _sm_after["expected"]:
+                _pct_before = _sm_before["attended"] / _sm_before["expected"] * 100
+                _pct_after = _sm_after["attended"] / _sm_after["expected"] * 100
+                st.markdown("**🗓️ Attendance before vs after the transition began**")
+                a1, a2, a3 = st.columns(3)
+                with a1:
+                    st.metric("Attendance rate", f"{_pct_after:.0f}%",
+                              delta=f"{_pct_after - _pct_before:+.0f} pts vs {_pct_before:.0f}% before")
+                with a2:
+                    st.metric("Absent days / school week", f"{_sm_after['absent_days'] / wk_after:.2f}",
+                              delta=f"{(_sm_after['absent_days'] / wk_after) - (_sm_before['absent_days'] / wk_before):+.2f} vs before",
+                              delta_color="inverse")
+                with a3:
+                    st.metric("Early finishes / school week", f"{_sm_after['early_days'] / wk_after:.2f}",
+                              delta=f"{(_sm_after['early_days'] / wk_after) - (_sm_before['early_days'] / wk_before):+.2f} vs before",
+                              delta_color="inverse")
+                if _pct_after < _pct_before - 5:
+                    _att_verdict = (f"Attendance has dropped {_pct_before - _pct_after:.0f} percentage points "
+                                     "since starting to split time between sites.")
+                elif _pct_after > _pct_before + 5:
+                    _att_verdict = (f"Attendance has improved {_pct_after - _pct_before:.0f} percentage points "
+                                     "since starting to split time between sites.")
+                else:
+                    _att_verdict = ("Attendance rate is broadly similar before and after — managing the two "
+                                     "sites doesn't look like it's affecting attendance.")
+                st.markdown(f"*{_att_verdict}* ({_sm_before['attended']}/{_sm_before['expected']} sessions "
+                            f"before vs {_sm_after['attended']}/{_sm_after['expected']} after.)")
+            else:
+                st.caption("Not enough attendance recorded either side of the transition date yet for a comparison.")
+    except Exception:
+        pass  # attendance model unavailable for this student — stay quiet rather than alarm staff
+
     st.markdown("---")
 
 
