@@ -6677,8 +6677,14 @@ def render_transition_impact_section(student, full_df):
     except Exception:
         return  # students-register project unreachable — stay quiet rather than alarm staff
     if not _rows:
-        return  # no Transition Timetable on file for this student
+        return  # no Transition Timetable on file for this student — most students
+                 # won't have one, so staying silent here is the right default.
 
+    # From this point on, a Transition Timetable DOES exist for this student,
+    # so staff would reasonably expect to see this section. Rather than
+    # silently disappearing (which looks identical to "this feature doesn't
+    # exist" from the staff side), explain in one line why there's nothing
+    # to compare yet.
     tt = None
     for _want in ("published", "active", "draft", "complete"):
         tt = next((r for r in _rows if r.get("status") == _want), None)
@@ -6696,6 +6702,10 @@ def render_transition_impact_section(student, full_df):
     except Exception:
         pass
     if not weeks:
+        st.markdown("### 🚌 Before vs After Starting to Split Time Between Sites")
+        st.caption(f"{ini} has a Transition Timetable on file, but it doesn't have any weeks set up in it yet "
+                   "— nothing to compare until it does.")
+        st.markdown("---")
         return
 
     split_date = None
@@ -6710,6 +6720,10 @@ def render_transition_impact_section(student, full_df):
                 if split_date is None or _dd < split_date:
                     split_date = _dd
     if split_date is None:
+        st.markdown("### 🚌 Before vs After Starting to Split Time Between Sites")
+        st.caption(f"{ini} has a Transition Timetable on file, but no day away from CLC has been scheduled "
+                   "in it yet — nothing to compare until a day at the home school is added.")
+        st.markdown("---")
         return  # timetable on file, but no day away from CLC recorded yet
 
     today = date.today()
@@ -6732,6 +6746,14 @@ def render_transition_impact_section(student, full_df):
     days_before = _school_days(before_start, split_date - timedelta(days=1))
     days_after = _school_days(split_date, today)
     if days_before < 5 or days_after < 5:
+        st.markdown("### 🚌 Before vs After Starting to Split Time Between Sites")
+        st.caption(
+            f"{ini}'s Transition Timetable has them away from CLC from **{split_date.strftime('%-d %b %Y')}**, "
+            f"but there's not yet a full school week of incident/attendance data on both sides to compare "
+            f"({days_before} school day(s) recorded before, {days_after} since) — check back once there's at "
+            "least a week either side."
+        )
+        st.markdown("---")
         return  # not enough school time either side yet for a meaningful comparison
 
     st.markdown("### 🚌 Before vs After Starting to Split Time Between Sites")
