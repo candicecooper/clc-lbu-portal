@@ -1732,6 +1732,37 @@ with tab2:
             else:
                 st.info("No allocated students currently need a new extension request logged.")
 
+            with st.expander("🔎 Can't find a student in the list above?"):
+                st.caption("Search everyone in the database to see why a student isn't offered.")
+                find_q = st.text_input("Student name", key="ext_find_q")
+                if find_q.strip():
+                    _fq = find_q.strip().lower()
+                    hits = [r for r in all_students.data if _fq in str(r.get("student_name", "")).lower()]
+                    if not hits:
+                        _m = match_student(find_q, all_students.data)[0]
+                        hits = [_m] if _m else []
+                    if not hits:
+                        st.info("Nobody in the database matches that name. They need a referral and an allocation "
+                                "(New Allocations tab) before an extension can be requested.")
+                    for r in hits[:8]:
+                        label_ = f"**{r.get('student_name')}** — {r.get('school') or 'no school'}, " \
+                                 f"{r.get('meeting_week') or '?'} {r.get('term') or ''} {r.get('year') or ''}"
+                        if any(e["id"] == r["id"] for e in eligible):
+                            st.success(f"{label_}\n\n✅ They ARE in the list above — click the student box and type their name.")
+                        elif not is_allocated_outcome(r.get("outcome")):
+                            st.warning(f"{label_}\n\nOutcome is '{r.get('outcome') or 'blank (still a draft)'}', so they aren't "
+                                       "allocated yet. Finalise them under New Allocations → Allocation Outcome first.")
+                        elif str(r.get("current_status", "")).strip().lower() == "inactive":
+                            st.warning(f"{label_}\n\nAllocated, but Current Status is **Inactive**, so they're hidden here.")
+                            if st.button("Mark as Active so they can be extended", key=f"mk_active_{r['id']}"):
+                                supabase.table("allocation_students").update({"current_status": "Active"}).eq("id", r["id"]).execute()
+                                st.rerun()
+                        elif _has_pending_request(r):
+                            st.info(f"{label_}\n\nThey already have a request waiting — record the outcome under "
+                                    "**Extension Decision**.")
+                        else:
+                            st.warning(f"{label_}\n\nNo obvious reason found — please send me this student's name.")
+
         else:
             st.subheader("✅ Record Extension Decision")
             pending = [r for r in allocated_data if _has_pending_request(r)]
