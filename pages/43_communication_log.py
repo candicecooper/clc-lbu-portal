@@ -603,12 +603,30 @@ def fetch_register_students(client):
 
 def register_archived_initials(client):
     """Initials of students the register has archived — so they drop out here too."""
+    """Returns BOTH forms for each archived student — bare initials (AD) and the
+    Comm Log code (AD-PY) — because the register stores initials and program in
+    separate columns while Comm Log entries are filed under the combined code.
+    Comparing only bare initials let every archived student's logs fall into
+    the 'not on register' list."""
     try:
-        rows = (client.table(REGISTER_TABLE).select("initials,status")
-                .eq("status", "archived").execute().data or [])
-        return {(r.get("initials") or "").strip().upper() for r in rows if r.get("initials")}
+        rows = (client.table(REGISTER_TABLE).select("initials,program,status")
+                .execute().data or [])
     except Exception:
         return set()
+    out = set()
+    for r in rows:
+        if str(r.get("status") or "").strip().lower() != "archived":
+            continue
+        ini = (r.get("initials") or "").strip().upper()
+        if not ini:
+            continue
+        out.add(ini)
+        prog = (r.get("program") or "").strip().upper()
+        if prog not in ("JP", "PY", "SY"):
+            prog = normalise_program(r.get("program"))
+        if prog:
+            out.add(f"{ini}-{prog}")
+    return out
 
 
 def fetch_smartar_names(sb):
@@ -727,7 +745,12 @@ def build_active_students(op_client, reg_client=None):
             continue
         if base_of(c) in reg_active_bases:
             continue                            # same student under a slightly different code
-        if c in _orphan_archived:
+        # match the code as stored (AD-PY), without any clash number (AD-PY-2 ->
+        # AD-PY), or as bare initials (AD) — any of these means archived
+        _c_up = c.upper()
+        _c_two = "-".join(_c_up.split("-")[:2])
+        if (_c_up in _orphan_archived or _c_two in _orphan_archived
+                or base_of(_c_up) in _orphan_archived):
             continue
         options.append((f"{c}  (not on register)", c))
         seen_codes.add(c)
