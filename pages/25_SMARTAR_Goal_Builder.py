@@ -470,6 +470,112 @@ def restore_goal(goal_id):
         return False
 
 
+def count_tracking_entries(goal_id) -> int:
+    """Lightweight count (id only) — used to warn how much tracking history
+    a permanent delete would take with it, without pulling full rows."""
+    try:
+        rows = sb.table("smartar_tracking").select("id").eq("goal_id", goal_id).execute().data or []
+        return len(rows)
+    except Exception:
+        return 0
+
+
+def delete_goal_permanently(goal_id) -> tuple[bool, int]:
+    """Permanently removes a goal AND every tracking entry recorded against
+    it. Unlike archive_goal(), this is NOT reversible — nothing is kept.
+    Tracking rows are deleted first so none are left orphaned, pointing at
+    a goal_id that no longer exists. Returns (success, tracking_rows_removed)."""
+    try:
+        n_tracking = count_tracking_entries(goal_id)
+        if n_tracking:
+            sb.table("smartar_tracking").delete().eq("goal_id", goal_id).execute()
+        sb.table("smartar_goals").delete().eq("id", goal_id).execute()
+        return True, n_tracking
+    except Exception as e:
+        st.error(f"Delete error: {e}")
+        return False, 0
+
+
+def get_all_goals_everywhere() -> list:
+    """Every goal for every student, active + archived — used by the
+    duplicate-goal finder, which has to compare across a student's whole
+    goal history (not just the active ones) to catch an accidental
+    double-save."""
+    try:
+        return sb.table("smartar_goals").select("*").execute().data or []
+    except Exception as e:
+        st.error(f"DB error loading goals: {e}")
+        return []
+
+
+def find_duplicate_goals() -> dict:
+    """Groups every goal by (student_name, normalised goal text) and
+    returns only the groups with more than one copy — the same SMARTAR
+    goal filed twice (or more) for the same student, almost always from
+    an accidental double-save rather than a deliberate second goal.
+    Keyed by (student_name, normalised_text); each value is that group's
+    goals, oldest first."""
+    groups = defaultdict(list)
+    for g in get_all_goals_everywhere():
+        norm = " ".join((g.get("smartar_goal") or "").strip().lower().split())
+        if not norm:
+            continue
+        groups[(g.get("student_name", ""), norm)].append(g)
+    return {
+        k: sorted(v, key=lambda g: g.get("created_at") or "")
+        for k, v in groups.items() if len(v) > 1
+    }
+
+
+def render_delete_goal_button(goal: dict, key_prefix: str) -> None:
+    """Renders a '🗑️ Delete Permanently' control for one goal, with a
+    backup check before anything is actually removed: an explicit
+    acknowledgement checkbox PLUS a separate confirm click, since — unlike
+    Archive — this cannot be undone and keeps nothing. `key_prefix` keeps
+    widget keys unique between the different places this is used (Goal
+    Builder, Admin Panel's Edit Goals, the Duplicate Goals finder)."""
+    gid = goal["id"]
+    confirm_key = f"delgoal_confirm_{key_prefix}_{gid}"
+
+    if not st.session_state.get(confirm_key):
+        if st.button("🗑️ Delete Permanently", key=f"delgoal_btn_{key_prefix}_{gid}",
+                     use_container_width=True):
+            st.session_state[confirm_key] = True
+            st.rerun()
+        return
+
+    n_tracking = count_tracking_entries(gid)
+    st.markdown(
+        f'<div class="alert-box">⚠️ <b>This permanently deletes this goal'
+        f'{f" and its {n_tracking} tracking entr" + ("y" if n_tracking == 1 else "ies") if n_tracking else ""}.</b> '
+        f'Unlike Archive, this cannot be undone — nothing is kept. If you just want it '
+        f'out of the way (or might rebuild it later), use Archive instead.</div>',
+        unsafe_allow_html=True,
+    )
+    ack = st.checkbox(
+        "I understand this cannot be undone and want to permanently delete it.",
+        key=f"delgoal_ack_{key_prefix}_{gid}",
+    )
+    dc1, dc2 = st.columns(2)
+    with dc1:
+        if st.button("Yes, delete permanently", key=f"delgoal_go_{key_prefix}_{gid}",
+                     type="primary", use_container_width=True, disabled=not ack):
+            ok, n_deleted = delete_goal_permanently(gid)
+            st.session_state.pop(confirm_key, None)
+            st.session_state.pop(f"delgoal_ack_{key_prefix}_{gid}", None)
+            if ok:
+                st.success(
+                    "🗑️ Goal deleted" +
+                    (f" (with {n_deleted} tracking entr{'y' if n_deleted == 1 else 'ies'})." if n_deleted else ".")
+                )
+                st.rerun()
+    with dc2:
+        if st.button("Cancel", key=f"delgoal_cancel_{key_prefix}_{gid}", use_container_width=True):
+            st.session_state.pop(confirm_key, None)
+            st.session_state.pop(f"delgoal_ack_{key_prefix}_{gid}", None)
+            st.rerun()
+
+
 def goal_date_range(goal: dict):
     start = goal.get("start_date") or (goal.get("created_at") or "")[:10] or date.today().isoformat()
     if not goal.get("active", True) and goal.get("archived_at"):
@@ -1881,7 +1987,7 @@ elif view == "📋 Goal Builder":
                                        f"Term {g.get('term','')} Week {g.get('week','')}")
 
                         st.markdown("<br>", unsafe_allow_html=True)
-                        ec1, ec2 = st.columns(2)
+                        ec1, ec2, ec3 = st.columns(3)
                         with ec1:
                             if st.button("✏️ Edit Goal", key=f"editgoal_btn_{g['id']}",
                                          use_container_width=True):
@@ -1891,6 +1997,8 @@ elif view == "📋 Goal Builder":
                             if st.button(f"🗑 Archive Goal {idx}", key=f"del_{g['id']}",
                                          use_container_width=True):
                                 st.session_state[f"arch_gb_{g['id']}"] = True
+                        with ec3:
+                            render_delete_goal_button(g, key_prefix="gb")
                         if st.session_state.get(f"arch_gb_{g['id']}"):
                             reason = st.text_input("Archive reason (optional):",
                                                    key=f"arch_gb_r_{g['id']}")
@@ -1995,7 +2103,7 @@ elif view == "📋 Goal Builder":
                     )
                     if ag_reason:
                         st.caption(f"Archive reason: {ag_reason}")
-                    c1, c2 = st.columns(2)
+                    c1, c2, c3 = st.columns(3)
                     with c1:
                         if st.button("♻️ Restore this Goal", key=f"restore_gb_{ag['id']}", type="primary"):
                             if restore_goal(ag["id"]):
@@ -2006,6 +2114,8 @@ elif view == "📋 Goal Builder":
                             st.session_state["build_new_after_archive"] = True
                             st.session_state["archived_excl_goal"] = ag.get("exclusion_goal", "")
                             st.rerun()
+                    with c3:
+                        render_delete_goal_button(ag, key_prefix="gb_arch")
 
         # ── NEW GOAL FORM ─────────────────────────────────────────────────────
         st.markdown("---")
@@ -3309,8 +3419,9 @@ elif view == "⚙️ Admin Panel":
     st.title("⚙️ Admin Panel")
     st.caption("Manage students · Pre-populate goals from entry meetings · Edit existing goals")
 
-    tab_students, tab_edit, tab_prepop, tab_alerts = st.tabs([
+    tab_students, tab_edit, tab_prepop, tab_alerts, tab_dupes = st.tabs([
         "👥 Manage Students", "📝 Edit Goals", "➕ Pre-populate Goals", "✉️ Teacher Alerts",
+        "🔁 Duplicate Goals",
     ])
 
     # -- Manage Students --------------------------------------------------------
@@ -3590,7 +3701,7 @@ elif view == "⚙️ Admin Panel":
                                 height=70, key=f"edit_gas_{lvl}_{goal['id']}",
                             )
 
-                        c1, c2, c3 = st.columns(3)
+                        c1, c2, c3, c4 = st.columns(4)
                         with c1:
                             if st.button("💾 Save Changes", key=f"save_e_{goal['id']}", type="primary"):
                                 update = {
@@ -3629,6 +3740,8 @@ elif view == "⚙️ Admin Panel":
                                              key=f"new_from_e_{goal['id']}"):
                                     st.info("Go to **Goal Builder** to create an updated goal "
                                             f"for {sel_e}.")
+                        with c4:
+                            render_delete_goal_button(goal, key_prefix="admin_edit")
 
     # ── Pre-populate Goals ─────────────────────────────────────────────────────
     with tab_prepop:
@@ -3773,3 +3886,38 @@ elif view == "⚙️ Admin Panel":
                     }),
                     use_container_width=True, hide_index=True,
                 )
+
+    # -- Duplicate Goals ---------------------------------------------------------
+    with tab_dupes:
+        st.subheader("🔁 Possible Duplicate Goals")
+        st.caption(
+            "The same SMARTAR goal text filed more than once for the same student — "
+            "almost always an accidental double-save rather than a deliberate second "
+            "goal. Checks every student's active AND archived goals. Nothing is "
+            "removed automatically — review each group and delete whichever copy "
+            "(or copies) you don't need."
+        )
+
+        if st.button("🔄 Re-check for duplicates", key="dupes_recheck"):
+            st.rerun()
+
+        dupe_groups = find_duplicate_goals()
+        if not dupe_groups:
+            st.success("✅ No duplicate goals found.")
+        else:
+            st.warning(f"Found {len(dupe_groups)} group(s) of duplicated goals.")
+            for (student_name, _norm), copies in sorted(dupe_groups.items(), key=lambda kv: kv[0][0] or ""):
+                header = f"{student_name or '(no student)'} — {_short(copies[0].get('smartar_goal',''), 60)} ({len(copies)} copies)"
+                with st.expander(header):
+                    for i, g in enumerate(copies, 1):
+                        status_g = "🟢 Active" if g.get("active", True) else "🟠 Archived"
+                        created  = (g.get("created_at") or "")[:10] or "unknown date"
+                        tcount   = count_tracking_entries(g["id"])
+                        st.markdown(f"**Copy {i}** — {status_g} — created {created} — "
+                                   f"{tcount} tracking entr{'y' if tcount == 1 else 'ies'}")
+                        if g.get("exclusion_goal"):
+                            st.caption(f"Exclusion goal: {_short(g['exclusion_goal'], 150)}")
+                        st.caption(_short(g.get("smartar_goal", ""), 250))
+                        render_delete_goal_button(g, key_prefix=f"dupe_{i}")
+                        if i < len(copies):
+                            st.markdown("---")
