@@ -6796,8 +6796,16 @@ def render_transition_impact_section(student, full_df):
     fig = go.Figure()
     fig.add_bar(x=list(_wk_b.index), y=list(_wk_b.values), name="Before", marker_color="#6b7c7c")
     fig.add_bar(x=list(_wk_a.index), y=list(_wk_a.values), name="After (two sites)", marker_color="#C8760A")
-    fig.add_vline(x=split_date, line_dash="dash", line_color="#c0392b",
-                  annotation_text="Transition begins", annotation_position="top")
+    # add_vline() with a plain datetime.date on a date-typed bar axis hits a
+    # known plotly bug (its annotation-position averaging code chokes on
+    # mixed int/date types -> "unsupported operand type(s) for +: 'int' and
+    # 'datetime.date'"). add_shape()+add_annotation() does the same thing
+    # without going through that buggy code path.
+    _split_x = pd.Timestamp(split_date)
+    fig.add_shape(type="line", x0=_split_x, x1=_split_x, y0=0, y1=1, yref="paper",
+                  line=dict(dash="dash", color="#c0392b"))
+    fig.add_annotation(x=_split_x, y=1, yref="paper", yanchor="bottom", showarrow=False,
+                        text="Transition begins", font=dict(color="#c0392b", size=11))
     fig.update_layout(title=dict(text="Incidents per week", font=dict(size=14)), height=280,
                        margin=dict(l=10, r=10, t=40, b=10),
                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
