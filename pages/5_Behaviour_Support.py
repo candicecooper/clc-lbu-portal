@@ -7406,6 +7406,16 @@ def _render_student_analysis_page_inner():
     st.markdown(f"## 📊 Behaviour Summary — {student['name']}")
     st.caption("Evidence-based analysis prepared by Learning and Behaviour Unit")
 
+    # A historical critical incident saved from the AI extraction further down
+    # this same page sets this flag and reruns — show the confirmation right
+    # here, since that's the page the save actually happens on. (Previously
+    # only render_student_dashboard() checked for this flag, but the save's
+    # st.rerun() stays on THIS page, so that check never fired and staff got
+    # no confirmation the save had worked.)
+    if st.session_state.get("hist_incident_just_saved"):
+        _saved_total = st.session_state.pop("hist_incident_just_saved")
+        st.success(f"✅ Historical incident saved — {student['name']} now has **{_saved_total}** incident(s) on record.")
+
     if student.get('placement_start'):
         try:
             start_dt = datetime.fromisoformat(student['placement_start'])
