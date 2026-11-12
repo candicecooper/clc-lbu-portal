@@ -41,6 +41,59 @@ except Exception as _arch_err:
 
 ARCHIVE_DOC_TYPE = "Safety & Risk Plan"
 
+# ── Early-warning signature from the Behaviour Support Tool (fails silently) ──
+# Reads the student's micro-behaviour signature (matched by register initials)
+# from the Behaviour Support Supabase project. Read-only; nothing is written back.
+try:
+    import micro_behaviour_utils as mbu
+    MICRO_AVAILABLE = True
+except Exception:
+    mbu = None
+    MICRO_AVAILABLE = False
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _early_warning_from_behaviour_tool(initials: str):
+    """Returns (text, updated_label) for the student's signature, or ("", "")."""
+    if not MICRO_AVAILABLE or not (initials or "").strip():
+        return "", ""
+    try:
+        from supabase import create_client
+        sb = create_client(st.secrets["supabase"]["url"], st.secrets["supabase"]["key"])
+        sig = mbu.load_signature_by_initials(sb, initials)
+    except Exception:
+        return "", ""
+    text = mbu.signature_plan_text(sig)
+    if not text:
+        return "", ""
+    when = str(sig.get("updated_at") or "")[:10]
+    try:
+        when = datetime.strptime(when, "%Y-%m-%d").strftime("%d/%m/%Y")
+    except Exception:
+        pass
+    by = sig.get("updated_by") or ""
+    return text, f"{when}{' by ' + by if by else ''}"
+
+
+def autofill_early_warning(force: bool = False) -> None:
+    """Fill the plan's Early Warning Signs from the Behaviour Support signature
+    when the plan is linked to a registered student and the field is empty
+    (or force=True to refresh)."""
+    ini = (st.session_state.student.get("initials") or "").strip().upper()
+    if not ini:
+        return
+    if st.session_state.get("early_warning", "").strip() and not force:
+        return
+    if force:
+        _early_warning_from_behaviour_tool.clear()
+    text, label = _early_warning_from_behaviour_tool(ini)
+    if text:
+        st.session_state.early_warning = text
+        st.session_state.early_warning_src = f"From the Behaviour Support Tool signature for {ini} (updated {label})."
+    elif force:
+        st.session_state.early_warning_src = (f"No early-warning signature saved for {ini} in the "
+                                              "Behaviour Support Tool yet.")
+
 
 @st.cache_data(ttl=120, show_spinner=False)
 def _register_students():
@@ -175,6 +228,7 @@ def _plan_fingerprint(student: dict) -> str:
         "r": st.session_state.get("risks", []),
         "p": st.session_state.get("priority_actions", ""),
         "d": st.session_state.get("review_date", ""),
+        "e": st.session_state.get("early_warning", ""),
     }, sort_keys=True, default=str)
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:10]
 
@@ -494,6 +548,9 @@ def create_excel_save():
         'Field': 'review_date',
         'Value': st.session_state.get('review_date', '')
     }, {
+        'Field': 'early_warning',
+        'Value': st.session_state.get('early_warning', '')
+    }, {
         'Field': 'mode',
         'Value': st.session_state.get('mode', 'wizard')
     }, {
@@ -607,6 +664,8 @@ def load_excel_save(excel_file):
                 
                 st.session_state.priority_actions = str(final_dict.get('priority_actions', '')) if not pd.isna(final_dict.get('priority_actions')) else ''
                 st.session_state.review_date = str(final_dict.get('review_date', '')) if not pd.isna(final_dict.get('review_date')) else ''
+                _ew = final_dict.get('early_warning', '')
+                st.session_state.early_warning = '' if (_ew is None or (isinstance(_ew, float) and pd.isna(_ew))) else str(_ew)
                 st.session_state.mode = str(final_dict.get('mode', 'wizard')) if not pd.isna(final_dict.get('mode')) else 'wizard'
                 
                 # Safely convert step to int
@@ -687,6 +746,8 @@ def init_state():
         "synthesis_done": False,
         "priority_actions": "",
         "review_date": "",
+        "early_warning": "",         # from Behaviour Support micro signature (editable)
+        "early_warning_src": "",
         "file_loaded": False,        # Flag to prevent reload loop
         "last_loaded_file": None,    # Track which file was loaded
     }
@@ -1819,6 +1880,24 @@ elif st.session_state.step == 5:
             st.markdown("**Procedure:**")
             st.text(r["procedure"] or "(none)")
 
+    st.markdown('<div class="sec-head">Early Warning Signs</div>', unsafe_allow_html=True)
+    autofill_early_warning()
+    st.caption("The student's own early-warning signs and what works at each stage. Filled "
+               "automatically from their signature in the Behaviour Support Tool (Analysis page → "
+               "Micro Behaviours) when this plan is linked to a registered student. Edit freely — "
+               "changes here don't go back to the Behaviour Support Tool.")
+    if st.session_state.get("early_warning_src"):
+        st.caption("🌡️ " + st.session_state.early_warning_src)
+    st.session_state.early_warning = st.text_area(
+        "Early warning signs (use ### for each stage, • for each point)",
+        value=st.session_state.get("early_warning", ""), height=180,
+        placeholder="### 1. First sign\n• What staff see: hood up, stops chatting\n• What works: quiet check-in, offer choice of seat")
+    if student.get("initials") and MICRO_AVAILABLE:
+        if st.button("🔄 Refresh from Behaviour Support", key="ew_refresh",
+                     help="Replaces the text above with the latest saved signature"):
+            autofill_early_warning(force=True)
+            st.rerun()
+
     st.markdown('<div class="sec-head">Priority Actions</div>', unsafe_allow_html=True)
     gen_col, _ = st.columns([1,2])
     with gen_col:
@@ -1978,6 +2057,7 @@ elif st.session_state.step == 6:
 # STEP 7 — Generate .docx
 # ══════════════════════════════════════════════════════════════════════════════
 elif st.session_state.step == 7:
+    autofill_early_warning()
     student          = st.session_state.student
     risks            = st.session_state.risks
     priority_actions = st.session_state.priority_actions
@@ -2109,6 +2189,20 @@ elif st.session_state.step == 7:
             arun(p3, student['clc_context'], size=16, italic=True)
 
         doc.add_paragraph()
+
+        # Early warning signs (from the Behaviour Support micro signature)
+        _ew_text = (st.session_state.get("early_warning") or "").strip()
+        if _ew_text:
+            ew_tbl = doc.add_table(rows=1, cols=1); ew_tbl.style='Table Grid'
+            ew = ew_tbl.rows[0].cells[0]
+            set_bg(ew, TEAL_LIGHT.lstrip("#")); set_borders(ew, TEAL.lstrip("#"))
+            ew.paragraphs[0].clear()
+            cpara(ew, "EARLY WARNING SIGNS", bold=True, size=19, color=TEAL.lstrip("#"), sb=40, sa=20)
+            cpara(ew, "Signs this student is starting to move outside their Window of Tolerance, "
+                      "from CLC observation data. Respond at the earliest stage you see.",
+                  italic=True, size=15, color="555555", sa=40)
+            render_content(ew, _ew_text)
+            doc.add_paragraph()
 
         # Risk table heading
         h = doc.add_paragraph()
