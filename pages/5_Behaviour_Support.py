@@ -1395,7 +1395,7 @@ def get_clinical_behaviour(raw: str) -> str:
 INTERVENTIONS = ["CPI Supportive stance", "Offered break", "Reduced demand", "Provided choices",
                 "Removed audience", "Visual supports", "Co-regulation", "Prompted coping skill", "Redirection"]
 LOCATIONS = ["JP Room", "PY Room", "SY Room", "Yard", "Playground", "Library", "Kitchen", "Office", "Student Gate", "Toilets", "Transition area", "Other"]
-VALID_PAGES = ["login", "landing", "program_students", "incident_log", "critical_incident", "review_critical", "leader_approve_critical", "student_analysis", "student_dashboard", "admin_portal", "support_plan"]
+VALID_PAGES = ["login", "landing", "program_students", "incident_log", "critical_incident", "review_critical", "leader_approve_critical", "student_analysis", "student_dashboard", "admin_portal", "support_plan", "micro_log"]
 
 HYPOTHESIS_FUNCTIONS = ["To get", "To avoid"]
 HYPOTHESIS_ITEMS = ["Tangible", "Activity", "Sensory", "Attention"]
@@ -10624,7 +10624,11 @@ def render_student_dashboard():
     if st.session_state.get("hist_incident_just_saved"):
         _saved_total = st.session_state.pop("hist_incident_just_saved")
         st.success(f"✅ Historical incident saved — {student['name']} now has **{_saved_total}** incident(s) on record.")
-    col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+    col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
+    with col5:
+        if st.button("🌡️ Log Micro", key="micro_dash",
+                     help="Log an early-warning sign (micro behaviour)"):
+            go_to("micro_log", selected_student_id=student_id)
     with col1:
         if st.button("⬅ Back to Students", key="back_dash"):
             if student.get("archived", False):
