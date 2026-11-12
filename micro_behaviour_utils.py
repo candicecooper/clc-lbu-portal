@@ -42,6 +42,7 @@ create table if not exists micro_incidents (
     setting          text default '',
     just_before      text default '',
     staff_response   text default '',
+    response_source  text default '',              -- suggested | worked_before | other
     outcome          text not null,                -- Settled | Partly settled | Escalated
     linked_incident  text,
     reported_by      text,
@@ -65,6 +66,9 @@ alter table micro_signatures      enable row level security;
 create policy "micro_codes_all" on micro_behaviour_codes for all using (true) with check (true);
 create policy "micro_inc_all"   on micro_incidents       for all using (true) with check (true);
 create policy "micro_sig_all"   on micro_signatures      for all using (true) with check (true);
+
+-- If you ran the setup before the suggested-response update (Nov 2026), also run:
+alter table micro_incidents add column if not exists response_source text default '';
 -------------------------------------------------------------------
 The code list seeds itself the first time a Leader/ADM opens
 "Manage micro behaviour codes" (or you can press "Load the starter list").
@@ -73,6 +77,7 @@ Until then the built-in list below is used, so logging works straight away.
 
 from __future__ import annotations
 
+import html as _html
 import uuid
 from datetime import datetime, time
 
@@ -309,7 +314,7 @@ def micro_frame(rows: list[dict], codes: list[dict]) -> pd.DataFrame:
     """One row per (entry, code). Columns: id, dt, date, session, weekday,
     code, description, direction, category, outcome, staff_response, ..."""
     cols = ["id", "dt", "date", "session", "weekday", "code", "description", "direction",
-            "category", "outcome", "outcome_short", "staff_response", "setting",
+            "category", "outcome", "outcome_short", "staff_response", "response_source", "setting",
             "just_before", "other_text", "reported_by_name"]
     if not rows:
         return pd.DataFrame(columns=cols)
@@ -334,6 +339,8 @@ def micro_frame(rows: list[dict], codes: list[dict]) -> pd.DataFrame:
                 "outcome": r.get("outcome", ""),
                 "outcome_short": OUTCOME_SHORT.get(r.get("outcome", ""), r.get("outcome", "")),
                 "staff_response": (r.get("staff_response") or "").strip(),
+                "response_source": {"suggested": "Suggested", "worked_before": "Worked before",
+                                    "other": "Own choice"}.get(r.get("response_source") or "", ""),
                 "setting": r.get("setting", ""), "just_before": r.get("just_before", ""),
                 "other_text": r.get("other_text", ""),
                 "reported_by_name": r.get("reported_by_name", ""),
@@ -525,6 +532,173 @@ def signature_plan_text(sig: dict | None) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# SUGGESTED RESPONSES — trauma-informed, CPI-aligned
+# ──────────────────────────────────────────────────────────────────────────
+# CPI Crisis Development Model: Anxiety -> Supportive, Defensive -> Directive.
+# Micro behaviours sit at the Anxiety level unless they are already pushing
+# back at an adult/peer, which is the Defensive level. Risk behaviour is an
+# incident, not a micro behaviour, so the Safety Intervention level is not used.
+DEFENSIVE_CODES = {"BM03", "BM04", "VC03", "VC07", "FA01", "TE03", "TE04",
+                   "AR01", "AR02", "AR03", "PR02", "PR03", "RT01", "OB02"}
+
+CPI_STANCE = {
+    "Anxiety": ("Anxiety → Supportive",
+                "Empathic, non-judgemental. Connect before you direct: calm voice, fewer words, "
+                "respectful space, and help them regulate (co-regulation first, learning later)."),
+    "Defensive": ("Defensive → Directive",
+                  "Stay calm and take charge kindly. Give a clear, simple, reasonable limit with "
+                  "choices, then allow time to decide. Remove the audience; avoid power struggles."),
+}
+
+_DIR_SUGGESTIONS = {
+    "Hyper": [
+        "Lower your voice and slow down; stand side-on at a respectful distance",
+        "Offer a movement or sensory break as a choice (\"a job for me, or 2 minutes on the bike?\")",
+        "Reduce the demand for now: shorten, chunk or pause the task",
+    ],
+    "Hypo": [
+        "Connect without pressure: sit alongside and name what you notice gently (\"You seem tired today\")",
+        "Offer a low-demand activating job (hand out sheets, take a message, water the plants)",
+        "Bring arousal up gently: drink of water, rhythm, walk-and-talk",
+    ],
+    "Either": [
+        "Quiet check-in using their name, warm tone, no audience",
+        "Offer a choice of two regulation options from their plan",
+    ],
+}
+
+_DEFENSIVE_SUGGESTIONS = [
+    "Give a clear, simple limit with a choice, positive option first (\"You can take a break in the calm corner or sit with me, your choice\")",
+    "Give take-up time and step back; don't repeat the instruction or argue the point",
+    "Reduce the audience: redirect other students or move to a quieter spot",
+]
+
+_CAT_SUGGESTIONS = {
+    "TE": ["Do the first part together, then step back", "Offer a choice of how or where to do the work",
+           "Acknowledge effort out loud, not accuracy"],
+    "VC": ["Respond to the tone with calm and fewer words; don't match the volume",
+           "Validate the feeling (\"It sounds like this is hard\") before redirecting",
+           "Tactically ignore low-level words and redirect to the task"],
+    "AR": ["Use PACE: curious, not cross (\"I'm wondering if something's bothering you\")",
+           "Offer a preferred adult if one is free", "Respond to the need, not the words"],
+    "PR": ["Create space between students discreetly (a job, a seat change)",
+           "Acknowledge the feeling (\"That sounded annoying\") and redirect to a shared task",
+           "Increase active supervision nearby"],
+    "SE": ["Reduce sensory load: lights down, headphones, quieter space",
+           "Offer the supports in their Sensory Overview", "Offer heavy work or deep pressure"],
+    "RT": ["Use the visual timetable and \"first… then…\"", "Give a countdown warning before the change",
+           "Give a transition job or object to carry"],
+    "PH": ["Check basic needs first: food, water, toilet, rest", "Offer a snack or drink per site procedure",
+           "Let leadership know if this keeps happening"],
+    "BM": ["Offer a movement break or fidget as a choice", "Give space; don't block their exit"],
+    "FA": ["Check in privately with a soft, open face", "Reassure and name the plan for the next few minutes"],
+    "OB": ["Swap the object for a fidget or regulation tool", "Move items out of reach quietly, without comment"],
+}
+
+_CONTEXT_RULES = [
+    (("transition", "change", "pack", "finish", "end of", "line up", "moving"),
+     "Preview the change privately and give a countdown"),
+    (("asked", "instruction", "demand", "fix", "correct", "work", "task", "write", "read", "maths"),
+     "Lower the demand: offer a smaller first step or perceived choice"),
+    (("peer", "student", "friend", "teased", "said", "looked", "laughed"),
+     "Separate the students discreetly and check in privately"),
+    (("noise", "loud", "busy", "crowd", "bell", "siren"),
+     "Move to a quieter space or offer headphones"),
+    (("told no", "said no", "denied", "wait", "turn", "lost", "game"),
+     "Acknowledge the disappointment and use \"when… then…\""),
+    (("home", "weekend", "bus", "taxi", "morning", "arrival", "arrived"),
+     "Private, low-key check-in about what happened before school"),
+    (("relief", "trt", "new staff", "different teacher", "absent"),
+     "Introduce the adult and explain the plan for the day; keep routines the same"),
+]
+_SETTING_RULES = [
+    (("yard", "recess", "lunch", "outside", "oval", "playground"),
+     "Increase active supervision and offer a structured game or job"),
+    (("literacy", "maths", "writing", "reading", "spelling", "numeracy"),
+     "Chunk the task and do the first one together"),
+]
+
+
+# Category tips that suit rising (Hyper) arousal but not a student who is shutting down
+_HYPER_ONLY = {
+    "Respond to the tone with calm and fewer words; don't match the volume",
+    "Tactically ignore low-level words and redirect to the task",
+    "Offer a movement break or fidget as a choice",
+    "Give space; don't block their exit",
+}
+
+
+def cpi_stage(codes: list[str]) -> str:
+    return "Defensive" if any(c in DEFENSIVE_CODES for c in codes) else "Anxiety"
+
+
+def suggest_responses(codes: list[str], code_meta: dict, setting: str = "",
+                      just_before: str = "", worked_before: list[str] | None = None,
+                      max_n: int = 5) -> dict:
+    """Rule-based suggestions. Returns
+    {stage, stage_label, stage_note, items: [{text, source}]}  source in
+    worked_before | suggested."""
+    stage = cpi_stage(codes)
+    items: list[dict] = []
+
+    def add(t, src="suggested"):
+        if t and all(t.lower() != i["text"].lower() for i in items):
+            items.append({"text": t, "source": src})
+
+    dirs = [code_meta.get(c, {}).get("direction", "Either") for c in codes]
+    hyper, hypo = dirs.count("Hyper"), dirs.count("Hypo")
+    main_dir = "Hyper" if hyper > hypo else "Hypo" if hypo > hyper else (
+        "Either" if not (hyper or hypo) else "Hyper" if stage == "Defensive" else "Hypo")
+
+    for t in (worked_before or [])[:2]:
+        add(t, "worked_before")
+    ctx = f" {just_before} ".lower()
+    ctx_hits = [t for keys, t in _CONTEXT_RULES if any(k in ctx for k in keys)]
+    for t in ctx_hits[:2]:
+        add(t)
+    if stage == "Defensive":
+        for t in _DEFENSIVE_SUGGESTIONS[:2]:
+            add(t)
+    for t in _DIR_SUGGESTIONS.get(main_dir, [])[:2]:
+        add(t)
+    st_ = f" {setting} ".lower()
+    for keys, t in _SETTING_RULES:
+        if any(k in st_ for k in keys):
+            add(t)
+    for c in codes:
+        for t in _CAT_SUGGESTIONS.get(c[:2], []):
+            if main_dir == "Hypo" and t in _HYPER_ONLY:
+                continue
+            add(t)
+            break
+    for t in _DIR_SUGGESTIONS.get(main_dir, [])[2:] + _DIR_SUGGESTIONS["Either"]:
+        add(t)
+    label, note = CPI_STANCE[stage]
+    return {"stage": stage, "stage_label": label, "stage_note": note,
+            "direction": main_dir, "items": items[:max_n]}
+
+
+def worked_before_for(rows: list[dict], codes: list[str], n: int = 2) -> list[str]:
+    """Responses that led to 'Settled' for this student, preferring entries
+    that shared a code with the current one."""
+    if not rows:
+        return []
+    scored: dict[str, list] = {}
+    for r in rows:
+        if OUTCOME_SHORT.get(r.get("outcome", "")) != "Settled":
+            continue
+        resp = (r.get("staff_response") or "").strip()
+        if not resp:
+            continue
+        overlap = len(set(r.get("codes") or []) & set(codes))
+        sc = scored.setdefault(resp, [0, 0])
+        sc[0] += overlap
+        sc[1] += 1
+    ranked = sorted(scored.items(), key=lambda kv: (kv[1][0], kv[1][1]), reverse=True)
+    return [k for k, v in ranked if v[0] > 0 or not codes][:n] or [k for k, _ in ranked[:n]]
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # STREAMLIT UI
 # ──────────────────────────────────────────────────────────────────────────
 def _code_label(c: dict) -> str:
@@ -632,8 +806,49 @@ def render_micro_log(sb, students: list[dict], staff_opts: dict, *, key: str = "
     with s2:
         just_before = st.text_input("⏪ Just before", placeholder="Asked to fix a spelling error",
                                     key=f"{k}_before")
-    response = st.text_input("🤝 What you did", placeholder="Offered a 2-minute movement break",
-                             key=f"{k}_resp")
+    # ── Suggested response (appears once behaviour + setting + just before are in) ──
+    st.markdown("**🤝 Response**")
+    OTHER = "Something else (describe)"
+    sugg_items = []
+    if picked and setting.strip() and just_before.strip():
+        meta = {c["code"]: c for c in codes}
+        past = load_micro(sb, sid)
+        sg = suggest_responses(picked, meta, setting, just_before,
+                               worked_before=worked_before_for(past, picked))
+        sugg_items = sg["items"]
+        colour = "#DC2626" if sg["stage"] == "Defensive" else "#1A7A7A"
+        tip_parts = []
+        for i in sugg_items:
+            if i["source"] == "worked_before":
+                tip_parts.append("<li>⭐ " + _html.escape(i["text"]) + " <i style='color:#64748b'>"
+                                 "(worked before for this student)</i></li>")
+            else:
+                tip_parts.append("<li>" + _html.escape(i["text"]) + "</li>")
+        tips = "".join(tip_parts)
+        st.markdown(
+            f"<div style='border-left:5px solid {colour};background:#f8fafc;border-radius:0 8px 8px 0;"
+            f"padding:.7rem 1rem;margin:.3rem 0 .6rem;'>"
+            f"<div style='font-weight:700;color:{colour};'>💡 Suggested response · CPI stage: {sg['stage_label']}</div>"
+            f"<div style='font-size:.85rem;color:#334155;margin:.25rem 0 .4rem;'>{sg['stage_note']}</div>"
+            f"<ul style='margin:0 0 0 1.1rem;font-size:.9rem;color:#0f172a;'>{tips}</ul>"
+            f"<div style='font-size:.75rem;color:#64748b;margin-top:.4rem;'>Suggestions only. Use your "
+            f"judgement and the student's Safety &amp; Risk Plan. If behaviour becomes a risk to anyone, "
+            f"follow the plan and CPI safety procedures.</div></div>",
+            unsafe_allow_html=True)
+    else:
+        st.caption("Pick the behaviour and fill in **Setting** and **Just before** to see a suggested "
+                   "trauma-informed, CPI-aligned response.")
+    resp_opts = [i["text"] for i in sugg_items] + [OTHER]
+    used = st.radio("What did you do? *", resp_opts, index=None, key=f"{k}_used",
+                    format_func=lambda x: ("✅ Used: " + x) if x != OTHER else "✏️ " + x)
+    response, response_source = "", ""
+    if used == OTHER:
+        response = st.text_input("Describe what you did *", placeholder="Offered a 2-minute movement break",
+                                 key=f"{k}_resp")
+        response_source = "other"
+    elif used:
+        response = used
+        response_source = next((i["source"] for i in sugg_items if i["text"] == used), "suggested")
     outcome = st.radio("➡️ What happened next *", OUTCOMES, horizontal=True, index=None,
                        key=f"{k}_outcome")
     if outcome == "Escalated to incident":
@@ -647,6 +862,10 @@ def render_micro_log(sb, students: list[dict], staff_opts: dict, *, key: str = "
             errs.append("Pick at least one behaviour.")
         if "OT00" in picked and not other_text.strip():
             errs.append("Describe the 'Other' behaviour.")
+        if not used:
+            errs.append("Choose what you did (a suggestion or something else).")
+        elif used == OTHER and not response.strip():
+            errs.append("Describe what you did.")
         if not outcome:
             errs.append("Choose what happened next.")
         if not staff_id:
@@ -660,17 +879,29 @@ def render_micro_log(sb, students: list[dict], staff_opts: dict, *, key: str = "
         occurred = datetime.combine(d, t)
         if _TZ:
             occurred = occurred.replace(tzinfo=_TZ)
+        row = {
+            "student_id": str(sid), "occurred_at": occurred, "codes": picked,
+            "other_text": other_text.strip(), "setting": setting.strip(),
+            "just_before": just_before.strip(), "staff_response": response.strip(),
+            "response_source": response_source,
+            "outcome": outcome, "reported_by": str(staff_id),
+            "reported_by_name": staff_opts.get(staff_id, ""),
+        }
         try:
-            saved = save_micro(sb, {
-                "student_id": str(sid), "occurred_at": occurred, "codes": picked,
-                "other_text": other_text.strip(), "setting": setting.strip(),
-                "just_before": just_before.strip(), "staff_response": response.strip(),
-                "outcome": outcome, "reported_by": str(staff_id),
-                "reported_by_name": staff_opts.get(staff_id, ""),
-            })
+            saved = save_micro(sb, row)
         except Exception as e:
-            saved = None
-            st.error(f"Could not save: {e}")
+            if "response_source" in str(e):
+                # Table created before this update and the ALTER hasn't been run yet:
+                # save without the new column rather than losing the entry.
+                row.pop("response_source", None)
+                try:
+                    saved = save_micro(sb, row)
+                except Exception as e2:
+                    saved = None
+                    st.error(f"Could not save: {e2}")
+            else:
+                saved = None
+                st.error(f"Could not save: {e}")
         if saved:
             st.session_state[f"{key}_saved"] = {
                 "student": stu_opts[sid].split("  (")[0], "time": t.strftime("%I:%M %p").lstrip("0"),
@@ -839,6 +1070,12 @@ def render_micro_analysis_section(sb, student: dict, full_df: pd.DataFrame, *,
 
         # Saves
         st.markdown("**Saves — what staff did when the student settled**")
+        _e1 = mdf.drop_duplicates("id")
+        _sug = _e1[_e1["response_source"].isin(["Suggested", "Worked before"])]
+        if len(_sug):
+            _sug_set = int((_sug["outcome_short"] == "Settled").sum())
+            st.caption(f"Suggested responses were used {len(_sug)} time(s); the student settled after "
+                       f"{_sug_set} of them ({round(_sug_set / len(_sug) * 100)}%).")
         if sv["responses"].empty:
             st.caption("No settled entries with a staff response recorded yet.")
         else:
@@ -850,11 +1087,13 @@ def render_micro_analysis_section(sb, student: dict, full_df: pd.DataFrame, *,
             e = mdf.groupby("id").agg(dt=("dt", "first"), codes=("code", lambda s: ", ".join(s)),
                                       outcome=("outcome_short", "first"),
                                       response=("staff_response", "first"),
+                                      rtype=("response_source", "first"),
                                       setting=("setting", "first"), before=("just_before", "first"),
                                       by=("reported_by_name", "first")).reset_index()
             e = e.sort_values("dt", ascending=False)
             show = e.assign(When=e["dt"].dt.strftime("%a %d/%m/%Y %I:%M %p"))[
-                ["When", "codes", "setting", "before", "response", "outcome", "by"]].rename(columns={
+                ["When", "codes", "setting", "before", "response", "rtype", "outcome", "by"]].rename(columns={
+                    "rtype": "Response type",
                     "codes": "Codes", "setting": "Setting", "before": "Just before",
                     "response": "Staff response", "outcome": "Next", "by": "Logged by"})
             st.dataframe(show, hide_index=True, use_container_width=True)
