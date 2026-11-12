@@ -94,7 +94,60 @@ OUTCOMES = ["Settled / returned to task", "Partly settled", "Escalated to incide
 OUTCOME_SHORT = {"Settled / returned to task": "Settled", "Partly settled": "Partly settled",
                  "Escalated to incident": "Escalated"}
 DIRECTIONS = ["Hyper", "Hypo", "Either"]
-DIR_COLOURS = {"Hyper": "#DC2626", "Hypo": "#2563EB", "Either": "#7C3AED"}
+# Colours match the site's Window of Tolerance Creator / Behaviour Support WoT zones
+DIR_COLOURS = {"Hyper": "#B9761A", "Hypo": "#2A6693", "Either": "#7C3AED"}
+
+# Micro behaviours sit in the WoT "Coping Mechanisms" bands: the student is still
+# coping (still in their window) but showing they are moving toward its edge.
+WOT_BANDS = [
+    ("hyper", "Mobilisation — Hyperarousal", "Outside the window: fight / flight. This is an incident.", "#AF3A2C"),
+    ("copingup", "Coping — moving toward Hyperarousal", "Still coping, but arousal is rising.", "#B9761A"),
+    ("window", "Window of Tolerance", "Regulated, ready to learn and connect.", "#2E7D32"),
+    ("copingdown", "Coping — moving toward Hypoarousal", "Still coping, but starting to shut down.", "#2A6693"),
+    ("hypo", "Immobilisation — Hypoarousal", "Outside the window: freeze / shut down. This is an incident.", "#3C4C6B"),
+]
+WOT_FOR_DIRECTION = {"Hyper": "copingup", "Hypo": "copingdown"}
+WOT_SHORT = {"Hyper": "Coping ↑ toward Hyperarousal", "Hypo": "Coping ↓ toward Hypoarousal",
+             "Either": "Coping (either way)"}
+WOT_EXPLAINER = ("Micro behaviours are **coping** signs. The student is still inside their Window "
+                 "of Tolerance and still coping, but is showing us they are moving toward the edge. "
+                 "Responding now helps them stay in the window, before it becomes an incident.")
+
+
+def wot_strip_html(directions: list[str] | None = None, compact: bool = False) -> str:
+    """Five-band Window of Tolerance strip (same zones and colours as the WoT
+    Creator). Highlights the coping band(s) the given directions point to."""
+    directions = directions or []
+    active = {WOT_FOR_DIRECTION[d] for d in directions if d in WOT_FOR_DIRECTION}
+    if "Either" in directions and not active:
+        active = {"copingup", "copingdown"}
+    rows = []
+    for zid, label, desc, col in WOT_BANDS:
+        on = zid in active
+        is_window = zid == "window"
+        bg = col if on else ("#E8F5E9" if is_window else "#F1F5F9")
+        fg = "#FFFFFF" if on else (col if is_window else "#64748B")
+        border = f"2px solid {col}" if (on or is_window) else "1px solid #E2E8F0"
+        marker = " ◀ the signs you picked" if on else ""
+        sub = "" if compact else f"<div style='font-size:.72rem;opacity:.9;'>{desc}</div>"
+        rows.append(
+            f"<div style='background:{bg};color:{fg};border:{border};border-radius:6px;"
+            f"padding:{'.18rem' if compact else '.3rem'} .6rem;margin:2px 0;'>"
+            f"<div style='font-weight:{700 if (on or is_window) else 500};font-size:.82rem;'>"
+            f"{label}{marker}</div>{sub}</div>")
+    return "<div style='max-width:520px;margin:.2rem 0 .6rem;'>" + "".join(rows) + "</div>"
+
+
+def wot_position_sentence(directions: list[str]) -> str:
+    h, l = directions.count("Hyper"), directions.count("Hypo")
+    if h and l:
+        return ("These signs point both ways. Some students go quiet before they escalate, so "
+                "watch for a swing from Hypo to Hyper.")
+    if h:
+        return "The student is still coping, but their arousal is rising toward Mobilisation (hyperarousal)."
+    if l:
+        return "The student is still coping, but is starting to move toward Immobilisation (hypoarousal)."
+    return "The student is still coping. Check their profile for which way these signs usually go."
 
 CATEGORIES = {
     "BM": "Body and movement", "VC": "Voice and words", "FA": "Face and eyes",
@@ -106,92 +159,318 @@ CATEGORIES = {
 # (code, description, direction) — matches the "CLC-LBU Micro Behaviours:
 # Early Indicators Reference" doc. Category comes from the 2-letter prefix.
 _STARTER = [
-    ("BM01", "Fidgeting more than usual (tapping, leg jiggling, rocking on chair)", "Hyper"),
-    ("BM02", "Getting up or wandering without a purpose", "Hyper"),
-    ("BM03", "Pacing, or moving to the edge of the room or the doorway", "Hyper"),
-    ("BM04", "Clenched fists or jaw, tense shoulders", "Hyper"),
-    ("BM05", "Fast or shallow breathing, flushed face", "Hyper"),
-    ("BM06", "Slumping, head on desk, body going floppy", "Hypo"),
-    ("BM07", "Hood up, hiding face in arms or clothing", "Hypo"),
-    ("BM08", "Freezing mid-action or moving very slowly", "Hypo"),
-    ("BM09", "Getting under a table or into a small space", "Either"),
-    ("BM10", "Self-soothing movement increasing (rocking, rubbing, flapping)", "Either"),
-    ("BM11", "Turning body away from the adult or group", "Either"),
-    ("VC01", "Volume rising", "Hyper"),
-    ("VC02", "Talking faster, harder to interrupt", "Hyper"),
-    ("VC03", "Sharp or abrupt tone, one-word answers (\"what\", \"whatever\")", "Hyper"),
-    ("VC04", "Muttering or comments under the breath", "Hyper"),
-    ("VC05", "Increased silliness, noises, voices or repeated phrases", "Hyper"),
-    ("VC06", "More negotiating or questioning (\"why do I have to\", \"how long\")", "Hyper"),
-    ("VC07", "Swearing said to no one in particular", "Hyper"),
-    ("VC08", "Stops talking, goes quiet", "Hypo"),
-    ("VC09", "\"I don't know\", \"I can't\", or a shrug instead of an answer", "Hypo"),
-    ("VC10", "Flat or monotone voice", "Hypo"),
-    ("VC11", "Putting self down (\"I'm dumb\", \"I'm bad at this\")", "Either"),
-    ("VC12", "Talking about going home, leaving or being somewhere else", "Either"),
-    ("FA01", "Staring or a fixed glare", "Hyper"),
-    ("FA02", "Scanning the room, watching the door or the adults", "Hyper"),
-    ("FA03", "Frowning, grimacing or eye-rolling", "Hyper"),
-    ("FA04", "Glazed, far-away look, slow to respond to name", "Hypo"),
-    ("FA05", "Avoiding eye contact more than usual", "Either"),
-    ("FA06", "Teary, watery eyes, chin wobbling", "Either"),
-    ("FA07", "Smiling or laughing that doesn't fit the moment", "Either"),
-    ("TE01", "Rushing through work, more careless errors", "Hyper"),
-    ("TE02", "Rubbing out or scribbling over again and again, screwing up own work", "Hyper"),
-    ("TE03", "Refusing help that is usually accepted", "Hyper"),
-    ("TE04", "Trying to take control of the task (changing rules, insisting on own way)", "Hyper"),
-    ("TE05", "Stopping mid-task and staring", "Hypo"),
-    ("TE06", "Delaying the start (sharpening, rearranging, toilet request)", "Either"),
-    ("TE07", "Off task sooner than usual", "Either"),
-    ("TE08", "Asking for help again and again on things they can do", "Either"),
-    ("TE09", "Choosing the easiest option or avoiding a usual favourite", "Either"),
-    ("TE10", "Asking for screen or preferred item early or repeatedly", "Either"),
-    ("AR01", "Pushing the adult away (\"leave me alone\", \"don't talk to me\")", "Hyper"),
-    ("AR02", "Testing a small boundary while watching the adult's reaction", "Hyper"),
-    ("AR03", "Arguing about small things or correcting the adult", "Hyper"),
-    ("AR04", "Over-compliant, apologising a lot, people-pleasing", "Hypo"),
-    ("AR05", "Not responding to name or first instruction (when they usually do)", "Either"),
-    ("AR06", "Shadowing an adult, seeking closeness more than usual", "Either"),
-    ("AR07", "Rejecting a usually preferred adult, or accepting only one adult", "Either"),
-    ("PR01", "Commenting on or correcting peers", "Hyper"),
-    ("PR02", "Moving into a peer's space, nudging or poking", "Hyper"),
-    ("PR03", "Strong reaction to a peer's noise or look (\"stop looking at me\")", "Hyper"),
-    ("PR04", "Over-excited play that escalates quickly", "Hyper"),
-    ("PR05", "Choosing to be alone when usually social", "Hypo"),
-    ("PR06", "Telling on peers again and again", "Either"),
-    ("PR07", "Bringing up conflict from home, the bus or the yard", "Either"),
-    ("SE01", "More sensitive to touch or being bumped", "Hyper"),
-    ("SE02", "Covering ears, flinching at sounds", "Either"),
-    ("SE03", "Shielding eyes, asking for lights off", "Either"),
-    ("SE04", "Seeking deep pressure (squeezing, leaning hard, crashing)", "Either"),
-    ("SE05", "Chewing or mouthing clothing or objects more than usual", "Either"),
-    ("SE06", "Taking off shoes or jumper, saying they're hot or itchy", "Either"),
-    ("SE07", "Using or avoiding the calm space more than usual", "Either"),
-    ("RT01", "Hovering near exits, checking gates or doors", "Hyper"),
-    ("RT02", "Asking again and again what's next, checking the visual timetable", "Either"),
-    ("RT03", "Hard to leave an activity, slow to transition", "Either"),
-    ("RT04", "Unsettled by a change of staff, room or plan", "Either"),
-    ("RT05", "Lingering at the car, gate or bag on arrival", "Either"),
-    ("RT06", "Arriving different from usual (late, without usual item, different mood)", "Either"),
-    ("RT07", "Repeated requests to leave the room (toilet, office, drink)", "Either"),
-    ("PH01", "Saying they're tired, yawning a lot early in the day", "Hypo"),
-    ("PH02", "Headache, tummy ache or feeling sick", "Either"),
-    ("PH03", "Not eating, or eating far more than usual", "Either"),
-    ("PH04", "Says they're hungry or haven't had breakfast", "Either"),
-    ("PH05", "Picking at skin, nails or hair, nail biting", "Either"),
-    ("PH06", "Toileting changes (more often, accidents, avoiding)", "Either"),
-    ("OB01", "Clicking, tapping or fiddling with objects", "Hyper"),
-    ("OB02", "Pushing items around or off the desk, dropping things", "Hyper"),
-    ("OB03", "Gripping or hoarding a comfort object", "Either"),
-    ("OB04", "Packing up early, putting bag on, getting ready to leave", "Either"),
-    ("OT00", "Other (describe)", "Either"),
+    ('BM12', "Tapping more than usual", 'Hyper'),
+    ('BM13', "Leg jiggling", 'Hyper'),
+    ('BM14', "Rocking on chair", 'Hyper'),
+    ('BM02', "Getting up or wandering without a purpose", 'Hyper'),
+    ('BM15', "Pacing", 'Hyper'),
+    ('BM16', "Moving to the edge of the room or the doorway", 'Hyper'),
+    ('BM17', "Clenched fists", 'Hyper'),
+    ('BM18', "Clenched jaw", 'Hyper'),
+    ('BM19', "Tense or raised shoulders", 'Hyper'),
+    ('BM20', "Fast or shallow breathing", 'Hyper'),
+    ('BM21', "Flushed face", 'Hyper'),
+    ('BM22', "Slumping in chair", 'Hypo'),
+    ('BM23', "Head down on desk", 'Hypo'),
+    ('BM24', "Body going floppy", 'Hypo'),
+    ('BM25', "Hood up", 'Hypo'),
+    ('BM26', "Hiding face in arms or clothing", 'Hypo'),
+    ('BM08', "Freezing mid-action or moving very slowly", 'Hypo'),
+    ('BM09', "Getting under a table or into a small space", 'Either'),
+    ('BM27', "Rocking to self-soothe", 'Either'),
+    ('BM28', "Rubbing hands or body", 'Either'),
+    ('BM29', "Hand flapping", 'Either'),
+    ('BM11', "Turning body away from the adult or group", 'Either'),
+    ('VC01', "Volume rising", 'Hyper'),
+    ('VC13', "Talking faster", 'Hyper'),
+    ('VC14', "Harder to interrupt or redirect", 'Hyper'),
+    ('VC15', "Sharp or abrupt tone", 'Hyper'),
+    ('VC16', "One-word answers (\"what\" or \"whatever\")", 'Hyper'),
+    ('VC04', "Muttering or comments under the breath", 'Hyper'),
+    ('VC17', "Increased silliness", 'Hyper'),
+    ('VC18', "Making noises", 'Hyper'),
+    ('VC19', "Putting on voices", 'Hyper'),
+    ('VC20', "Repeating phrases", 'Hyper'),
+    ('VC21', "More negotiating", 'Hyper'),
+    ('VC22', "More questioning (\"why do I have to?\")", 'Hyper'),
+    ('VC07', "Swearing said to no one in particular", 'Hyper'),
+    ('VC08', "Goes quiet or stops talking", 'Hypo'),
+    ('VC23', "Says \"I don't know\"", 'Hypo'),
+    ('VC24', "Says \"I can't\"", 'Hypo'),
+    ('VC25', "Shrugs instead of answering", 'Hypo'),
+    ('VC10', "Flat or monotone voice", 'Hypo'),
+    ('VC11', "Putting self down (e.g. \"I'm dumb\")", 'Either'),
+    ('VC12', "Talking about going home or leaving", 'Either'),
+    ('FA01', "Staring or a fixed glare", 'Hyper'),
+    ('FA08', "Scanning the room", 'Hyper'),
+    ('FA09', "Watching the door or the adults", 'Hyper'),
+    ('FA10', "Frowning", 'Hyper'),
+    ('FA11', "Grimacing", 'Hyper'),
+    ('FA12', "Eye-rolling", 'Hyper'),
+    ('FA13', "Glazed or far-away look", 'Hypo'),
+    ('FA14', "Slow to respond to name", 'Hypo'),
+    ('FA05', "Avoiding eye contact more than usual", 'Either'),
+    ('FA15', "Teary or watery eyes", 'Either'),
+    ('FA16', "Chin wobbling", 'Either'),
+    ('FA07', "Smiling or laughing that doesn't fit the moment", 'Either'),
+    ('TE11', "Rushing through work", 'Hyper'),
+    ('TE12', "More careless errors than usual", 'Hyper'),
+    ('TE13', "Rubbing out again and again", 'Hyper'),
+    ('TE14', "Scribbling over own work", 'Hyper'),
+    ('TE15', "Screwing up or ripping own work", 'Hyper'),
+    ('TE03', "Refusing help that is usually accepted", 'Hyper'),
+    ('TE16', "Changing the rules of the task", 'Hyper'),
+    ('TE17', "Insisting on doing it their own way", 'Hyper'),
+    ('TE05', "Stopping mid-task and staring", 'Hypo'),
+    ('TE18', "Sharpening pencils to delay starting", 'Either'),
+    ('TE19', "Rearranging things to delay starting", 'Either'),
+    ('TE20', "Asking for the toilet at the start of a task", 'Either'),
+    ('TE07', "Off task sooner than usual", 'Either'),
+    ('TE08', "Asking for help again and again on things they can do", 'Either'),
+    ('TE09', "Choosing the easiest option or avoiding a usual favourite", 'Either'),
+    ('TE10', "Asking for screen or preferred item early or repeatedly", 'Either'),
+    ('AR01', "Pushing the adult away (\"leave me alone\")", 'Hyper'),
+    ('AR02', "Testing a small boundary while watching the adult's reaction", 'Hyper'),
+    ('AR03', "Arguing about small things or correcting the adult", 'Hyper'),
+    ('AR08', "Over-compliant", 'Hypo'),
+    ('AR09', "Apologising a lot", 'Hypo'),
+    ('AR10', "People-pleasing", 'Hypo'),
+    ('AR05', "Not responding to name or first instruction (when they usually do)", 'Either'),
+    ('AR11', "Shadowing an adult", 'Either'),
+    ('AR12', "Seeking closeness more than usual", 'Either'),
+    ('AR13', "Rejecting a usually preferred adult", 'Either'),
+    ('AR14', "Accepting only one adult", 'Either'),
+    ('PR01', "Commenting on or correcting peers", 'Hyper'),
+    ('PR08', "Moving into a peer's space", 'Hyper'),
+    ('PR09', "Nudging or poking a peer", 'Hyper'),
+    ('PR03', "Strong reaction to a peer's noise or look (\"stop looking at me\")", 'Hyper'),
+    ('PR04', "Over-excited play that escalates quickly", 'Hyper'),
+    ('PR05', "Choosing to be alone when usually social", 'Hypo'),
+    ('PR06', "Telling on peers again and again", 'Either'),
+    ('PR10', "Bringing up conflict from home", 'Either'),
+    ('PR11', "Bringing up conflict from the bus or taxi", 'Either'),
+    ('PR12', "Bringing up conflict from the yard", 'Either'),
+    ('SE01', "More sensitive to touch or being bumped", 'Hyper'),
+    ('SE08', "Covering ears", 'Either'),
+    ('SE09', "Flinching at sounds", 'Either'),
+    ('SE10', "Shielding eyes", 'Either'),
+    ('SE11', "Asking for lights off", 'Either'),
+    ('SE12', "Squeezing people or objects (deep pressure)", 'Either'),
+    ('SE13', "Leaning hard on people or furniture", 'Either'),
+    ('SE14', "Crashing into things or the floor", 'Either'),
+    ('SE05', "Chewing or mouthing clothing or objects more than usual", 'Either'),
+    ('SE15', "Taking off shoes or jumper", 'Either'),
+    ('SE16', "Saying they're hot or itchy", 'Either'),
+    ('SE07', "Using or avoiding the calm space more than usual", 'Either'),
+    ('RT08', "Hovering near exits", 'Hyper'),
+    ('RT09', "Checking gates or doors", 'Hyper'),
+    ('RT10', "Asking again and again what's next", 'Either'),
+    ('RT11', "Checking the visual timetable again and again", 'Either'),
+    ('RT12', "Hard to leave an activity", 'Either'),
+    ('RT13', "Slow to transition", 'Either'),
+    ('RT14', "Unsettled by a change of staff", 'Either'),
+    ('RT15', "Unsettled by a change of room", 'Either'),
+    ('RT16', "Unsettled by a change of plan", 'Either'),
+    ('RT17', "Lingering at the car on arrival", 'Either'),
+    ('RT18', "Lingering at the gate on arrival", 'Either'),
+    ('RT19', "Lingering at their bag on arrival", 'Either'),
+    ('RT20', "Arriving late", 'Either'),
+    ('RT21', "Arriving without their usual item", 'Either'),
+    ('RT22', "Arriving in a different mood from usual", 'Either'),
+    ('RT23', "Asking for the toilet again and again", 'Either'),
+    ('RT24', "Asking to go to the office again and again", 'Either'),
+    ('RT25', "Asking for a drink again and again", 'Either'),
+    ('PH07', "Saying they're tired", 'Hypo'),
+    ('PH08', "Yawning a lot early in the day", 'Hypo'),
+    ('PH09', "Says they have a headache", 'Either'),
+    ('PH10', "Says they have a tummy ache", 'Either'),
+    ('PH11', "Says they feel sick", 'Either'),
+    ('PH12', "Not eating", 'Either'),
+    ('PH13', "Eating far more than usual", 'Either'),
+    ('PH04', "Says they're hungry or haven't had breakfast", 'Either'),
+    ('PH14', "Picking at skin", 'Either'),
+    ('PH15', "Picking or biting nails", 'Either'),
+    ('PH16', "Pulling or twisting hair", 'Either'),
+    ('PH17', "Going to the toilet more often", 'Either'),
+    ('PH18', "Toileting accidents", 'Either'),
+    ('PH19', "Avoiding the toilet", 'Either'),
+    ('OB05', "Clicking pens or objects", 'Hyper'),
+    ('OB06', "Tapping objects", 'Hyper'),
+    ('OB07', "Fiddling with objects", 'Hyper'),
+    ('OB08', "Pushing items around or off the desk", 'Hyper'),
+    ('OB09', "Dropping things", 'Hyper'),
+    ('OB03', "Gripping or hoarding a comfort object", 'Either'),
+    ('OB10', "Packing up early", 'Either'),
+    ('OB11', "Putting their bag on early", 'Either'),
+    ('OT00', "Other (describe)", 'Either'),
 ]
+
+# Combined codes from the first version (Nov 2026), retired when each was split into
+# single behaviours. Kept so entries already logged with them keep their label.
+LEGACY_CODES = {
+    'BM01': ("Fidgeting more than usual (tapping, leg jiggling, rocking on chair)", 'Hyper'),
+    'BM03': ("Pacing, or moving to the edge of the room or the doorway", 'Hyper'),
+    'BM04': ("Clenched fists or jaw, tense shoulders", 'Hyper'),
+    'BM05': ("Fast or shallow breathing, flushed face", 'Hyper'),
+    'BM06': ("Slumping, head on desk, body going floppy", 'Hypo'),
+    'BM07': ("Hood up, hiding face in arms or clothing", 'Hypo'),
+    'BM10': ("Self-soothing movement increasing (rocking, rubbing, flapping)", 'Either'),
+    'VC02': ("Talking faster, harder to interrupt", 'Hyper'),
+    'VC03': ("Sharp or abrupt tone, one-word answers (\"what\", \"whatever\")", 'Hyper'),
+    'VC05': ("Increased silliness, noises, voices or repeated phrases", 'Hyper'),
+    'VC06': ("More negotiating or questioning (\"why do I have to\", \"how long\")", 'Hyper'),
+    'VC09': ("\"I don't know\", \"I can't\", or a shrug instead of an answer", 'Hypo'),
+    'FA02': ("Scanning the room, watching the door or the adults", 'Hyper'),
+    'FA03': ("Frowning, grimacing or eye-rolling", 'Hyper'),
+    'FA04': ("Glazed, far-away look, slow to respond to name", 'Hypo'),
+    'FA06': ("Teary, watery eyes, chin wobbling", 'Either'),
+    'TE01': ("Rushing through work, more careless errors", 'Hyper'),
+    'TE02': ("Rubbing out or scribbling over again and again, screwing up own work", 'Hyper'),
+    'TE04': ("Trying to take control of the task (changing rules, insisting on own way)", 'Hyper'),
+    'TE06': ("Delaying the start (sharpening, rearranging, toilet request)", 'Either'),
+    'AR04': ("Over-compliant, apologising a lot, people-pleasing", 'Hypo'),
+    'AR06': ("Shadowing an adult, seeking closeness more than usual", 'Either'),
+    'AR07': ("Rejecting a usually preferred adult, or accepting only one adult", 'Either'),
+    'PR02': ("Moving into a peer's space, nudging or poking", 'Hyper'),
+    'PR07': ("Bringing up conflict from home, the bus or the yard", 'Either'),
+    'SE02': ("Covering ears, flinching at sounds", 'Either'),
+    'SE03': ("Shielding eyes, asking for lights off", 'Either'),
+    'SE04': ("Seeking deep pressure (squeezing, leaning hard, crashing)", 'Either'),
+    'SE06': ("Taking off shoes or jumper, saying they're hot or itchy", 'Either'),
+    'RT01': ("Hovering near exits, checking gates or doors", 'Hyper'),
+    'RT02': ("Asking again and again what's next, checking the visual timetable", 'Either'),
+    'RT03': ("Hard to leave an activity, slow to transition", 'Either'),
+    'RT04': ("Unsettled by a change of staff, room or plan", 'Either'),
+    'RT05': ("Lingering at the car, gate or bag on arrival", 'Either'),
+    'RT06': ("Arriving different from usual (late, without usual item, different mood)", 'Either'),
+    'RT07': ("Repeated requests to leave the room (toilet, office, drink)", 'Either'),
+    'PH01': ("Saying they're tired, yawning a lot early in the day", 'Hypo'),
+    'PH02': ("Headache, tummy ache or feeling sick", 'Either'),
+    'PH03': ("Not eating, or eating far more than usual", 'Either'),
+    'PH05': ("Picking at skin, nails or hair, nail biting", 'Either'),
+    'PH06': ("Toileting changes (more often, accidents, avoiding)", 'Either'),
+    'OB01': ("Clicking, tapping or fiddling with objects", 'Hyper'),
+    'OB02': ("Pushing items around or off the desk, dropping things", 'Hyper'),
+    'OB04': ("Packing up early, putting bag on, getting ready to leave", 'Either'),
+}
+SPLIT_INTO = {
+    'BM01': ['BM12', 'BM13', 'BM14'],
+    'BM03': ['BM15', 'BM16'],
+    'BM04': ['BM17', 'BM18', 'BM19'],
+    'BM05': ['BM20', 'BM21'],
+    'BM06': ['BM22', 'BM23', 'BM24'],
+    'BM07': ['BM25', 'BM26'],
+    'BM10': ['BM27', 'BM28', 'BM29'],
+    'VC02': ['VC13', 'VC14'],
+    'VC03': ['VC15', 'VC16'],
+    'VC05': ['VC17', 'VC18', 'VC19', 'VC20'],
+    'VC06': ['VC21', 'VC22'],
+    'VC09': ['VC23', 'VC24', 'VC25'],
+    'FA02': ['FA08', 'FA09'],
+    'FA03': ['FA10', 'FA11', 'FA12'],
+    'FA04': ['FA13', 'FA14'],
+    'FA06': ['FA15', 'FA16'],
+    'TE01': ['TE11', 'TE12'],
+    'TE02': ['TE13', 'TE14', 'TE15'],
+    'TE04': ['TE16', 'TE17'],
+    'TE06': ['TE18', 'TE19', 'TE20'],
+    'AR04': ['AR08', 'AR09', 'AR10'],
+    'AR06': ['AR11', 'AR12'],
+    'AR07': ['AR13', 'AR14'],
+    'PR02': ['PR08', 'PR09'],
+    'PR07': ['PR10', 'PR11', 'PR12'],
+    'SE02': ['SE08', 'SE09'],
+    'SE03': ['SE10', 'SE11'],
+    'SE04': ['SE12', 'SE13', 'SE14'],
+    'SE06': ['SE15', 'SE16'],
+    'RT01': ['RT08', 'RT09'],
+    'RT02': ['RT10', 'RT11'],
+    'RT03': ['RT12', 'RT13'],
+    'RT04': ['RT14', 'RT15', 'RT16'],
+    'RT05': ['RT17', 'RT18', 'RT19'],
+    'RT06': ['RT20', 'RT21', 'RT22'],
+    'RT07': ['RT23', 'RT24', 'RT25'],
+    'PH01': ['PH07', 'PH08'],
+    'PH02': ['PH09', 'PH10', 'PH11'],
+    'PH03': ['PH12', 'PH13'],
+    'PH05': ['PH14', 'PH15', 'PH16'],
+    'PH06': ['PH17', 'PH18', 'PH19'],
+    'OB01': ['OB05', 'OB06', 'OB07'],
+    'OB02': ['OB08', 'OB09'],
+    'OB04': ['OB10', 'OB11'],
+}
+# Codes kept but reworded to one behaviour: {code: (old wording, new wording)}
+RENAMED = {
+    'VC08': ("Stops talking, goes quiet", "Goes quiet or stops talking"),
+    'VC11': ("Putting self down (\"I'm dumb\", \"I'm bad at this\")", "Putting self down (e.g. \"I'm dumb\")"),
+    'VC12': ("Talking about going home, leaving or being somewhere else", "Talking about going home or leaving"),
+    'AR01': ("Pushing the adult away (\"leave me alone\", \"don't talk to me\")", "Pushing the adult away (\"leave me alone\")"),
+}
 
 
 def starter_codes() -> list[dict]:
     return [{"code": c, "category": CATEGORIES.get(c[:2], "Other"), "description": d,
              "direction": dr, "active": True, "sort_order": i}
             for i, (c, d, dr) in enumerate(_STARTER)]
+
+
+def legacy_codes() -> list[dict]:
+    """Retired combined codes (inactive) — labels for entries logged before the split."""
+    return [{"code": c, "category": CATEGORIES.get(c[:2], "Other"), "description": d,
+             "direction": dr, "active": False, "sort_order": 9000 + i}
+            for i, (c, (d, dr)) in enumerate(LEGACY_CODES.items())]
+
+
+def expand_codes(codes) -> set:
+    """A code plus, for a retired combined code, the single codes it was split into."""
+    out = set()
+    for c in codes or []:
+        out.add(c)
+        out.update(SPLIT_INTO.get(c, []))
+    return out
+
+
+_SYNCED_DB = False
+
+
+def _sync_db_codes(sb, rows: list[dict]) -> bool:
+    """One-off upgrade of a code table seeded before the split: add the new
+    single-behaviour codes, retire the combined ones, reword renamed ones.
+    Never touches codes Leadership has added or reworded themselves."""
+    have = {r["code"]: r for r in rows}
+    changes = []
+    for r in starter_codes():
+        if r["code"] not in have:
+            changes.append(r)
+    for code in SPLIT_INTO:
+        r = have.get(code)
+        if r and r.get("active", True):
+            changes.append({**{k: r.get(k) for k in ("code", "category", "description",
+                                                      "direction", "sort_order")},
+                            "active": False})
+    for code, (old, new) in RENAMED.items():
+        r = have.get(code)
+        if r and (r.get("description") or "").strip() == old:
+            changes.append({**{k: r.get(k) for k in ("code", "category", "direction",
+                                                      "active", "sort_order")},
+                            "description": new})
+    if not changes:
+        return False
+    # Upgrading: put every built-in code into the new order (split codes sit
+    # where the combined code used to be). Leadership-added codes keep theirs.
+    order = {r["code"]: r["sort_order"] for r in starter_codes()}
+    order.update({r["code"]: r["sort_order"] for r in legacy_codes()})
+    touched = {ch["code"] for ch in changes}
+    for code, r in have.items():
+        if code in order and code not in touched and r.get("sort_order") != order[code]:
+            changes.append({k: r.get(k) for k in ("code", "category", "description",
+                                                   "direction", "active")})
+    for ch in changes:
+        if ch["code"] in order:
+            ch["sort_order"] = order[ch["code"]]
+    if changes:
+        sb.table("micro_behaviour_codes").upsert(changes, on_conflict="code").execute()
+    return bool(changes)
 
 
 def now_local() -> datetime:
@@ -218,6 +497,15 @@ def load_codes(sb, include_inactive: bool = False) -> tuple[list[dict], bool]:
         try:
             q = sb.table("micro_behaviour_codes").select("*")
             rows = q.order("sort_order").order("code").execute().data or []
+            global _SYNCED_DB
+            if rows and not _SYNCED_DB:
+                _SYNCED_DB = True
+                try:
+                    if _sync_db_codes(sb, rows):
+                        rows = (sb.table("micro_behaviour_codes").select("*")
+                                .order("sort_order").order("code").execute().data or rows)
+                except Exception:
+                    pass
             if rows:
                 if not include_inactive:
                     rows = [r for r in rows if r.get("active", True)]
@@ -228,7 +516,7 @@ def load_codes(sb, include_inactive: bool = False) -> tuple[list[dict], bool]:
 
 
 def seed_codes(sb) -> int:
-    rows = starter_codes()
+    rows = starter_codes() + legacy_codes()
     sb.table("micro_behaviour_codes").upsert(rows, on_conflict="code").execute()
     return len(rows)
 
@@ -319,7 +607,7 @@ def micro_frame(rows: list[dict], codes: list[dict]) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame(columns=cols)
     lookup = {c["code"]: c for c in codes}
-    for c in starter_codes():          # retired codes still label old entries
+    for c in starter_codes() + legacy_codes():   # retired codes still label old entries
         lookup.setdefault(c["code"], c)
     out = []
     for r in rows:
@@ -538,8 +826,9 @@ def signature_plan_text(sig: dict | None) -> str:
 # Micro behaviours sit at the Anxiety level unless they are already pushing
 # back at an adult/peer, which is the Defensive level. Risk behaviour is an
 # incident, not a micro behaviour, so the Safety Intervention level is not used.
-DEFENSIVE_CODES = {"BM03", "BM04", "VC03", "VC07", "FA01", "TE03", "TE04",
+_DEFENSIVE_BASE = {"BM03", "BM04", "VC03", "VC07", "FA01", "TE03", "TE04",
                    "AR01", "AR02", "AR03", "PR02", "PR03", "RT01", "OB02"}
+DEFENSIVE_CODES = expand_codes(_DEFENSIVE_BASE)
 
 CPI_STANCE = {
     "Anxiety": ("Anxiety → Supportive",
@@ -690,7 +979,7 @@ def worked_before_for(rows: list[dict], codes: list[str], n: int = 2) -> list[st
         resp = (r.get("staff_response") or "").strip()
         if not resp:
             continue
-        overlap = len(set(r.get("codes") or []) & set(codes))
+        overlap = len(expand_codes(r.get("codes")) & expand_codes(codes))
         sc = scored.setdefault(resp, [0, 0])
         sc[0] += overlap
         sc[1] += 1
@@ -701,8 +990,11 @@ def worked_before_for(rows: list[dict], codes: list[str], n: int = 2) -> list[st
 # ──────────────────────────────────────────────────────────────────────────
 # STREAMLIT UI
 # ──────────────────────────────────────────────────────────────────────────
+_DIR_ARROW = {"Hyper": " ↑", "Hypo": " ↓", "Either": ""}
+
+
 def _code_label(c: dict) -> str:
-    return f"{c['code']} · {c['description']}"
+    return f"{c['code']} · {c['description']}{_DIR_ARROW.get(c.get('direction'), '')}"
 
 
 def _pick_codes(codes: list[dict], sig_codes: list[str], key: str) -> list[str]:
@@ -722,7 +1014,11 @@ def _pick_codes(codes: list[dict], sig_codes: list[str], key: str) -> list[str]:
         return st.multiselect(label, opts, key=k,
                               format_func=lambda x: _code_label(by_code[x]))
 
-    mine = [c for c in sig_codes if c in by_code]
+    mine = []
+    for c in sig_codes:
+        for cc in ([c] if c in by_code else SPLIT_INTO.get(c, [])):
+            if cc in by_code and cc not in mine:
+                mine.append(cc)
     if mine:
         st.markdown("**⭐ This student's usual signs**")
         chosen += _chips("This student's usual signs", mine, f"{key}_sig")
@@ -790,7 +1086,14 @@ def render_micro_log(sb, students: list[dict], staff_opts: dict, *, key: str = "
         t = st.time_input("🕐 Time it started *", value=nowl.time().replace(second=0, microsecond=0),
                           step=60, key=f"{k}_time")
 
-    st.markdown("**👀 What did you see or hear?** (tap one or more)")
+    st.markdown(
+        "<div style='background:#E8F5E9;border-left:5px solid #2E7D32;border-radius:0 8px 8px 0;"
+        "padding:.55rem .9rem;margin:.2rem 0 .6rem;font-size:.88rem;color:#1B3A1F;'>"
+        "🪟 <b>Window of Tolerance:</b> micro behaviours are <b>coping</b> signs. The student is "
+        "still in their window and still coping, but is showing us they are moving toward the "
+        "edge. Responding now helps them stay in the window.</div>", unsafe_allow_html=True)
+    st.markdown("**👀 What did you see or hear?** (tap one or more · ↑ toward hyperarousal · "
+                "↓ toward hypoarousal)")
     sig = load_signature(sb, sid)
     picked = _pick_codes(codes, signature_codes(sig), f"{k}_codes")
     other_text = ""
@@ -798,6 +1101,12 @@ def render_micro_log(sb, students: list[dict], staff_opts: dict, *, key: str = "
         other_text = st.text_input("Describe the 'Other' behaviour *", key=f"{k}_other")
     if picked:
         st.caption("Selected: " + ", ".join(picked))
+        _meta = {c["code"]: c for c in codes}
+        _dirs = [_meta.get(c, {}).get("direction", "Either") for c in picked if c != "OT00"]
+        if _dirs:
+            st.markdown("**Where this sits in the Window of Tolerance**")
+            st.markdown(wot_strip_html(_dirs, compact=True), unsafe_allow_html=True)
+            st.caption(wot_position_sentence(_dirs))
 
     s1, s2 = st.columns(2)
     with s1:
@@ -829,6 +1138,8 @@ def render_micro_log(sb, students: list[dict], staff_opts: dict, *, key: str = "
             f"<div style='border-left:5px solid {colour};background:#f8fafc;border-radius:0 8px 8px 0;"
             f"padding:.7rem 1rem;margin:.3rem 0 .6rem;'>"
             f"<div style='font-weight:700;color:{colour};'>💡 Suggested response · CPI stage: {sg['stage_label']}</div>"
+            f"<div style='font-size:.8rem;color:#475569;'>🪟 {WOT_SHORT.get(sg['direction'], '')}: "
+            f"the aim is to help the student stay in their window.</div>"
             f"<div style='font-size:.85rem;color:#334155;margin:.25rem 0 .4rem;'>{sg['stage_note']}</div>"
             f"<ul style='margin:0 0 0 1.1rem;font-size:.9rem;color:#0f172a;'>{tips}</ul>"
             f"<div style='font-size:.75rem;color:#64748b;margin-top:.4rem;'>Suggestions only. Use your "
@@ -919,7 +1230,7 @@ def render_code_manager(sb, key: str = "mcm") -> None:
     rows, from_db = load_codes(sb, include_inactive=True)
     if not from_db:
         st.info("The code list hasn't been loaded into the database yet, so the built-in "
-                "starter list (78 codes + Other) is being used.")
+                f"starter list ({len(_STARTER) - 1} codes + Other) is being used.")
         if st.button("📥 Load the starter list into the database", key=f"{key}_seed"):
             try:
                 n = seed_codes(sb)
@@ -979,6 +1290,13 @@ def render_micro_analysis_section(sb, student: dict, full_df: pd.DataFrame, *,
     st.caption(f"Small changes logged before anything became an incident. Shown here only — not in "
                f"the Behaviour Summary report, incident totals or the risk score. Run-up window: "
                f"{RUN_UP_MINUTES} minutes before each incident.")
+    st.markdown(
+        "<div style='background:#E8F5E9;border-left:5px solid #2E7D32;border-radius:0 8px 8px 0;"
+        "padding:.5rem .9rem;margin:.2rem 0 .6rem;font-size:.86rem;color:#1B3A1F;'>"
+        "🪟 <b>Window of Tolerance link:</b> every entry here is a <b>coping</b> sign. The student "
+        "was still in their window, but showing they were moving toward the edge (Coping ↑ toward "
+        "hyperarousal, or Coping ↓ toward hypoarousal). Incidents are when they've left the window.</div>",
+        unsafe_allow_html=True)
 
     codes, _ = load_codes(sb, include_inactive=True)
     rows = load_micro(sb, sid)
@@ -1015,12 +1333,13 @@ def render_micro_analysis_section(sb, student: dict, full_df: pd.DataFrame, *,
             fig.update_layout(height=max(220, 34 * len(freq) + 60), margin=dict(l=10, r=10, t=10, b=30),
                               xaxis_title="Times logged", plot_bgcolor="white")
             st.plotly_chart(fig, use_container_width=True, key=f"{key}_freq")
-            st.caption("Bar colour = direction: red Hyper (heading up), blue Hypo (heading down), "
-                       "purple Either.")
+            st.caption("Bar colour = Window of Tolerance coping zone: amber Coping ↑ toward "
+                       "hyperarousal, blue Coping ↓ toward hypoarousal, purple either way.")
         with cB:
-            st.markdown("**Direction of drift**")
+            st.markdown("**Which coping zone**")
             tot = sum(ds.values()) or 1
-            for dname, label in [("Hyper", "Hyper ↑"), ("Hypo", "Hypo ↓"), ("Either", "Either")]:
+            for dname, label in [("Hyper", "Coping ↑ toward hyper"), ("Hypo", "Coping ↓ toward hypo"),
+                                 ("Either", "Either way")]:
                 st.markdown(
                     f"<div style='border-left:4px solid {DIR_COLOURS[dname]};padding:.3rem .6rem;"
                     f"margin-bottom:.4rem;background:#f8fafc;border-radius:0 6px 6px 0;'>"
@@ -1029,10 +1348,13 @@ def render_micro_analysis_section(sb, student: dict, full_df: pd.DataFrame, *,
                     f"font-size:.8rem;'>({ds[dname]})</span></div>", unsafe_allow_html=True)
             main = max(ds, key=ds.get)
             if ds["Hyper"] and ds["Hypo"] and min(ds["Hyper"], ds["Hypo"]) / max(ds["Hyper"], ds["Hypo"]) >= 0.5:
-                st.caption("Mix of Hyper and Hypo signs — check whether this student goes quiet "
-                           "before they escalate.")
+                st.caption("Signs in both coping zones — check whether this student goes quiet "
+                           "(toward hypoarousal) before they escalate (toward hyperarousal).")
             elif main == "Hypo":
-                st.caption("Mostly Hypo — quiet signs that are easy to miss in a busy room.")
+                st.caption("Mostly Coping ↓ toward hypoarousal — quiet signs that are easy to miss "
+                           "in a busy room.")
+            elif main == "Hyper":
+                st.caption("Mostly Coping ↑ toward hyperarousal.")
 
         # Run-up
         st.markdown(f"**The run-up: micro behaviours in the {RUN_UP_MINUTES} minutes before incidents**")
@@ -1113,9 +1435,10 @@ def render_micro_analysis_section(sb, student: dict, full_df: pd.DataFrame, *,
 
     # Signature
     st.markdown("#### 🧭 Early-warning signature")
-    st.caption("The student's own short, ordered list of signs and what works at each stage. "
-               "It feeds the Early Warning Signs section of their Safety & Risk Plan. "
-               "Review it each term.")
+    st.caption("The student's own short, ordered list of coping signs as they move toward the edge "
+               "of their Window of Tolerance, and what helps them stay in it at each stage. Stages "
+               "1–3 are still in the window; stage 4 is outside it. It feeds the Early Warning Signs "
+               "section of their Safety & Risk Plan. Review it each term.")
     if sig and sig.get("updated_at"):
         when = _to_local_naive(sig["updated_at"])
         st.caption(f"Last updated {when.strftime('%d/%m/%Y') if when is not None else ''}"
