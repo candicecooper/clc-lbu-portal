@@ -46,6 +46,15 @@ try:
 except Exception:
     _ARCHIVE_AVAILABLE = False
 
+# Micro behaviours (early-warning signs) — shared with the Safety & Risk Plan Builder
+try:
+    import micro_behaviour_utils as mbu
+    _MICRO_AVAILABLE = True
+except Exception as _mbu_err:
+    mbu = None
+    _MICRO_AVAILABLE = False
+    _MICRO_IMPORT_ERROR = str(_mbu_err)
+
 
 def _student_archive_initials(student) -> str:
     """The Document Archive / Student Register code for this student.
@@ -5971,6 +5980,9 @@ def render_program_students_page():
                     go_to("student_dashboard", selected_student_id=stu["id"])
                 if st.button("📝 Log", key=f"log_{stu['id']}", use_container_width=True):
                     go_to("incident_log", selected_student_id=stu["id"])
+                if st.button("🌡️ Micro", key=f"micro_{stu['id']}", use_container_width=True,
+                             help="Log an early-warning sign (micro behaviour)"):
+                    go_to("micro_log", selected_student_id=stu["id"])
                 if st.button("📈 Analysis", key=f"ana_{stu['id']}", use_container_width=True):
                     go_to("student_analysis", selected_student_id=stu["id"])
                 if st.button("📋 Plan", key=f"plan_{stu['id']}", use_container_width=True):
@@ -7789,6 +7801,8 @@ def _render_student_analysis_page_inner():
     if full_df.empty:
         st.info("No incident data available yet. Suggestions from the Starting Profile can still be trialled from day one.")
         render_strategy_trials(student, pd.DataFrame())
+        st.markdown("---")
+        _render_micro_section_uncaptured(student, pd.DataFrame())
         if st.button("↩️ Back", key="back_no_data"):
             go_to("program_students", selected_program=student["program"])
         return
@@ -10007,6 +10021,9 @@ def _render_student_analysis_page_inner():
     st.markdown("---")
 
     render_transition_impact_section(student, full_df)
+
+    _render_micro_section_uncaptured(student, full_df)
+    st.markdown("---")
 
     st.markdown("### 👁️ View, Edit & Print an Incident")
     st.caption("Look up any single incident for this student, correct details (e.g. a wrong date), and print or download a summary.")
@@ -12446,6 +12463,107 @@ def generate_student_friendly_plan_docx(student, plan, strategies, triggers=None
     return buf
 
 
+def _micro_can_manage_codes() -> bool:
+    u = st.session_state.get("current_user") or {}
+    return (not st.session_state.get("_viewer_session")) and u.get("role") in ("ADM", "Leader")
+
+
+def _render_micro_section_uncaptured(student, full_df):
+    """Micro Behaviours section on the Analysis page. Decision (Nov 2026):
+    analysis page only — so it's kept OUT of the printable/archived copy by
+    pausing the screen capture, and never touches incident totals or risk."""
+    if not _MICRO_AVAILABLE:
+        st.caption("🌡️ Micro behaviours unavailable — micro_behaviour_utils.py missing from the repo root.")
+        return
+    _prev = _SCREEN.get("paused", False)
+    _SCREEN["paused"] = True
+    try:
+        _viewer = bool(st.session_state.get("_viewer_session"))
+        _u = st.session_state.get("current_user") or {}
+        mbu.render_micro_analysis_section(
+            supabase, student, full_df,
+            student_initials=_student_archive_initials(student),
+            can_edit=not _viewer,
+            can_delete=_micro_can_manage_codes(),
+            editor_name=_u.get("name", ""),
+            write_blocked=_viewer_write_blocked,
+            key=f"mas_{student.get('id')}",
+        )
+    except Exception as _e:
+        st.warning(f"Micro behaviours section couldn't load: {_e}")
+    finally:
+        _SCREEN["paused"] = _prev
+
+
+def render_micro_log_page():
+    """In-app Micro log (logged-in staff). Student preselected from the list."""
+    student_id = st.session_state.get("selected_student_id")
+    student = get_student(student_id) if student_id else None
+    st.markdown("## 🌡️ Log a Micro Behaviour")
+    st.caption("A small change that signals a student is starting to move outside their Window of "
+               "Tolerance. Takes under 30 seconds. Not an incident — it doesn't count towards "
+               "incident totals or the risk score.")
+    if st.button("⬅ Back to Students", key="back_micro"):
+        go_to("program_students", selected_program=(student or {}).get("program", "JP"))
+    if not _MICRO_AVAILABLE:
+        st.error("micro_behaviour_utils.py is missing from the repo root.")
+        return
+    if not supabase:
+        st.error("Database not connected — unable to save.")
+        return
+    _prog = (student or {}).get("program")
+    _stus = [{"id": s["id"], "name": s["name"], "program": s.get("program", "")}
+             for s in st.session_state.students
+             if not s.get("archived", False) and (not _prog or s.get("program") == _prog)]
+    _staff = {str(s["id"]): s["name"] for s in st.session_state.get("staff", []) if s.get("id")}
+    _me = str((st.session_state.get("current_user") or {}).get("id", ""))
+    with st.container(border=True):
+        mbu.render_micro_log(supabase, _stus, _staff, key="ml_app",
+                             preselect_student_id=student_id,
+                             current_staff_id=_me if _me in _staff else None,
+                             write_blocked=lambda: _viewer_write_blocked("log a micro behaviour"))
+    if student and st.button("📈 See this student's micro behaviours on the Analysis page",
+                             key="micro_to_analysis"):
+        go_to("student_analysis", selected_student_id=student["id"])
+    if _micro_can_manage_codes():
+        with st.expander("⚙️ Manage micro behaviour codes (Leadership)"):
+            mbu.render_code_manager(supabase, key="mcm_app")
+
+
+def render_micro_log_standalone():
+    """Micro log without the tool's login, like the Quick Incident Log.
+    Tile URL: /Behaviour_Support?mode=microlog"""
+    st.markdown(
+        "<div style='background:#1A7A7A;border-radius:12px;padding:1rem 1.5rem;margin-bottom:1.25rem;'>"
+        "<div style='color:white;font-size:1.5rem;font-weight:700;'>🌡️ Micro Behaviour Log</div>"
+        "<div style='color:#fef3c7;font-size:.88rem;margin-top:.2rem;'>"
+        "Early-warning signs · Cowandilla Learning Centre — Learning & Behaviour Unit</div></div>",
+        unsafe_allow_html=True)
+    st.caption("Log a small change you've noticed before anything became an incident. "
+               "It builds the student's early-warning picture on their Analysis page.")
+    if not _MICRO_AVAILABLE:
+        st.error("micro_behaviour_utils.py is missing from the repo root.")
+        return
+    if not supabase:
+        st.error("Database not connected — unable to save. Contact the portal administrator.")
+        return
+    try:
+        _rows = supabase.table("students").select("id,first_name,last_name,name,program") \
+            .eq("archived", False).execute().data or []
+        _stus = sorted([{"id": str(r["id"]),
+                         "name": (f"{r.get('first_name','')} {r.get('last_name','')}".strip()
+                                  if r.get("first_name") else r.get("name", "Unknown")),
+                         "program": r.get("program", "")} for r in _rows], key=lambda x: x["name"])
+        _staff = {str(r["id"]): r["name"] for r in
+                  (supabase.table("staff").select("id,name").execute().data or [])}
+    except Exception as _e:
+        st.error(f"Could not load students/staff: {_e}")
+        return
+    with st.container(border=True):
+        mbu.render_micro_log(supabase, _stus, _staff, key="ml_std")
+    st.caption("CLC-LBU Portal · Micro Behaviour Log · For incidents use the Quick Incident Log or ABCH form")
+
+
 def render_quick_incident_log():
     """Standalone quick incident log — no login required."""
     import uuid as _uuid
@@ -12773,6 +12891,9 @@ def main():
     if _ql_mode == "quicklog":
         render_quick_incident_log()
         return
+    if _ql_mode == "microlog":
+        render_micro_log_standalone()
+        return
 
     init_state()
     if not st.session_state.logged_in:
@@ -12807,6 +12928,7 @@ def main():
     elif page == "student_analysis":        render_student_analysis_page()
     elif page == "student_dashboard":       render_student_dashboard()
     elif page == "support_plan":             render_support_plan_page()
+    elif page == "micro_log":               render_micro_log_page()
     elif page == "admin_portal":            render_admin_portal()
     else:                                   render_landing_page()
 
