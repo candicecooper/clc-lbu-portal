@@ -97,21 +97,24 @@ DIRECTIONS = ["Hyper", "Hypo", "Either"]
 # Colours match the site's Window of Tolerance Creator / Behaviour Support WoT zones
 DIR_COLOURS = {"Hyper": "#B9761A", "Hypo": "#2A6693", "Either": "#7C3AED"}
 
-# Micro behaviours sit in the WoT "Coping Mechanisms" bands: the student is still
-# coping (still in their window) but showing they are moving toward its edge.
+# Micro behaviours sit in the WoT "Coping Mechanisms" bands, which are JUST OUTSIDE
+# the window: the student has left the window but is still coping, and with the
+# right response can usually come back into it before reaching Mobilisation /
+# Immobilisation (where an incident happens).
 WOT_BANDS = [
-    ("hyper", "Mobilisation — Hyperarousal", "Outside the window: fight / flight. This is an incident.", "#AF3A2C"),
-    ("copingup", "Coping — moving toward Hyperarousal", "Still coping, but arousal is rising.", "#B9761A"),
+    ("hyper", "Mobilisation — Hyperarousal", "Further out: fight / flight. This is an incident.", "#AF3A2C"),
+    ("copingup", "Coping — moving toward Hyperarousal", "Just outside the window: still coping, but arousal is rising.", "#B9761A"),
     ("window", "Window of Tolerance", "Regulated, ready to learn and connect.", "#2E7D32"),
-    ("copingdown", "Coping — moving toward Hypoarousal", "Still coping, but starting to shut down.", "#2A6693"),
-    ("hypo", "Immobilisation — Hypoarousal", "Outside the window: freeze / shut down. This is an incident.", "#3C4C6B"),
+    ("copingdown", "Coping — moving toward Hypoarousal", "Just outside the window: still coping, but starting to shut down.", "#2A6693"),
+    ("hypo", "Immobilisation — Hypoarousal", "Further out: freeze / shut down. This is an incident.", "#3C4C6B"),
 ]
 WOT_FOR_DIRECTION = {"Hyper": "copingup", "Hypo": "copingdown"}
 WOT_SHORT = {"Hyper": "Coping ↑ toward Hyperarousal", "Hypo": "Coping ↓ toward Hypoarousal",
              "Either": "Coping (either way)"}
-WOT_EXPLAINER = ("Micro behaviours are **coping** signs. The student is still inside their Window "
-                 "of Tolerance and still coping, but is showing us they are moving toward the edge. "
-                 "Responding now helps them stay in the window, before it becomes an incident.")
+WOT_EXPLAINER = ("Micro behaviours are **coping** signs. The student has moved just outside their "
+                 "Window of Tolerance into a coping zone. They are still coping, but are heading "
+                 "toward hyperarousal or hypoarousal. Responding now helps them come back into the "
+                 "window before it becomes an incident.")
 
 
 def wot_strip_html(directions: list[str] | None = None, compact: bool = False) -> str:
@@ -144,10 +147,13 @@ def wot_position_sentence(directions: list[str]) -> str:
         return ("These signs point both ways. Some students go quiet before they escalate, so "
                 "watch for a swing from Hypo to Hyper.")
     if h:
-        return "The student is still coping, but their arousal is rising toward Mobilisation (hyperarousal)."
+        return ("The student is just outside their window, in the coping zone. They are still coping, "
+                "but arousal is rising toward Mobilisation (hyperarousal).")
     if l:
-        return "The student is still coping, but is starting to move toward Immobilisation (hypoarousal)."
-    return "The student is still coping. Check their profile for which way these signs usually go."
+        return ("The student is just outside their window, in the coping zone. They are still coping, "
+                "but are starting to move toward Immobilisation (hypoarousal).")
+    return ("The student is just outside their window, in a coping zone. Check their profile for "
+            "which way these signs usually go.")
 
 CATEGORIES = {
     "BM": "Body and movement", "VC": "Voice and words", "FA": "Face and eyes",
@@ -783,7 +789,7 @@ def suggest_signature(mdf: pd.DataFrame, ru: dict, max_codes: int = 6) -> list[d
                     "what_staff_see": "; ".join(r["description"] for r in part),
                     "codes": ", ".join(r["code"] for r in part),
                     "what_works": ""})
-    out.append({"stage": "4. Outside the window", "what_staff_see": "Minor or Critical incident",
+    out.append({"stage": "4. Mobilisation / Immobilisation", "what_staff_see": "Minor or Critical incident",
                 "codes": "Incident log", "what_works": "Follow the Safety and Risk Plan"})
     return out
 
@@ -1089,9 +1095,10 @@ def render_micro_log(sb, students: list[dict], staff_opts: dict, *, key: str = "
     st.markdown(
         "<div style='background:#E8F5E9;border-left:5px solid #2E7D32;border-radius:0 8px 8px 0;"
         "padding:.55rem .9rem;margin:.2rem 0 .6rem;font-size:.88rem;color:#1B3A1F;'>"
-        "🪟 <b>Window of Tolerance:</b> micro behaviours are <b>coping</b> signs. The student is "
-        "still in their window and still coping, but is showing us they are moving toward the "
-        "edge. Responding now helps them stay in the window.</div>", unsafe_allow_html=True)
+        "🪟 <b>Window of Tolerance:</b> micro behaviours are <b>coping</b> signs. The student has "
+        "moved <b>just outside</b> their window into a coping zone. They are still coping, but are "
+        "heading toward hyperarousal or hypoarousal. Responding now helps them come back into the "
+        "window before it becomes an incident.</div>", unsafe_allow_html=True)
     st.markdown("**👀 What did you see or hear?** (tap one or more · ↑ toward hyperarousal · "
                 "↓ toward hypoarousal)")
     sig = load_signature(sb, sid)
@@ -1139,7 +1146,7 @@ def render_micro_log(sb, students: list[dict], staff_opts: dict, *, key: str = "
             f"padding:.7rem 1rem;margin:.3rem 0 .6rem;'>"
             f"<div style='font-weight:700;color:{colour};'>💡 Suggested response · CPI stage: {sg['stage_label']}</div>"
             f"<div style='font-size:.8rem;color:#475569;'>🪟 {WOT_SHORT.get(sg['direction'], '')}: "
-            f"the aim is to help the student stay in their window.</div>"
+            f"just outside the window. The aim is to help the student back into it.</div>"
             f"<div style='font-size:.85rem;color:#334155;margin:.25rem 0 .4rem;'>{sg['stage_note']}</div>"
             f"<ul style='margin:0 0 0 1.1rem;font-size:.9rem;color:#0f172a;'>{tips}</ul>"
             f"<div style='font-size:.75rem;color:#64748b;margin-top:.4rem;'>Suggestions only. Use your "
@@ -1294,8 +1301,9 @@ def render_micro_analysis_section(sb, student: dict, full_df: pd.DataFrame, *,
         "<div style='background:#E8F5E9;border-left:5px solid #2E7D32;border-radius:0 8px 8px 0;"
         "padding:.5rem .9rem;margin:.2rem 0 .6rem;font-size:.86rem;color:#1B3A1F;'>"
         "🪟 <b>Window of Tolerance link:</b> every entry here is a <b>coping</b> sign. The student "
-        "was still in their window, but showing they were moving toward the edge (Coping ↑ toward "
-        "hyperarousal, or Coping ↓ toward hypoarousal). Incidents are when they've left the window.</div>",
+        "had moved just outside their window into a coping zone (Coping ↑ toward hyperarousal, or "
+        "Coping ↓ toward hypoarousal) but was still coping. Incidents are when they've gone further, "
+        "into Mobilisation or Immobilisation.</div>",
         unsafe_allow_html=True)
 
     codes, _ = load_codes(sb, include_inactive=True)
@@ -1435,9 +1443,10 @@ def render_micro_analysis_section(sb, student: dict, full_df: pd.DataFrame, *,
 
     # Signature
     st.markdown("#### 🧭 Early-warning signature")
-    st.caption("The student's own short, ordered list of coping signs as they move toward the edge "
-               "of their Window of Tolerance, and what helps them stay in it at each stage. Stages "
-               "1–3 are still in the window; stage 4 is outside it. It feeds the Early Warning Signs "
+    st.caption("The student's own short, ordered list of coping signs once they move just outside "
+               "their Window of Tolerance, and what helps them back into it at each stage. Stages "
+               "1–3 are the coping zone (just outside the window, still coping); stage 4 is "
+               "Mobilisation or Immobilisation (an incident). It feeds the Early Warning Signs "
                "section of their Safety & Risk Plan. Review it each term.")
     if sig and sig.get("updated_at"):
         when = _to_local_naive(sig["updated_at"])
@@ -1455,7 +1464,7 @@ def render_micro_analysis_section(sb, student: dict, full_df: pd.DataFrame, *,
     if not stages:
         stages = [{"stage": n, "what_staff_see": "", "codes": "", "what_works": ""}
                   for n in ["1. First sign", "2. Building", "3. Close to the edge"]] + [
-                  {"stage": "4. Outside the window", "what_staff_see": "Minor or Critical incident",
+                  {"stage": "4. Mobilisation / Immobilisation", "what_staff_see": "Minor or Critical incident",
                    "codes": "Incident log", "what_works": "Follow the Safety and Risk Plan"}]
     sdf = pd.DataFrame(stages).reindex(columns=sig_cols).fillna("")
     if can_edit:
