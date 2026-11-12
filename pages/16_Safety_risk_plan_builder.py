@@ -1882,7 +1882,8 @@ elif st.session_state.step == 5:
 
     st.markdown('<div class="sec-head">Early Warning Signs</div>', unsafe_allow_html=True)
     autofill_early_warning()
-    st.caption("The student's own early-warning signs and what works at each stage. Filled "
+    st.caption("The student's own coping signs as they move toward the edge of their Window of "
+               "Tolerance, and what works at each stage. Filled "
                "automatically from their signature in the Behaviour Support Tool (Analysis page → "
                "Micro Behaviours) when this plan is linked to a registered student. Edit freely — "
                "changes here don't go back to the Behaviour Support Tool.")
@@ -2198,8 +2199,10 @@ elif st.session_state.step == 7:
             set_bg(ew, TEAL_LIGHT.lstrip("#")); set_borders(ew, TEAL.lstrip("#"))
             ew.paragraphs[0].clear()
             cpara(ew, "EARLY WARNING SIGNS", bold=True, size=19, color=TEAL.lstrip("#"), sb=40, sa=20)
-            cpara(ew, "Signs this student is starting to move outside their Window of Tolerance, "
-                      "from CLC observation data. Respond at the earliest stage you see.",
+            cpara(ew, "Window of Tolerance: these are coping signs. The student is still in their "
+                      "window, but showing they are moving toward the edge (toward hyperarousal or "
+                      "hypoarousal). Respond at the earliest stage you see to help them stay in the "
+                      "window. From CLC observation data.",
                   italic=True, size=15, color="555555", sa=40)
             render_content(ew, _ew_text)
             doc.add_paragraph()
