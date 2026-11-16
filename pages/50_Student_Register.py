@@ -66,6 +66,31 @@ st.caption(
 
 user_email = st.session_state.get("user_email", "unknown")
 
+# ── Result of the last archive: what was filed to the student's folder ─────
+_eop = st.session_state.get("_eop_results")
+if _eop:
+    _icons = {"filed": "✅", "already": "📁", "none": "➖", "failed": "❌"}
+    _words = {"filed": "filed now", "already": "already on file",
+              "none": "nothing to file", "failed": "NOT filed"}
+    _items = _eop.get("items", [])
+    _failed = [i for i in _items if i["status"] == "failed"]
+    _box = st.error if _failed else st.success
+    with st.container(border=True):
+        _box(f"🗄️ **{_eop['initials']} archived** — end-of-placement documents:")
+        for _i in _items:
+            st.markdown(f"{_icons.get(_i['status'], '•')} **{_i['item']}** — "
+                        f"{_words.get(_i['status'], _i['status'])}"
+                        + (f" · {_i['detail']}" if _i.get("detail") else ""))
+        if _eop.get("sync_warnings"):
+            st.warning("Could not confirm archiving in: " + "; ".join(_eop["sync_warnings"])
+                       + ". Check those tools so the student isn't left active there.")
+        if _failed:
+            st.caption("Anything marked ❌ can be saved by hand from that tool — the student "
+                       "is archived either way. Reactivating and re-archiving also re-runs this.")
+        if st.button("Done", key="eop_dismiss"):
+            st.session_state.pop("_eop_results", None)
+            st.rerun()
+
 with st.expander("🔧 Connection info (for setup/troubleshooting)"):
     from archive_utils import connected_project
     _url = connected_project()
@@ -386,12 +411,16 @@ with tab_current:
                     )
 
                     # ── Document completeness check ──────────────────────────
+                    # doc types the archive step files automatically (if data exists)
+                    _AUTO = {"SMARTAR Goals", "Behaviour Report", "Sensory Overview",
+                             "Window of Tolerance", "Communication Log Export"}
                     _EXPECTED = [
                         ("SMARTAR Goals", "SMARTAR Goal Report"),
                         ("Behaviour Report", "Behaviour Summary"),
                         ("Sensory Overview", "Sensory Overview"),
+                        ("Window of Tolerance", "Window of Tolerance"),
                         ("Safety & Risk Plan", "Safety & Risk Plan"),
-                        ("Communication Log Export", "Communication Log (auto-files on archive)"),
+                        ("Communication Log Export", "Communication Log"),
                     ]
                     try:
                         _sdocs = fetch_archive(student_initials=s["initials"],
@@ -403,11 +432,16 @@ with tab_current:
                                 f"**{s['initials']}**:")
                     _missing = []
                     for _dt, _label in _EXPECTED:
-                        if _dt in _have:
-                            _n = sum(1 for d in _sdocs if d.get("doc_type") == _dt)
-                            st.markdown(f"- ✅ {_label}  ·  {_n} on file")
-                        elif _dt == "Communication Log Export":
-                            st.markdown(f"- ⏳ {_label}")
+                        _n = sum(1 for d in _sdocs if d.get("doc_type") == _dt)
+                        _on = f"{_n} on file" if _n else "none on file yet"
+                        if _dt in {"SMARTAR Goals", "Behaviour Report", "Communication Log Export"}:
+                            st.markdown(f"- 🔄 {_label} · {_on} — **a final version will be "
+                                        "generated and filed** when you archive")
+                        elif _dt in _AUTO:
+                            st.markdown(f"- 🔄 {_label} · {_on} — **filed automatically** "
+                                        "if one has been created and the archive copy is out of date")
+                        elif _dt in _have:
+                            st.markdown(f"- ✅ {_label} · {_on}")
                         else:
                             st.markdown(f"- ❌ **{_label} — not in the archive**")
                             _missing.append(_label)
@@ -416,15 +450,12 @@ with tab_current:
                     if _other:
                         st.caption(f"Plus {len(_other)} other document(s) on file.")
                     if _missing:
-                        st.error(
-                            "Missing: **" + ", ".join(_missing) + "**. If these exist, "
-                            "open each tool and use its *Save to archive* prompt before "
-                            "archiving — the folder is the permanent record once the "
-                            "student leaves. You can still archive without them if they "
-                            "genuinely don't apply."
+                        st.warning(
+                            "**" + ", ".join(_missing) + "** can't be filed automatically "
+                            "(that builder doesn't keep saved data). If the student has one, "
+                            "open the builder and use *Save to archive* first. You can still "
+                            "archive without it if it genuinely doesn't apply."
                         )
-                    else:
-                        st.success("All key documents are on file.")
 
                     ad1, ad2, ad3 = st.columns([2, 1, 2])
                     with ad1:
@@ -438,7 +469,11 @@ with tab_current:
                         if st.button(
                             "Yes, archive", key=f"arch_yes_{sid}", type="primary"
                         ):
-                            if set_student_status(sid, "archived", arch_exit):
+                            with st.spinner(f"Archiving {s['initials']} and filing their "
+                                            "end-of-placement documents… (this can take "
+                                            "up to a minute)"):
+                                _ok = set_student_status(sid, "archived", arch_exit)
+                            if _ok:
                                 st.session_state.pop("_confirm_arch", None)
                                 st.rerun()
                     with ad3:
