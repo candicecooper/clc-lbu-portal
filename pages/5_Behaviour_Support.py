@@ -5008,6 +5008,30 @@ def save_starting_profile(student_id, profile: dict, by: str = "") -> bool:
         return False
 
 
+def delete_starting_profile(student_id) -> bool:
+    """Remove a student's starting profile completely (database + this session),
+    e.g. when another student's documents were uploaded by mistake."""
+    if _viewer_write_blocked("delete the starting profile"):
+        return False
+    sid = str(student_id)
+    ok = True
+    if supabase:
+        try:
+            _db_retry(lambda: supabase.table("starting_profiles").delete().eq("student_id", sid).execute())
+        except Exception as e:
+            st.session_state["_last_save_error"] = str(e)
+            ok = False
+    for k in list(st.session_state.keys()):
+        ks = str(k)
+        if ks in (f"starting_profile_{sid}", f"_profile_cache_{sid}", f"sp_paste_{sid}",
+                  f"sp_save_problem_{sid}", f"sp_del_confirm_{sid}") or \
+                ((ks.startswith("sp_inc_") or ks.startswith("sp_ev_")) and ks.endswith(f"_{sid}")):
+            del st.session_state[k]
+    # new key for the file uploader so the uploaded file is cleared from the box too
+    st.session_state[f"sp_upl_nonce_{sid}"] = st.session_state.get(f"sp_upl_nonce_{sid}", 0) + 1
+    return ok
+
+
 STARTING_PROFILES_SQL = """create table if not exists starting_profiles (
   student_id text primary key,
   profile jsonb,
@@ -5235,8 +5259,12 @@ def render_starting_profile(student):
                    "confirm are kept, and the document itself is not stored.")
         if st.session_state.get("_profile_db_ok") is False:
             show_save_problem("The starting profile", STARTING_PROFILES_SQL)
+        if st.session_state.pop(f"sp_deleted_{sid}", False):
+            st.success("🗑️ Starting profile deleted. Nothing from those documents is kept. You can upload the "
+                       "correct student's information below.")
         files = st.file_uploader("Upload one or more documents", type=["docx", "pdf", "odt", "txt"],
-                                 accept_multiple_files=True, key=f"sp_files_{sid}")
+                                 accept_multiple_files=True,
+                                 key=f"sp_files_{sid}_{st.session_state.get(f'sp_upl_nonce_{sid}', 0)}")
         pasted = st.text_area("…or paste text here", height=120, key=f"sp_paste_{sid}",
                               placeholder="Paste referral notes, a transition summary or previous school report…")
         if st.button("🤖 Find themes and suggestions", type="primary", key=f"sp_run_{sid}", use_container_width=True):
@@ -5265,6 +5293,21 @@ def render_starting_profile(student):
         if not profile:
             return
         st.markdown("---")
+        with st.container(border=True):
+            st.markdown("**🗑️ Wrong student's information? Delete this starting profile**")
+            st.caption("Removes the summary, strengths, interests, what helps / doesn't help and all themes for "
+                       "this student, so nothing from the uploaded documents is kept. The documents themselves "
+                       "were never stored. Any strategy trial already started from these suggestions stays in "
+                       "🧪 Strategies to Trial — remove it there if it no longer applies.")
+            _conf = st.checkbox(f"Yes, delete the starting profile for {student['name']}",
+                                key=f"sp_del_confirm_{sid}")
+            if st.button("🗑️ Delete starting profile", key=f"sp_del_{sid}", disabled=not _conf):
+                if delete_starting_profile(sid):
+                    st.session_state[f"sp_deleted_{sid}"] = True
+                    st.rerun()
+                else:
+                    st.error("Couldn't delete it from the database: "
+                             f"{st.session_state.get('_last_save_error', 'unknown error')}. Please try again.")
         if profile.get("summary"):
             st.info(profile["summary"])
         cs, ci = st.columns(2)
