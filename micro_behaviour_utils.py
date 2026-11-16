@@ -825,6 +825,63 @@ def signature_plan_text(sig: dict | None) -> str:
     return "\n".join(lines)
 
 
+
+def wot_coping_from_micro(rows: list[dict], codes: list[dict], limit: int | None = 6) -> dict:
+    """Group EVERY logged micro behaviour into the Window of Tolerance coping
+    zones used by the Behaviour Support WoT table (same ids as WOT_ZONES there):
+      copingup   = Coping, moving toward hyperarousal (Hyper signs)
+      copingdown = Coping, moving toward hypoarousal  (Hypo signs)
+    An entry goes to the zone most of its signs point to. 'Either' signs follow
+    the rest of their entry; an entry with only 'Either' signs (or an even split)
+    is counted in both zones, because it could be heading either way.
+    Returns {zone: {"n": entries, "behaviour": [...every sign, with count...],
+    "context": [...], "interventions": [...what settled them...], "both_ways": n}}."""
+    from collections import Counter
+    lookup = {c["code"]: c for c in starter_codes() + legacy_codes()}
+    lookup.update({c["code"]: c for c in (codes or [])})
+    zones = {z: {"n": 0, "beh": Counter(), "ctx": Counter(), "help": Counter(), "both_ways": 0}
+             for z in ("copingup", "copingdown")}
+    for r in rows or []:
+        cs = [c for c in (r.get("codes") or []) if c]
+        if not cs:
+            continue
+        dirs = [lookup.get(c, {}).get("direction", "Either") for c in cs]
+        h, lo = dirs.count("Hyper"), dirs.count("Hypo")
+        targets = (["copingup"] if h > lo else ["copingdown"] if lo > h
+                   else ["copingup", "copingdown"])
+        for z in targets:
+            zd = zones[z]
+            zd["n"] += 1
+            if len(targets) == 2:
+                zd["both_ways"] += 1
+            for c in cs:
+                if c == "OT00":
+                    d = (r.get("other_text") or "").strip() or "Other"
+                else:
+                    d = lookup.get(c, {}).get("description", c)
+                zd["beh"][d] += 1
+            ctx = " — ".join(x for x in ((r.get("setting") or "").strip(),
+                                          (r.get("just_before") or "").strip()) if x)
+            if ctx:
+                zd["ctx"][ctx] += 1
+            if OUTCOME_SHORT.get(r.get("outcome", "")) == "Settled":
+                resp = (r.get("staff_response") or "").strip()
+                if resp:
+                    zd["help"][resp] += 1
+
+    def _fmt(counter, limit=None):
+        items = counter.most_common(limit)
+        return [f"{k} ({n})" if n > 1 else k for k, n in items]
+
+    out = {}
+    for z, zd in zones.items():
+        if not zd["n"]:
+            continue
+        out[z] = {"n": zd["n"], "behaviour": _fmt(zd["beh"]),            # every sign
+                  "context": _fmt(zd["ctx"], limit), "interventions": _fmt(zd["help"], limit),
+                  "both_ways": zd["both_ways"]}
+    return out
+
 # ──────────────────────────────────────────────────────────────────────────
 # SUGGESTED RESPONSES — trauma-informed, CPI-aligned
 # ──────────────────────────────────────────────────────────────────────────
