@@ -35,6 +35,7 @@ DOC_TYPES = [
     "Sensory Overview",
     "Interval Support Report",
     "Safety & Risk Plan",
+    "Window of Tolerance",
     "Communication Log Export",
     "Transition Timetable",
     "PDP",
@@ -50,6 +51,7 @@ SOURCE_TOOLS = [
     "Sensory Overview",
     "Interval Support Tracker",
     "Safety & Risk Plan Builder",
+    "Window of Tolerance Builder",
     "Communication Log",
     "Transition Timetables",
     "PDP Builder",
@@ -789,15 +791,29 @@ def set_student_status(record_id: str, status: str, exit_date=None) -> bool:
                 except Exception:
                     pass
                 _cl = archive_commlog_export(ini)
+                if _cl == "empty":
+                    _cl_res = {"item": "Communication Log", "status": "none",
+                               "detail": "No communication log entries."}
+                elif _cl:
+                    _cl_res = {"item": "Communication Log", "status": "filed",
+                               "detail": "Full log exported to Excel."}
+                else:
+                    _cl_res = {"item": "Communication Log", "status": "failed",
+                               "detail": "Could not be filed (likely a permission/RLS issue)."}
+                # End-of-placement pack: SMARTAR, Behaviour, Sensory, WoT, Safety plan
                 try:
-                    if _cl == "empty":
-                        st.info("ℹ️ No communication log entries to file for this student.")
-                    elif _cl:
-                        st.success("🗄️ Communication log filed in the archive.")
-                    else:
-                        st.error("⚠️ Communication log could NOT be filed to the archive "
-                                 "(likely a permission/RLS issue). The student is archived, "
-                                 "but check the Document Archive and re-file if needed.")
+                    from end_of_placement import file_end_of_placement_pack
+                    _pack = file_end_of_placement_pack(ini, record_id)
+                except Exception as _pe:  # noqa: BLE001
+                    _pack = [{"item": "End-of-placement documents", "status": "failed",
+                              "detail": f"Could not run: {_pe}"}]
+                # Kept in session so the Register can show it after its rerun
+                try:
+                    st.session_state["_eop_results"] = {
+                        "initials": ini,
+                        "items": _pack + [_cl_res],
+                        "sync_warnings": _warn,
+                    }
                 except Exception:
                     pass
             else:
