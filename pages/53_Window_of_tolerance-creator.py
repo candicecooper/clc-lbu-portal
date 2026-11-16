@@ -650,6 +650,10 @@
   /* ---------- print style 2: "Regulation Map" — open bands + gradient rail ---------- */
   .print-style-toggle{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:0 0 10px; font-family:var(--font-body); font-size:12.5px; color:var(--ink-soft); }
   .print-style-toggle span.lbl{ margin-right:2px; }
+  .explainer-toggle{ display:flex; gap:8px; align-items:flex-start; margin:0 0 10px; font-family:var(--font-body); font-size:12.5px; color:var(--ink-soft); cursor:pointer; }
+  .explainer-toggle input{ margin:2px 0 0; accent-color:var(--accent); width:15px; height:15px; flex:none; }
+  .explainer-toggle b{ color:var(--ink); font-weight:600; }
+  .wot-explainer{ display:none; }
   .print-style-toggle button{
     font-family:var(--font-body); font-size:12.5px; font-weight:600;
     padding:6px 12px; border-radius:20px; border:1px solid var(--border);
@@ -765,7 +769,9 @@
   }
 
   @media print{
-    .masthead, .ladder-key, .view-toggle, .bank, .toolbar-actions, .add-own, .rline .remove, .footnote, .layout, .print-style-toggle, .builder-topbar, .print-name-field{ display:none !important; }
+    .masthead, .ladder-key, .view-toggle, .bank, .toolbar-actions, .add-own, .rline .remove, .footnote, .layout, .print-style-toggle, .builder-topbar, .print-name-field, .explainer-toggle{ display:none !important; }
+    body[data-include-explainer="1"] .wot-explainer{ display:block !important; }
+    body:not([data-include-explainer="1"]) .wot-explainer{ display:none !important; }
     body{ background:#fff; color:#000; }
     .app{ padding:6px; max-width:none; }
     body[data-print-style="map"] .wot-print-sheet{ display:none !important; }
@@ -1002,6 +1008,10 @@
           <input type="text" id="printStudentName" placeholder="Optional — shows on the printed/downloaded report only" autocomplete="off">
           <span class="hint">Never saved — the report itself only stores initials.</span>
         </div>
+        <label class="explainer-toggle" for="chkExplainer">
+          <input type="checkbox" id="chkExplainer">
+          <span><b>Include Window of Tolerance explanation notes</b><br>Adds a one-page staff explanation as its own page at the end of the print and download.</span>
+        </label>
         <div class="toolbar-actions">
           <button class="btn primary" id="btnSave">Save</button>
           <button class="btn" id="btnExport">Export text</button>
@@ -1061,6 +1071,50 @@
       </div>
     </div>
   </div>
+
+  <div class="wot-explainer" id="printExplainer">
+    <div class="ex-head">
+      <div>
+        <p class="ex-eyebrow">Cowandilla Learning Centre — Learning and Behaviour Unit</p>
+        <h1 class="ex-title">Understanding the Window of Tolerance</h1>
+      </div>
+      <p class="ex-tag">Staff explanation notes</p>
+    </div>
+
+    <h2>What it is</h2>
+    <p>The Window of Tolerance is the zone where a person can cope with everyday ups and downs while staying able to think, reflect and connect with others. Inside their window, a student's body feels settled. They can listen, work with others and learn. Everyone moves in and out of their window at times. It's a normal human response, not a choice or a character flaw.</p>
+
+    <h2>Why it matters for our students</h2>
+    <p>Many students who have been through relational trauma have a narrower, less flexible window. Their nervous systems have learned to expect threat. They scan for danger without knowing it, and they slip out of their window more easily and more often than most people. Behaviour outside the window is usually a protective survival response that once helped keep them safe. How wide a window is can also change: it's often wider when familiar, trusted adults are close by.</p>
+
+    <h2>The zones</h2>
+    <div class="ex-zones">
+      <div class="ex-zone" data-zone="hyper"><div class="ex-zl">Mobilisation<span>Hyperarousal — too much arousal</span></div><div class="ex-zt">Fight or flight. Restless, on high alert, impulsive, reactive, defensive. Fast or shallow breathing, tense muscles, darting eyes, trouble keeping still, startles easily.</div></div>
+      <div class="ex-zone" data-zone="copingup"><div class="ex-zl">Coping — rising<span>Just outside the window</span></div><div class="ex-zt">Early warning signs, or micro behaviours. The student is starting to move out of their window but is still coping. This is the best time to step in.</div></div>
+      <div class="ex-zone" data-zone="wot"><div class="ex-zl">Window of Tolerance<span>Regulated — ready to learn</span></div><div class="ex-zt">Calm, settled body. Socially engaged, able to think clearly, reflect, accept boundaries and self-regulate.</div></div>
+      <div class="ex-zone" data-zone="copingdown"><div class="ex-zl">Coping — falling<span>Just outside the window</span></div><div class="ex-zt">Early signs of slowing or withdrawing while still coping. Step in gently now.</div></div>
+      <div class="ex-zone" data-zone="hypo"><div class="ex-zl">Immobilisation<span>Hypoarousal — too little arousal</span></div><div class="ex-zt">Shutting down or collapsing. Flat, numb, withdrawn, "checked out", hopeless. Slumped posture, blank face, fixed stare, low energy. Easy to miss because they're trying not to be noticed.</div></div>
+    </div>
+
+    <h2>Helping a student return to their window</h2>
+    <ul>
+      <li><b>Mobilised:</b> regulating movement to slow down. Planned movement breaks, errands, hands-on tasks, a practised plan for getting to a safe space.</li>
+      <li><b>Immobilised:</b> gentle re-engagement in the here and now. Short present-moment activities, sensory input, calm connection with a trusted adult.</li>
+      <li><b>All students:</b> safety first. Know their safe people and places, offer choice and control, and adjust expectations while regulation is the priority.</li>
+    </ul>
+
+    <div class="ex-questions">
+      <h2>Questions to keep in mind</h2>
+      <ol>
+        <li>Where is the student in relation to their window, and how do I know?</li>
+        <li>Where am I in relation to my own window, and how do I know?</li>
+        <li>What do I need right now to stay in my window?</li>
+      </ol>
+    </div>
+
+    <p class="ex-source">Adapted from: Australian Childhood Foundation (2021), SMART Discussion Paper 15: Working with the Window of Tolerance in the Classroom. Concept originally developed by D. Siegel (1999) and P. Ogden et al. (2006).</p>
+  </div>
+
 </div>
 
 <div class="overlay" id="exportOverlay">
@@ -2236,6 +2290,50 @@
     // not measurement scaffolding, so (unlike position/left/top/display) they must persist.
   }
 
+  // ================= Window of Tolerance explanation notes (optional extra page) =================
+  var EXPLAINER_CSS = [
+    ".wot-explainer{ font-family:var(--font-sans-map); color:var(--map-ink); background:#fff; font-size:12.5px; line-height:1.5; page:wotexplainer; break-before:page; page-break-before:always; }",
+    ".wot-explainer h2{ font-family:var(--font-serif-map); font-weight:600; font-size:15px; color:var(--map-wot); margin:12px 0 4px; }",
+    ".wot-explainer p{ margin:0 0 6px; }",
+    ".wot-explainer .ex-head{ display:flex; justify-content:space-between; align-items:flex-end; gap:16px; border-bottom:2px solid var(--map-wot); padding-bottom:7px; margin-bottom:6px; }",
+    ".wot-explainer .ex-eyebrow{ font-size:10px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--map-ink-faint); margin:0 0 3px; }",
+    ".wot-explainer .ex-title{ font-family:var(--font-serif-map); font-weight:500; font-size:24px; margin:0; color:var(--map-ink); }",
+    ".wot-explainer .ex-tag{ font-size:11px; color:var(--map-ink-soft); margin:0; white-space:nowrap; }",
+    ".wot-explainer .ex-zones{ border:1px solid var(--map-rule); border-radius:6px; overflow:hidden; }",
+    ".wot-explainer .ex-zone{ display:grid; grid-template-columns:170px 1fr; border-bottom:1px solid #fff; }",
+    ".wot-explainer .ex-zone:last-child{ border-bottom:none; }",
+    ".wot-explainer .ex-zl{ color:#fff; font-weight:600; font-size:12.5px; padding:7px 9px; }",
+    ".wot-explainer .ex-zl span{ display:block; font-weight:400; font-style:italic; font-size:10.5px; opacity:.92; }",
+    ".wot-explainer .ex-zt{ padding:7px 10px; font-size:12px; }",
+    ".wot-explainer .ex-zone[data-zone=hyper] .ex-zl{ background:var(--map-hyper); } .wot-explainer .ex-zone[data-zone=hyper] .ex-zt{ background:var(--map-hyper-tint); }",
+    ".wot-explainer .ex-zone[data-zone=copingup] .ex-zl{ background:var(--map-copeup); } .wot-explainer .ex-zone[data-zone=copingup] .ex-zt{ background:var(--map-copeup-tint); }",
+    ".wot-explainer .ex-zone[data-zone=wot] .ex-zl{ background:var(--map-wot); } .wot-explainer .ex-zone[data-zone=wot] .ex-zt{ background:var(--map-wot-tint); }",
+    ".wot-explainer .ex-zone[data-zone=copingdown] .ex-zl{ background:var(--map-copedown); } .wot-explainer .ex-zone[data-zone=copingdown] .ex-zt{ background:var(--map-copedown-tint); }",
+    ".wot-explainer .ex-zone[data-zone=hypo] .ex-zl{ background:var(--map-hypo); } .wot-explainer .ex-zone[data-zone=hypo] .ex-zt{ background:var(--map-hypo-tint); }",
+    ".wot-explainer ul, .wot-explainer ol{ margin:0 0 6px; padding-left:20px; }",
+    ".wot-explainer li{ margin-bottom:3px; }",
+    ".wot-explainer .ex-questions{ border:1px solid var(--map-wot); border-radius:6px; padding:2px 12px 6px; margin-top:12px; }",
+    ".wot-explainer .ex-source{ margin-top:12px; padding-top:6px; border-top:1px solid var(--map-rule); font-size:10px; color:var(--map-ink-soft); }",
+    "@page wotexplainer{ size:A4 portrait; margin:14mm; }"
+  ].join("\n");
+  try{
+    var exStyleEl = document.createElement("style");
+    exStyleEl.textContent = EXPLAINER_CSS;
+    document.head.appendChild(exStyleEl);
+  }catch(e){ /* ignore */ }
+
+  var EXPLAINER_KEY = "wot-builder-include-explainer-v1";
+  var includeExplainer = false;
+  try{ includeExplainer = localStorage.getItem(EXPLAINER_KEY) === "1"; }catch(e){ /* ignore */ }
+  var chkExplainer = document.getElementById("chkExplainer");
+  function applyExplainerChoice(){
+    document.body.setAttribute("data-include-explainer", includeExplainer ? "1" : "0");
+    if(chkExplainer) chkExplainer.checked = includeExplainer;
+    try{ localStorage.setItem(EXPLAINER_KEY, includeExplainer ? "1" : "0"); }catch(e){ /* ignore */ }
+  }
+  applyExplainerChoice();
+  if(chkExplainer) chkExplainer.addEventListener("change", function(){ includeExplainer = chkExplainer.checked; applyExplainerChoice(); });
+
   function activePrintElement(){
     return printStyle === "map" ? document.getElementById("printMap") : document.getElementById("printSheet");
   }
@@ -2248,7 +2346,7 @@
   });
 
   document.getElementById("btnDownload").addEventListener("click", function(){
-    var html = buildArchiveSnapshotHtml();
+    var html = buildArchiveSnapshotHtml(includeExplainer);
     var studentSlug = (currentStudent ? currentStudent.initials : "student").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/(^-|-$)/g,"");
     var fileName = "window-of-tolerance-" + (studentSlug || "report") + ".html";
     if(downloadsNS){
@@ -2542,12 +2640,14 @@
   });
   archiveOverlay.addEventListener("click", function(e){ if(e.target === archiveOverlay) archiveOverlay.classList.remove("open"); });
 
-  function buildArchiveSnapshotHtml(){
+  function buildArchiveSnapshotHtml(withExplainer){
     renderPrintSheet();
     renderPrintMap();
     var activeEl = printStyle === "map" ? document.getElementById("printMap") : document.getElementById("printSheet");
     fitPrintElementToOnePage(activeEl);
     var markup = activeEl.outerHTML;
+    var explainerEl = document.getElementById("printExplainer");
+    var explainerMarkup = (withExplainer && explainerEl) ? explainerEl.outerHTML : "";
     activeEl.style.zoom = "";
     activeEl.style.width = "";
     return "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Window of Tolerance — " +
@@ -2555,7 +2655,8 @@
       "\nbody{background:#fff;margin:0;padding:24px;} .wot-print-sheet{display:block;max-width:1200px;margin:0 auto;} .wot-print-map{display:block;}" +
       "\n*{ -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; color-adjust:exact !important; }" +
       "\n@page{ size:A4 landscape; margin:9mm; }" +
-      "</style></head><body>" + markup + "</body></html>";
+      (explainerMarkup ? "\n" + EXPLAINER_CSS + "\n.wot-explainer{display:block;max-width:182mm;margin:40px auto 0;} @media print{ .wot-explainer{margin:0 auto;} }" : "") +
+      "</style></head><body>" + markup + explainerMarkup + "</body></html>";
   }
 
   document.getElementById("btnDoArchive").addEventListener("click", function(){
