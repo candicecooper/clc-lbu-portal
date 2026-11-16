@@ -1165,3 +1165,72 @@ def add_past_students(candidates: list[dict], created_by: str = "unknown") -> tu
         except Exception as exc:  # noqa: BLE001
             problems.append(f"{ini} — {exc}")
     return added, problems
+
+
+def lookup_student(initials: str) -> dict:
+    """Everything the portal knows about one set of initials — used to work
+    out why a student isn't showing where expected. Shows NO names: tool
+    records are reported only as found / archived / active. Never raises."""
+    ini = (initials or "").strip().upper()
+    out = {"initials": ini, "register": [], "behaviour": [], "smartar": [],
+           "docs": {}, "errors": []}
+    if not ini:
+        return out
+    try:
+        client = _get_client()
+    except Exception as exc:  # noqa: BLE001
+        out["errors"].append(f"Couldn't connect: {exc}")
+        return out
+    # Register rows whose initials match exactly OR in a different case/spacing
+    try:
+        rows = client.table(REGISTER_TABLE).select("*").execute().data or []
+        out["register"] = [
+            {"id": r.get("id"), "initials": r.get("initials"), "program": r.get("program"),
+             "status": r.get("status"), "start_date": r.get("start_date"),
+             "exit_date": r.get("exit_date")}
+            for r in rows
+            if re.sub(r"[^A-Za-z0-9]", "", str(r.get("initials") or "")).upper() == ini
+        ]
+    except Exception as exc:  # noqa: BLE001
+        out["errors"].append(f"Register: {exc}")
+    try:
+        rows = (client.table(BEHAVIOUR_STUDENTS_TABLE)
+                .select("first_name, last_name, name, program, archived").execute().data or [])
+        out["behaviour"] = [{"program": r.get("program"), "archived": bool(r.get("archived"))}
+                            for r in rows
+                            if _past_initials(r.get("first_name"), r.get("last_name"),
+                                              r.get("name")) == ini]
+    except Exception as exc:  # noqa: BLE001
+        out["errors"].append(f"Behaviour tool: {exc}")
+    try:
+        rows = (client.table("smartar_students").select("student_name, program, active")
+                .execute().data or [])
+        out["smartar"] = [{"program": r.get("program"), "active": bool(r.get("active"))}
+                          for r in rows if _past_initials(name=r.get("student_name")) == ini]
+    except Exception as exc:  # noqa: BLE001
+        out["errors"].append(f"SMARTAR: {exc}")
+    # Archive documents filed under these initials or a variant (EE-PY, ee, "EE ")
+    try:
+        docs = (client.table(TABLE).select("student_initials, deleted")
+                .limit(10000).execute().data or [])
+        for d in docs:
+            raw = str(d.get("student_initials") or "")
+            norm = raw.strip().upper()
+            if norm == ini or norm.split("-")[0].strip() == ini:
+                key = raw + (" (deleted)" if d.get("deleted") else "")
+                out["docs"][key] = out["docs"].get(key, 0) + 1
+    except Exception as exc:  # noqa: BLE001
+        out["errors"].append(f"Document Archive: {exc}")
+    return out
+
+
+def set_register_status_raw(record_id: str, status: str) -> bool:
+    """Correct a register row's status field directly (e.g. a blank or
+    'Archived' value that hides the student from both lists). Doesn't
+    re-run the archive cascade."""
+    try:
+        _get_client().table(REGISTER_TABLE).update({"status": status}).eq("id", record_id).execute()
+        return True
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Could not update status: {exc}")
+        return False
