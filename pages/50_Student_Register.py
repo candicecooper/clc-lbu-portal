@@ -18,7 +18,9 @@ import streamlit as st
 
 from archive_utils import (
     PROGRAMS,
+    add_past_students,
     extend_student,
+    find_past_students,
     import_from_behaviour,
     import_from_smartar,
     push_register_to_behaviour,
@@ -486,6 +488,51 @@ with tab_current:
 # ARCHIVED STUDENTS
 # ===========================================================================
 with tab_archived:
+    # ── Past students who never made it onto the register ────────────────
+    with st.expander("🔎 Find past students missing from the register",
+                     expanded=bool(st.session_state.get("_past_found")
+                                   or st.session_state.get("_past_added"))):
+        st.caption(
+            "Students archived inside the Behaviour Support Tool or SMARTAR, or "
+            "who left before the register existed, have no register entry — so "
+            "they don't show under *Archived students* in the Document Archive. "
+            "This finds them and adds them here **as archived** (never active). "
+            "Nothing is changed until you tick students and click Add."
+        )
+        if st.button("Search for past students", key="past_find"):
+            with st.spinner("Checking the Behaviour tool, SMARTAR and the archive…"):
+                st.session_state["_past_found"] = find_past_students()
+        _pf = st.session_state.get("_past_found")
+        if _pf:
+            _cands, _notes = _pf
+            if not _cands:
+                st.success("✅ No missing past students — everyone who has left is on the register.")
+            else:
+                st.write(f"Found **{len(_cands)}** past student(s) not on the register. "
+                         "Untick anyone who shouldn't be added (e.g. a duplicate or a typo).")
+                _picked = []
+                for _c in _cands:
+                    _lbl = (f"**{_c['initials']}** · {_c.get('program') or 'no program'}"
+                            + (f" · left {_c['exit_date']}" if _c.get("exit_date") else "")
+                            + f" · {_c['docs']} document(s)"
+                            + f" — found in: {', '.join(_c['sources'])}")
+                    if st.checkbox(_lbl, value=True, key=f"past_{_c['initials']}"):
+                        _picked.append(_c)
+                if st.button(f"➕ Add {len(_picked)} as archived students",
+                             type="primary", disabled=not _picked, key="past_add"):
+                    _n, _probs = add_past_students(_picked, user_email)
+                    st.session_state.pop("_past_found", None)
+                    st.session_state["_past_added"] = (_n, _probs)
+                    st.rerun()
+            for _nt in _notes:
+                st.caption(f"ℹ️ {_nt}")
+        _pa = st.session_state.pop("_past_added", None)
+        if _pa:
+            st.success(f"✅ Added {_pa[0]} past student(s). They now appear under "
+                       "*Archived students* here and in the Document Archive.")
+            for _pr in _pa[1]:
+                st.caption(f"⚠️ {_pr}")
+
     archived = fetch_register("archived")
     if not archived:
         st.info("No archived students yet.")
