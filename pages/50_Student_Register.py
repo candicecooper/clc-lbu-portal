@@ -21,6 +21,8 @@ from archive_utils import (
     add_past_students,
     extend_student,
     find_past_students,
+    lookup_student,
+    set_register_status_raw,
     import_from_behaviour,
     import_from_smartar,
     push_register_to_behaviour,
@@ -532,6 +534,95 @@ with tab_archived:
                        "*Archived students* here and in the Document Archive.")
             for _pr in _pa[1]:
                 st.caption(f"⚠️ {_pr}")
+
+    # ── Look up one student: why aren't they showing? ─────────────────────
+    with st.expander("🩺 Look up a student — why isn't someone showing?",
+                     expanded=bool(st.session_state.get("_lookup_ini"))):
+        _lq = st.text_input("Initials", max_chars=6, placeholder="e.g. EE",
+                            key="lookup_q").strip().upper()
+        if st.button("Look up", key="lookup_go") and _lq:
+            st.session_state["_lookup_ini"] = _lq
+        _li = st.session_state.get("_lookup_ini")
+        if _li:
+            _lk = lookup_student(_li)
+            for _e in _lk["errors"]:
+                st.caption(f"⚠️ {_e}")
+            _reg = _lk["register"]
+            _beh, _sma, _docs = _lk["behaviour"], _lk["smartar"], _lk["docs"]
+
+            st.markdown(f"#### {_li}")
+            st.markdown("**Student Register:** " + (
+                "; ".join(f"initials `{r['initials']}` · {r.get('program') or 'no program'} · "
+                          f"status `{r.get('status')}`" for r in _reg) if _reg else "❌ no entry"))
+            st.markdown("**Behaviour Support Tool:** " + (
+                ", ".join("archived" if b["archived"] else "**active**" for b in _beh)
+                if _beh else "not found"))
+            st.markdown("**SMARTAR:** " + (
+                ", ".join("**active**" if m["active"] else "inactive" for m in _sma)
+                if _sma else "not found"))
+            st.markdown("**Document Archive:** " + (
+                ", ".join(f"{n} filed under `{k}`" for k, n in _docs.items())
+                if _docs else "no documents"))
+
+            st.markdown("**Why, and the fix:**")
+            if not _reg:
+                _still_active = any(not b["archived"] for b in _beh) or any(m["active"] for m in _sma)
+                if _still_active:
+                    st.warning(f"{_li} isn't on the register and is still **active** in the "
+                               "Behaviour or SMARTAR tool, so *Find past students* leaves them out. "
+                               "If they have left, add them as archived below; if they're still "
+                               "here, add them on the Add New Student tab.")
+                else:
+                    st.warning(f"{_li} isn't on the register, so the Document Archive can't "
+                               "list them under Archived students.")
+                if st.button(f"➕ Add {_li} to the register as an archived student",
+                             key="lookup_add"):
+                    _prog = next((x.get("program") for x in _beh + _sma if x.get("program")), None)
+                    _n, _pr = add_past_students(
+                        [{"initials": _li, "program": _prog, "sources": ["manual lookup"]}],
+                        user_email)
+                    if _n:
+                        st.success(f"✅ {_li} added as archived — they'll now show in the "
+                                   "Document Archive's Archived view.")
+                    for _x in _pr:
+                        st.caption(f"⚠️ {_x}")
+            else:
+                if len(_reg) > 1:
+                    st.warning(f"{_li} has **{len(_reg)} register entries** — the Document "
+                               "Archive shows the active one first and hides the other. Use "
+                               "*Fix* on Current Students to merge or remove the duplicate.")
+                for r in _reg:
+                    _st = str(r.get("status") or "")
+                    _odd_ini = r["initials"] != _li
+                    if _odd_ini:
+                        st.warning(f"Register initials are stored as `{r['initials']}` (extra "
+                                   "spaces or lower case), so searches for "
+                                   f"`{_li}` don't match. Use *Fix* on the student to re-save "
+                                   f"them as {_li}.")
+                    if _st == "archived":
+                        st.success("Archived on the register — they should appear in the "
+                                   "Document Archive under **📦 Archived students** (switch at "
+                                   "the top of Student Folders), filed under the term of their "
+                                   "latest document.")
+                    elif _st == "active":
+                        st.info("Still **active** on the register, so they show under Active "
+                                "students, not Archived. Archive them from Current Students "
+                                "(that also files their end-of-placement documents).")
+                    else:
+                        st.error(f"Their register status is `{r.get('status')}` — not "
+                                 "'active' or 'archived' — so they're hidden from **both** lists.")
+                        if st.button(f"Set {r['initials']} to archived", key=f"lookup_fix_{r['id']}"):
+                            if set_register_status_raw(r["id"], "archived"):
+                                st.success("Fixed — they'll now show as archived.")
+            _variants = [k for k in _docs if k.strip().upper() != _li and "(deleted)" not in k]
+            if _variants:
+                st.info("Some documents are filed under a different code ("
+                        + ", ".join(f"`{v}`" for v in _variants) + "), so they sit in a separate "
+                        f"folder. In the Document Archive, open that folder and use *Move to a "
+                        f"student* (or Admin → merge folders) to move them into {_li}.")
+            if st.button("Clear", key="lookup_clear"):
+                st.session_state.pop("_lookup_ini", None)
+                st.rerun()
 
     archived = fetch_register("archived")
     if not archived:
