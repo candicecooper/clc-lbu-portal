@@ -1022,3 +1022,146 @@ def register_program_map() -> dict:
     archived) — used by the Document Archive to display the program
     next to each folder."""
     return {s["initials"]: (s.get("program") or "") for s in fetch_register(None)}
+
+
+# ---------------------------------------------------------------------------
+# Past students missing from the register
+# ---------------------------------------------------------------------------
+# Students archived inside the Behaviour Support Tool or SMARTAR (or who left
+# before the register existed) never got a register entry, so the Document
+# Archive's "Archived students" view can't show them. These two functions find
+# them and add them to the register AS ARCHIVED (never as active).
+
+def _past_initials(first=None, last=None, name=None) -> str | None:
+    """Initials for a tool's student row, matching how archive folders are
+    named: an initials-only row stays as is (AD), a prefix name like
+    'JT (PY)' gives JT, and a legacy full name gives its initials."""
+    f = str(first or "").strip()
+    l = str(last or "").strip()
+    if re.fullmatch(r"[A-Z]{2,4}", f) and l in ("", "-"):
+        return f
+    full = str(name or "").strip() or f"{f} {l}".strip()
+    tok = full.split()[0] if full.split() else ""
+    if re.fullmatch(r"[A-Z]{2,4}", tok):
+        return tok
+    return initials_from_name(full)
+
+
+def find_past_students() -> tuple[list[dict], list[str]]:
+    """Students who have left (archived in the Behaviour Support Tool,
+    inactive in SMARTAR, or with a Document Archive folder) but have NO
+    register entry. Returns (candidates, notes). Candidates are dicts with
+    initials, program, exit_date, sources, docs (count in the archive).
+    Never raises."""
+    notes: list[str] = []
+    try:
+        client = _get_client()
+    except Exception as exc:  # noqa: BLE001
+        return [], [f"Couldn't connect: {exc}"]
+
+    on_register = {s["initials"] for s in fetch_register(None)}
+    active_names: set[str] = set()   # initials still active somewhere — never import
+    found: dict[str, dict] = {}
+
+    def add(ini, source, program=None, exit_date=None):
+        ini = (ini or "").strip().upper()
+        if not ini or len(ini) < 2 or ini in on_register:
+            return
+        c = found.setdefault(ini, {"initials": ini, "program": None,
+                                   "exit_date": None, "sources": [], "docs": 0})
+        if source not in c["sources"]:
+            c["sources"].append(source)
+        if program and not c["program"]:
+            p = str(program).strip().upper()
+            c["program"] = p if p in PROGRAMS else c["program"]
+        if exit_date and not c["exit_date"]:
+            c["exit_date"] = str(exit_date)[:10]
+
+    # 1. Behaviour Support Tool — archived students
+    try:
+        rows = (client.table(BEHAVIOUR_STUDENTS_TABLE)
+                .select("first_name, last_name, name, program, placement_end, archived")
+                .execute().data or [])
+        for r in rows:
+            ini = _past_initials(r.get("first_name"), r.get("last_name"), r.get("name"))
+            if not r.get("archived"):
+                if ini:
+                    active_names.add(ini)
+                continue
+            add(ini, "Behaviour tool (archived)", r.get("program"), r.get("placement_end"))
+    except Exception as exc:  # noqa: BLE001
+        notes.append(f"Behaviour Support Tool not checked: {exc}")
+
+    # 2. SMARTAR — inactive students
+    try:
+        rows = (client.table("smartar_students")
+                .select("student_name, program, active").execute().data or [])
+        for r in rows:
+            ini = _past_initials(name=r.get("student_name"))
+            if r.get("active"):
+                if ini:
+                    active_names.add(ini)
+                continue
+            add(ini, "SMARTAR (inactive)", r.get("program"))
+    except Exception as exc:  # noqa: BLE001
+        notes.append(f"SMARTAR not checked: {exc}")
+
+    # 3. Document Archive — folders with documents but no register entry
+    try:
+        docs = (client.table(TABLE).select("student_initials")
+                .eq("deleted", False).limit(10000).execute().data or [])
+        counts: dict[str, int] = {}
+        for d in docs:
+            i = (d.get("student_initials") or "").strip().upper()
+            if i:
+                counts[i] = counts.get(i, 0) + 1
+        for i, n in counts.items():
+            add(i, "Document Archive folder")
+            if i in found:
+                found[i]["docs"] = n
+    except Exception as exc:  # noqa: BLE001
+        notes.append(f"Document Archive folders not checked: {exc}")
+
+    # Anyone still active in a tool isn't a past student — they need adding
+    # as ACTIVE (use the normal import buttons), so leave them out here.
+    out = []
+    for ini, c in found.items():
+        if ini in active_names:
+            notes.append(f"{ini} is still active in the Behaviour or SMARTAR tool — "
+                         "add them with the import buttons on Current Students instead.")
+            continue
+        out.append(c)
+    out.sort(key=lambda c: c["initials"])
+    return out, notes
+
+
+def add_past_students(candidates: list[dict], created_by: str = "unknown") -> tuple[int, list[str]]:
+    """Add each candidate to the register with status 'archived'. Skips any
+    initials that appeared on the register in the meantime.
+    Returns (added, problems)."""
+    added, problems = 0, []
+    try:
+        client = _get_client()
+        existing = {s["initials"] for s in fetch_register(None)}
+    except Exception as exc:  # noqa: BLE001
+        return 0, [f"Couldn't connect: {exc}"]
+    for c in candidates:
+        ini = (c.get("initials") or "").strip().upper()
+        if not ini or ini in existing:
+            problems.append(f"{ini or '?'} — already on the register, skipped")
+            continue
+        record = {
+            "initials": ini,
+            "program": c.get("program"),
+            "status": "archived",
+            "exit_date": c.get("exit_date"),
+            "notes": "Added as a past student (found in: " + ", ".join(c.get("sources") or []) + ")",
+            "created_by": created_by,
+        }
+        try:
+            client.table(REGISTER_TABLE).insert(record).execute()
+            existing.add(ini)
+            added += 1
+        except Exception as exc:  # noqa: BLE001
+            problems.append(f"{ini} — {exc}")
+    return added, problems
