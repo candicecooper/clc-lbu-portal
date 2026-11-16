@@ -46,6 +46,14 @@ try:
 except Exception:
     _ARCHIVE_AVAILABLE = False
 
+# Window of Tolerance Builder link (pushes this tool's WoT data into the Builder's report)
+try:
+    import wot_builder_sync as wbs
+    _WBS_AVAILABLE = True
+except Exception:
+    wbs = None
+    _WBS_AVAILABLE = False
+
 # Micro behaviours (early-warning signs) — shared with the Safety & Risk Plan Builder
 try:
     import micro_behaviour_utils as mbu
@@ -836,7 +844,7 @@ def _polish_intervention_list(text: str) -> str:
     return "; ".join(_items)
 
 
-def build_window_of_tolerance_table(full_df, student_id=None) -> dict:
+def build_window_of_tolerance_table(full_df, student_id=None, top_n=5, for_builder=False) -> dict:
     """Group this student's incident data into the WoT Creator's 4
     dysregulation zones (the 'Window of Tolerance' zone itself is by
     definition regulated behaviour, which incident logs don't capture,
@@ -881,7 +889,11 @@ def build_window_of_tolerance_table(full_df, student_id=None) -> dict:
     # what this student's presentation actually looks like. Capped to a
     # short phrase, matching the Creator's concrete, observable style
     # rather than a full narrative sentence.
-    if "description" in _df.columns:
+    if for_builder:
+        # Transfer to the WoT Builder: every behaviour as its clean category label
+        # (one line per behaviour type, not one per incident description).
+        _df["_behaviour_detail"] = _df["behaviour_type"]
+    elif "description" in _df.columns:
         def _combine_behaviour(row):
             _lbl = row.get("behaviour_type") or ""
             _desc_raw = row.get("description")
@@ -915,29 +927,84 @@ def build_window_of_tolerance_table(full_df, student_id=None) -> dict:
         _zdf = _df[_df["_wot_zone"] == z["id"]]
         if _zdf.empty:
             continue
-        _contexts = (_zdf["antecedent"].dropna().value_counts().head(5).index.tolist()
+        _contexts = (_zdf["antecedent"].dropna().value_counts().head(top_n or 100000).index.tolist()
                      if "antecedent" in _zdf.columns else [])
-        _behaviours = _zdf["_behaviour_detail"].dropna().value_counts().head(5).index.tolist()
+        _behaviours = _zdf["_behaviour_detail"].dropna().value_counts().head(top_n or 100000).index.tolist()
         _interventions = []
         if "intervention" in _zdf.columns:
             _iv = _zdf["intervention"].dropna()
             _iv = _iv[_iv.astype(str).str.strip() != ""]
-            _interventions = _iv.value_counts().head(5).index.tolist()
+            if for_builder:
+                # one line per individual intervention, every one used
+                _iv = _iv.astype(str).str.split(";").explode().str.strip()
+                _iv = _iv[_iv != ""]
+            _interventions = _iv.value_counts().head(top_n or 100000).index.tolist()
         result[z["id"]] = {"n": len(_zdf), "context": _contexts,
                             "behaviour": _behaviours, "interventions": _interventions}
     return result
 
 
-def _render_window_of_tolerance_table_ui(full_df, student_id=None):
+def get_micro_wot(student_id, full: bool = False) -> dict:
+    """Every micro behaviour logged for this student, grouped into the two
+    Coping zones (just outside the window). Context is de-identified the same
+    way as the incident data. {} if none / micro module unavailable."""
+    if not (_MICRO_AVAILABLE and supabase and student_id):
+        return {}
+    try:
+        _codes, _ = mbu.load_codes(supabase, include_inactive=True)
+        _mw = mbu.wot_coping_from_micro(mbu.load_micro(supabase, student_id), _codes,
+                                        limit=None if full else 6)
+    except Exception:
+        return {}
+    for _zd in _mw.values():
+        _zd["context"] = [deidentify_context(c, student_id) for c in _zd["context"]]
+        _zd["interventions"] = [deidentify_context(c, student_id) for c in _zd["interventions"]]
+    return _mw
+
+
+def build_wot_with_micro(full_df, student_id=None) -> dict:
+    """Incident-based WoT draft plus every micro behaviour in the Coping zones
+    (as zd["micro"]). Used by the Analysis page, its print-ready copy and the
+    Full Analysis Word pack — NOT the Behaviour Summary report (micro data stays
+    off that report, per the Nov 2026 decision)."""
+    wot = build_window_of_tolerance_table(full_df, student_id=student_id) if (
+        full_df is not None and not full_df.empty) else {}
+    for _zid, _mzd in get_micro_wot(student_id).items():
+        if _zid not in wot:
+            wot[_zid] = {"n": 0, "context": [], "behaviour": [], "interventions": []}
+        wot[_zid]["micro"] = _mzd
+    return wot
+
+
+def _wot_zone_heading(zd) -> str:
+    _parts = [f"{zd['n']} incident(s)"]
+    if zd.get("micro"):
+        _parts.append(f"{zd['micro']['n']} micro behaviour entr{'y' if zd['micro']['n'] == 1 else 'ies'}")
+    return " · ".join(_parts)
+
+
+MICRO_WOT_COLS = (("Context (setting — just before)", "context"),
+                  ("Micro behaviours (times logged)", "behaviour"),
+                  ("What helped them settle", "interventions"))
+
+
+def _render_window_of_tolerance_table_ui(full_df, student_id=None, wot_data=None):
     """Streamlit UI for build_window_of_tolerance_table — one block per
     zone, each field in its own st.code() box so staff can use
     Streamlit's built-in copy-icon to paste straight into the Creator."""
-    wot_data = build_window_of_tolerance_table(full_df, student_id=student_id)
+    if wot_data is None:
+        wot_data = build_window_of_tolerance_table(full_df, student_id=student_id)
     if not wot_data:
-        st.info("Not enough classifiable incidents yet to draft a Window of Tolerance table. "
-                "This needs behaviour types that clearly indicate arousal direction (e.g. aggression, "
-                "elopement, shutdown, withdrawal) — 'Other' or ambiguous entries are left out on purpose.")
+        st.info("Not enough classifiable incidents or micro behaviours yet to draft a Window of Tolerance "
+                "table. This needs behaviour types that clearly indicate arousal direction (e.g. aggression, "
+                "elopement, shutdown, withdrawal) — 'Other' or ambiguous entries are left out on purpose — "
+                "or micro behaviours logged with 🌡️ Micro.")
         return
+    if any(zd.get("micro") for zd in wot_data.values()):
+        st.caption("🌡️ The two Coping zones (just outside the window) also list **every micro behaviour** "
+                   "logged for this student, with how many times each was seen, the settings it came up "
+                   "in, and what helped them settle. Entries with only 'either way' signs are counted in "
+                   "both Coping zones.")
     st.caption("Draft only — built from this student's logged behaviour types and severity. "
                "Context is de-identified (peers/staff shown by role, not name); Behaviour and "
                "Interventions stay specific to this student. The Window of Tolerance concept itself "
@@ -950,25 +1017,37 @@ def _render_window_of_tolerance_table_ui(full_df, student_id=None):
         zd = wot_data[z["id"]]
         st.markdown(
             f"<div style='border-left:5px solid {z['color']};padding:0.3rem 0.9rem;margin:0.6rem 0 0.2rem;'>"
-            f"<b style='color:{z['color']};'>{z['label']}</b> — {zd['n']} incident(s)</div>",
+            f"<b style='color:{z['color']};'>{z['label']}</b> — {_wot_zone_heading(zd)}</div>",
             unsafe_allow_html=True,
         )
-        _wcol1, _wcol2, _wcol3 = st.columns(3)
 
         def _safe_join(items):
             # Defensive: coerce anything unexpected (e.g. a stray list) to a
             # plain string rather than letting "\n".join() crash the page.
             return "\n".join(x if isinstance(x, str) else str(x) for x in items)
 
-        with _wcol1:
-            st.caption("Context")
-            st.code(_safe_join(zd["context"]) or "—", language=None)
-        with _wcol2:
-            st.caption("Behaviour")
-            st.code(_safe_join(zd["behaviour"]) or "—", language=None)
-        with _wcol3:
-            st.caption("Interventions")
-            st.code(_safe_join(zd["interventions"]) or "— none logged for this zone —", language=None)
+        if zd["n"]:
+            _wcol1, _wcol2, _wcol3 = st.columns(3)
+            with _wcol1:
+                st.caption("Context")
+                st.code(_safe_join(zd["context"]) or "—", language=None)
+            with _wcol2:
+                st.caption("Behaviour")
+                st.code(_safe_join(zd["behaviour"]) or "—", language=None)
+            with _wcol3:
+                st.caption("Interventions")
+                st.code(_safe_join(zd["interventions"]) or "— none logged for this zone —", language=None)
+        _mz = zd.get("micro")
+        if _mz:
+            _bw = (f" · {_mz['both_ways']} could be heading either way" if _mz.get("both_ways") else "")
+            st.markdown(f"<div style='font-size:.85rem;color:{z['color']};font-weight:600;margin:.3rem 0 .1rem;'>"
+                        f"🌡️ Micro behaviours — coping signs ({_mz['n']} entr{'y' if _mz['n'] == 1 else 'ies'}{_bw})</div>",
+                        unsafe_allow_html=True)
+            _mc = st.columns(3)
+            for _col, (_lbl, _key) in zip(_mc, MICRO_WOT_COLS):
+                with _col:
+                    st.caption(_lbl)
+                    st.code(_safe_join(_mz[_key]) or "—", language=None)
 
 
 
@@ -984,15 +1063,85 @@ def render_bsem_recommendations(items: list[dict], key_prefix: str):
         _SCREEN["paused"] = _prev
 
 
+def render_wot_builder_sync(student, full_df, key: str = "wbs"):
+    """Automatically send this student's WoT data (every incident behaviour,
+    intervention and context + every micro behaviour) into their report in the
+    Window of Tolerance Builder. Runs when the Analysis page opens and the data
+    has changed since the last send this session; staff can also press Sync now.
+    Staff additions in the Builder are never touched (see wot_builder_sync.py)."""
+    if not _WBS_AVAILABLE:
+        return
+    _prev = _SCREEN.get("paused", False)
+    _SCREEN["paused"] = True
+    try:
+        sid = student.get("id")
+        ini = _student_archive_initials(student)
+        st.markdown("#### 🔗 Window of Tolerance Builder")
+        if st.session_state.get("_viewer_session"):
+            st.caption("Log in with your own account to send this data to the Window of Tolerance Builder.")
+            return
+        wot_all = build_window_of_tolerance_table(full_df, student_id=sid, top_n=None, for_builder=True) \
+            if (full_df is not None and not full_df.empty) else {}
+        for _zid, _mzd in get_micro_wot(sid, full=True).items():
+            wot_all.setdefault(_zid, {"n": 0, "context": [], "behaviour": [], "interventions": []})["micro"] = _mzd
+        desired = wbs.desired_lines(wot_all)
+        n_lines = sum(len(v) for z in desired.values() for v in z.values())
+        if not n_lines:
+            st.caption("Nothing to send yet. Once incidents or micro behaviours are logged, they're added to "
+                       "this student's report in the Window of Tolerance Builder automatically.")
+            return
+        sig = str(sorted((z, c, tuple(v)) for z, cols in desired.items() for c, v in cols.items()))
+        state_key = f"_wbs_{sid}"
+        last = st.session_state.get(state_key) or {}
+        force = st.button("🔄 Sync now", key=f"{key}_now_{sid}",
+                          help="Send the latest data to the Builder again (it also happens automatically)")
+        if force or last.get("sig") != sig:
+            try:
+                with st.spinner("Updating the Window of Tolerance Builder..."):
+                    res = wbs.sync_student(ini, wot_all)
+                last = {"sig": sig if res.get("ok") else None, "res": res,
+                        "at": datetime.now().strftime("%I:%M %p").lstrip("0")}
+            except wbs.SyncTableMissing:
+                last = {"sig": None, "res": {"ok": False, "missing_table": True}}
+            except Exception as _e:
+                last = {"sig": None, "res": {"ok": False, "reason": f"Couldn't reach the Builder: {_e}"}}
+            st.session_state[state_key] = last
+        res = last.get("res") or {}
+        if res.get("missing_table"):
+            st.warning("The link to the Window of Tolerance Builder needs a one-off setup. Run this in the "
+                       "Supabase SQL editor of the Builder's project (the operational project), then reload.")
+            st.code(wbs.SYNC_SQL, language="sql")
+        elif not res.get("ok"):
+            st.warning(f"Not sent to the Window of Tolerance Builder: {res.get('reason', 'unknown problem')}")
+        else:
+            bits = []
+            if res.get("created"):
+                bits.append("started a new report")
+            if res.get("added"):
+                bits.append(f"added {res['added']} new line{'s' if res['added'] != 1 else ''}")
+            if res.get("removed"):
+                bits.append(f"removed {res['removed']} line{'s' if res['removed'] != 1 else ''} the data no longer supports")
+            what = ", ".join(bits) if bits else "already up to date"
+            st.success(f"✅ Window of Tolerance Builder: {what} (synced {last.get('at', '')}). "
+                       f"{res.get('total_synced', 0)} lines in {res.get('register_name', ini)}'s report come from "
+                       f"this tool.")
+            st.caption("Every incident behaviour, intervention and context, and every micro behaviour, is sent to "
+                       "the matching zone. Staff can still add their own lines in the Builder. Lines they remove or "
+                       "reword there stay that way, and the Window of Tolerance zone itself is left for staff.")
+        st.link_button("🪟 Open the Window of Tolerance Builder", wbs.BUILDER_URL)
+    finally:
+        _SCREEN["paused"] = _prev
+
+
 def render_window_of_tolerance_table(full_df, student_id=None):
-    _wd = build_window_of_tolerance_table(full_df, student_id=student_id)
+    _wd = build_wot_with_micro(full_df, student_id=student_id)
     if _wd:
         _scr_add("caption", "Draft only, built from this student's logged behaviour types and severity. Context is de-identified; "
                             "Behaviour and Interventions stay specific to this student. Review before use.")
         _scr_add("wot", _wd)
     _prev = _SCREEN["paused"]; _SCREEN["paused"] = True
     try:
-        _render_window_of_tolerance_table_ui(full_df, student_id=student_id)
+        _render_window_of_tolerance_table_ui(full_df, student_id=student_id, wot_data=_wd)
     finally:
         _SCREEN["paused"] = _prev
 
@@ -2794,27 +2943,47 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             section_header(doc, "WINDOW OF TOLERANCE — DRAFT FROM THIS STUDENT'S DATA")
             note("Draft only, built from logged behaviour types and severity. Context is de-identified (people shown by role). "
                  "Review with the team and complete the regulated 'Window of Tolerance' zone directly in the Creator.")
-            _wot = build_window_of_tolerance_table(full_df, student_id=student.get("id"))
+            _wot = build_wot_with_micro(full_df, student_id=student.get("id"))
             if not _wot:
                 note("Not enough classifiable incidents yet to draft this table.")
+            elif any(_v.get("micro") for _v in _wot.values()):
+                note("The two Coping zones (just outside the window) also list every micro behaviour logged "
+                     "for this student, with counts, settings and what helped them settle.")
             for _z in WOT_ZONES:
                 if _z["id"] not in _wot:
                     continue
                 _zd = _wot[_z["id"]]
-                _zt = doc.add_table(rows=2, cols=3); _zt.style = 'Table Grid'
+                _mz = _zd.get("micro")
+                _blocks = []
+                if _zd["n"]:
+                    _blocks.append((None, (("Context", _zd["context"]), ("Behaviour", _zd["behaviour"]),
+                                           ("Interventions", _zd["interventions"] or ["— none logged for this zone —"]))))
+                if _mz:
+                    _blocks.append((f"Micro behaviours — coping signs ({_mz['n']} entries)",
+                                    tuple((_h, _mz[_k] or ["—"]) for _h, _k in MICRO_WOT_COLS)))
+                _nrows = 1 + sum(2 if _t else 1 for _t, _ in _blocks)
+                _zt = doc.add_table(rows=_nrows, cols=3); _zt.style = 'Table Grid'
                 _hc = _zt.rows[0].cells[0].merge(_zt.rows[0].cells[2])
                 set_bg(_hc, _z["color"].lstrip("#")); set_borders(_hc, _z["color"].lstrip("#"))
                 _hc.paragraphs[0].clear()
-                arun(_hc.paragraphs[0], f"{_z['label']}  —  {_zd['n']} incident(s)", bold=True, size=20, color=WHITE)
-                for _ci, (_h, _items) in enumerate((("Context", _zd["context"]), ("Behaviour", _zd["behaviour"]),
-                                                    ("Interventions", _zd["interventions"] or ["— none logged for this zone —"]))):
-                    _cell = _zt.rows[1].cells[_ci]
-                    set_borders(_cell, _z["color"].lstrip("#"))
-                    _cell.paragraphs[0].clear()
-                    arun(_cell.paragraphs[0], _h, bold=True, size=17, color=GREY_DARK)
-                    for _it in _items:
-                        _pi = _cell.add_paragraph(); _pi.paragraph_format.space_after = Pt(1)
-                        arun(_pi, f"• {_clean(_it)}", size=17)
+                arun(_hc.paragraphs[0], f"{_z['label']}  —  {_wot_zone_heading(_zd)}", bold=True, size=20, color=WHITE)
+                _ri = 1
+                for _title, _cols in _blocks:
+                    if _title:
+                        _tc = _zt.rows[_ri].cells[0].merge(_zt.rows[_ri].cells[2])
+                        set_borders(_tc, _z["color"].lstrip("#"))
+                        _tc.paragraphs[0].clear()
+                        arun(_tc.paragraphs[0], _title, bold=True, size=17, color=_z["color"].lstrip("#"))
+                        _ri += 1
+                    for _ci, (_h, _items) in enumerate(_cols):
+                        _cell = _zt.rows[_ri].cells[_ci]
+                        set_borders(_cell, _z["color"].lstrip("#"))
+                        _cell.paragraphs[0].clear()
+                        arun(_cell.paragraphs[0], _h, bold=True, size=17, color=GREY_DARK)
+                        for _it in _items:
+                            _pi = _cell.add_paragraph(); _pi.paragraph_format.space_after = Pt(1)
+                            arun(_pi, f"• {_clean(_it)}", size=17)
+                    _ri += 1
                 _set_col_widths(_zt, [5.8, 5.8, 5.8])
                 doc.add_paragraph().paragraph_format.space_after = Pt(4)
 
@@ -4895,6 +5064,163 @@ def build_profile_trial_suggestions(profile: dict, data_suggestions: list | None
     return out
 
 
+def _profile_sections(profile: dict) -> dict:
+    """The printable content of a starting profile, in print order."""
+    themes = []
+    for t in (profile or {}).get("tags", []):
+        if not t.get("include", True):
+            continue
+        meta = STARTING_PROFILE_TAGS.get(t.get("tag"), {})
+        lbl = meta.get("label", t.get("tag", ""))
+        if (t.get("detail") or "").strip():
+            lbl = f"{lbl} ({t['detail'].strip()})"
+        themes.append((lbl, (t.get("evidence") or "").strip()))
+    return {
+        "summary": (profile or {}).get("summary", ""),
+        "lists": [("Strengths", profile.get("strengths", [])), ("Interests", profile.get("interests", [])),
+                  ("What helps", profile.get("what_helps", [])),
+                  ("What doesn't help", profile.get("what_doesnt_help", []))],
+        "themes": themes,
+        "trials": build_profile_trial_suggestions(profile),
+    }
+
+
+def generate_starting_profile_docx(student: dict, profile: dict) -> BytesIO:
+    """One printable Word summary of what was drawn from the uploaded referral /
+    transition information: summary, strengths, interests, what helps / doesn't,
+    the confirmed themes with evidence, and the suggested first trials."""
+    from docx import Document
+    from docx.shared import Pt, Cm, RGBColor
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    TEAL = RGBColor(0x1A, 0x7A, 0x7A)
+
+    def shade(cell, hexcol):
+        tcPr = cell._tc.get_or_add_tcPr()
+        shd = OxmlElement("w:shd"); shd.set(qn("w:val"), "clear"); shd.set(qn("w:color"), "auto")
+        shd.set(qn("w:fill"), hexcol); tcPr.append(shd)
+
+    def heading(text):
+        p = doc.add_paragraph(); p.paragraph_format.space_before = Pt(10); p.paragraph_format.space_after = Pt(3)
+        r = p.add_run(text.upper()); r.bold = True; r.font.size = Pt(11); r.font.color.rgb = TEAL
+
+    sec = _profile_sections(profile)
+    doc = Document()
+    sc = doc.sections[0]
+    sc.page_width, sc.page_height = Cm(21), Cm(29.7)
+    sc.left_margin = sc.right_margin = Cm(1.8); sc.top_margin = sc.bottom_margin = Cm(1.6)
+    doc.styles["Normal"].font.size = Pt(10.5)
+
+    t = doc.add_table(rows=1, cols=1); c = t.rows[0].cells[0]; shade(c, "1A7A7A")
+    c.paragraphs[0].clear()
+    r = c.paragraphs[0].add_run("STARTING PROFILE SUMMARY"); r.bold = True; r.font.size = Pt(16)
+    r.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+    p2 = c.add_paragraph()
+    r2 = p2.add_run(f"{student.get('name', '')}  ·  {PROGRAM_NAMES.get(student.get('program'), student.get('program', ''))}"
+                    f"  ·  Cowandilla Learning Centre — LBU")
+    r2.font.size = Pt(10); r2.font.color.rgb = RGBColor(0xFE, 0xF3, 0xC7)
+    note = doc.add_paragraph()
+    nr = note.add_run(f"Drawn from the referral / transition information uploaded to the Behaviour Support Tool. "
+                      f"Only themes confirmed by staff are shown. The source documents are not stored. "
+                      f"Printed {datetime.now().strftime('%d/%m/%Y')}.")
+    nr.italic = True; nr.font.size = Pt(9)
+
+    if sec["summary"]:
+        heading("Summary")
+        doc.add_paragraph(sec["summary"])
+
+    lists = [(h, items) for h, items in sec["lists"] if items]
+    for i in range(0, len(lists), 2):
+        pair = lists[i:i + 2]
+        tb = doc.add_table(rows=1, cols=2); tb.style = "Table Grid"
+        for j, (h, items) in enumerate(pair):
+            cell = tb.rows[0].cells[j]; cell.paragraphs[0].clear()
+            hr = cell.paragraphs[0].add_run(h); hr.bold = True; hr.font.color.rgb = TEAL
+            for it in items:
+                cell.add_paragraph(str(it), style="List Bullet")
+        doc.add_paragraph().paragraph_format.space_after = Pt(2)
+
+    heading("Confirmed themes")
+    if sec["themes"]:
+        tb = doc.add_table(rows=1, cols=2); tb.style = "Table Grid"
+        for j, h in enumerate(("Theme", "What the information said")):
+            cell = tb.rows[0].cells[j]; shade(cell, "D6EEEB"); cell.paragraphs[0].clear()
+            cell.paragraphs[0].add_run(h).bold = True
+        for lbl, ev in sec["themes"]:
+            row = tb.add_row().cells
+            row[0].text = lbl; row[1].text = ev or "—"
+        for rw in tb.rows:
+            rw.cells[0].width, rw.cells[1].width = Cm(6.2), Cm(11.2)
+    else:
+        doc.add_paragraph("No themes confirmed yet.")
+
+    if sec["trials"]:
+        heading("Suggested strategies to trial in the first weeks")
+        for n, tr in enumerate(sec["trials"], 1):
+            tb = doc.add_table(rows=4, cols=1); tb.style = "Table Grid"
+            hc = tb.rows[0].cells[0]; shade(hc, "D6EEEB"); hc.paragraphs[0].clear()
+            hc.paragraphs[0].add_run(f"{n}. {tr['title']}").bold = True
+            for k, (lbl, key) in enumerate((("Why", "hypothesis"), ("What to try", "strategy"),
+                                            ("How we'll know", "measure")), 1):
+                cell = tb.rows[k].cells[0]; cell.paragraphs[0].clear()
+                cell.paragraphs[0].add_run(f"{lbl}: ").bold = True
+                cell.paragraphs[0].add_run(tr.get(key, ""))
+            doc.add_paragraph().paragraph_format.space_after = Pt(2)
+
+    heading("Team notes and agreed next steps")
+    for _ in range(6):
+        doc.add_paragraph("_" * 95)
+    buf = BytesIO(); doc.save(buf); buf.seek(0)
+    return buf
+
+
+def starting_profile_print_html(student: dict, profile: dict) -> bytes:
+    """Print-ready (browser → Print / Save as PDF) version of the same summary."""
+    import html as _h
+    e = lambda v: _h.escape(str(v or ""))
+    sec = _profile_sections(profile)
+    parts = [f"<h1>Starting Profile Summary</h1><p class='sub'>{e(student.get('name'))} · "
+             f"{e(PROGRAM_NAMES.get(student.get('program'), student.get('program', '')))} · Cowandilla Learning Centre — LBU</p>",
+             f"<p class='note'>Drawn from the referral / transition information uploaded to the Behaviour Support Tool. "
+             f"Only themes confirmed by staff are shown. The source documents are not stored. "
+             f"Printed {datetime.now().strftime('%d/%m/%Y')}.</p>"]
+    if sec["summary"]:
+        parts.append(f"<h2>Summary</h2><p>{e(sec['summary'])}</p>")
+    lists = [(h, items) for h, items in sec["lists"] if items]
+    if lists:
+        parts.append("<div class='grid'>" + "".join(
+            f"<div class='box'><h3>{e(h)}</h3><ul>" + "".join(f"<li>{e(x)}</li>" for x in items) + "</ul></div>"
+            for h, items in lists) + "</div>")
+    parts.append("<h2>Confirmed themes</h2>")
+    if sec["themes"]:
+        parts.append("<table><tr><th>Theme</th><th>What the information said</th></tr>" + "".join(
+            f"<tr><td>{e(l)}</td><td>{e(ev) or '—'}</td></tr>" for l, ev in sec["themes"]) + "</table>")
+    else:
+        parts.append("<p>No themes confirmed yet.</p>")
+    if sec["trials"]:
+        parts.append("<h2>Suggested strategies to trial in the first weeks</h2>")
+        for n, tr in enumerate(sec["trials"], 1):
+            parts.append(f"<div class='trial'><h3>{n}. {e(tr['title'])}</h3>"
+                         f"<p><b>Why:</b> {e(tr.get('hypothesis'))}</p><p><b>What to try:</b> {e(tr.get('strategy'))}</p>"
+                         f"<p><b>How we'll know:</b> {e(tr.get('measure'))}</p></div>")
+    parts.append("<h2>Team notes and agreed next steps</h2><div class='notes'></div>")
+    css = ("body{font-family:Arial,Helvetica,sans-serif;color:#1e293b;max-width:800px;margin:0 auto;padding:16px;font-size:11pt}"
+           "h1{color:#1A7A7A;margin:0}h2{color:#1A7A7A;font-size:12pt;text-transform:uppercase;border-bottom:2px solid #D6EEEB;"
+           "padding-bottom:3px;margin-top:18px}h3{margin:0 0 4px;font-size:11pt;color:#1A7A7A}.sub{margin:2px 0 6px;color:#475569}"
+           ".note{font-style:italic;font-size:9pt;color:#64748b}.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}"
+           ".box,.trial{border:1px solid #cbd5e1;border-radius:6px;padding:8px 10px;break-inside:avoid}.trial{margin:6px 0}"
+           ".trial p{margin:3px 0}ul{margin:2px 0;padding-left:18px}table{border-collapse:collapse;width:100%}"
+           "th,td{border:1px solid #cbd5e1;padding:5px 7px;text-align:left;vertical-align:top}th{background:#D6EEEB}"
+           ".notes{border:1px solid #94a3b8;min-height:60mm}.bar{background:#1A7A7A;color:#fff;padding:8px 12px;"
+           "border-radius:6px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center}"
+           ".bar button{font-size:11pt;padding:4px 12px}@media print{.bar{display:none}body{padding:0}}")
+    doc = ("<!doctype html><html><head><meta charset='utf-8'><title>Starting Profile — " + e(student.get("name")) +
+           f"</title><style>{css}</style></head><body><div class='bar'><span>Press Print, then choose your printer "
+           "or Save as PDF.</span><button onclick='window.print()'>🖨️ Print</button></div>" + "".join(parts) +
+           "</body></html>")
+    return doc.encode("utf-8")
+
+
 def render_starting_profile(student):
     """Upload / paste referral information, confirm the themes found, and save them."""
     sid = student["id"]
@@ -4975,6 +5301,28 @@ def render_starting_profile(student):
                 st.session_state[f"sp_save_problem_{sid}"] = True
         if st.session_state.get(f"sp_save_problem_{sid}"):
             show_save_problem("The starting profile", STARTING_PROFILES_SQL)
+
+        st.markdown("---")
+        st.markdown("**🖨️ Print a summary**")
+        st.caption("Summary, strengths, interests, what helps and what doesn't, the themes as ticked above, "
+                   "and the suggested first trials, with space for team notes. Save any changes first so "
+                   "the printout matches what's stored.")
+        _print_prof = {**profile, "tags": edited}
+        _fn = f"StartingProfile_{str(student['name']).replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}"
+        _pc1, _pc2 = st.columns(2)
+        try:
+            _pc1.download_button("📄 Starting Profile summary (Word)",
+                                 generate_starting_profile_docx(student, _print_prof),
+                                 file_name=_fn + ".docx", use_container_width=True, key=f"sp_dl_docx_{sid}",
+                                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        except Exception as _e:
+            _pc1.warning(f"Couldn't prepare the Word version: {_e}")
+        try:
+            _pc2.download_button("🖨️ Print-ready version (HTML)", starting_profile_print_html(student, _print_prof),
+                                 file_name=_fn + ".html", mime="text/html", use_container_width=True,
+                                 key=f"sp_dl_html_{sid}")
+        except Exception as _e:
+            _pc2.warning(f"Couldn't prepare the print version: {_e}")
 
 
 import time as _time_mod
@@ -7079,8 +7427,15 @@ def build_print_html(student, full_df, records, supports_trialled="", supports_s
                     continue
                 cols = "".join(f"<td><b>{h}</b><ul>" + "".join(f"<li>{esc(x)}</li>" for x in (items or ["— none logged —"])) + "</ul></td>"
                                for h, items in (("Context", zd["context"]), ("Behaviour", zd["behaviour"]), ("Interventions", zd["interventions"])))
+                _rows_html = f"<tr>{cols}</tr>" if zd["n"] else ""
+                _mz = zd.get("micro")
+                if _mz:
+                    _mcols = "".join(f"<td><b>{h}</b><ul>" + "".join(f"<li>{esc(x)}</li>" for x in (_mz[k] or ["—"])) + "</ul></td>"
+                                     for h, k in MICRO_WOT_COLS)
+                    _rows_html += (f"<tr><td colspan='3' style='color:{z['color']};font-weight:700;'>"
+                                   f"Micro behaviours — coping signs ({_mz['n']} entries)</td></tr><tr>{_mcols}</tr>")
                 body.append(f"<table class='wot' style='border-color:{z['color']}'><tr><th colspan='3' style='background:{z['color']}'>"
-                            f"{esc(z['label'])} — {zd['n']} incident(s)</th></tr><tr>{cols}</tr></table>")
+                            f"{esc(z['label'])} — {esc(_wot_zone_heading(zd))}</th></tr>{_rows_html}</table>")
     flush_metrics()
 
     # ── appended: supports trialled, register, meeting notes ──
@@ -7803,6 +8158,11 @@ def _render_student_analysis_page_inner():
         render_strategy_trials(student, pd.DataFrame())
         st.markdown("---")
         _render_micro_section_uncaptured(student, pd.DataFrame())
+        if get_micro_wot(student_id):
+            st.markdown("---")
+            st.markdown("### 🪟 Window of Tolerance — Draft from This Student's Data")
+            render_window_of_tolerance_table(pd.DataFrame(), student_id=student_id)
+            render_wot_builder_sync(student, pd.DataFrame())
         if st.button("↩️ Back", key="back_no_data"):
             go_to("program_students", selected_program=student["program"])
         return
@@ -9675,6 +10035,7 @@ def _render_student_analysis_page_inner():
     st.markdown("---")
     st.markdown("### 🪟 Window of Tolerance — Draft from This Student's Data")
     render_window_of_tolerance_table(full_df, student_id=student_id)
+    render_wot_builder_sync(student, full_df)
 
     st.markdown("---")
 
