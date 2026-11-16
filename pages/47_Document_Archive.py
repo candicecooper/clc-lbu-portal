@@ -215,14 +215,14 @@ with tab_student:
     top_l, top_r = st.columns([3, 1])
     with top_l:
         st.write(
-            "Active students are listed below, grouped by program and term — "
-            "click a folder to open it. Search by initials, or switch to "
-            "archived students."
+            "Click a folder to open it. Use the **Active / Archived** switch "
+            "below to see students who have left, or search by initials "
+            "(finds active and archived students)."
         )
     with top_r:
         if _currently_open:
             st.write("")
-            if st.button("⬅️ All active folders", use_container_width=True):
+            if st.button("⬅️ All folders", use_container_width=True):
                 st.session_state["_sf_clear"] = True
                 st.session_state.pop("_folder_arch", None)
                 st.rerun()
@@ -230,7 +230,7 @@ with tab_student:
     sc1, sc2 = st.columns([1, 3])
     with sc1:
         sf_initials = st.text_input(
-            "Or search by initials", max_chars=4, placeholder="e.g. JT",
+            "Search by initials (active or archived)", max_chars=4, placeholder="e.g. JT",
             key="student_folder_initials",
         )
 
@@ -558,30 +558,33 @@ with tab_student:
             for ini in sorted(counts) if ini not in seen
         ]
 
-        st.markdown("### 👥 Active students — by program & term")
-        if _active_reg:
-            _render_by_program_term(_active_reg, "cur", "📁")
-        else:
-            st.info(
-                "No active students yet — add them in the Student Register "
-                "when they arrive, and their folders will appear here."
-            )
-
-        st.divider()
+        # Active / Archived switch at the TOP, with counts, so archived
+        # students are one click away instead of hidden below every active folder.
+        _view_opts = [f"👥 Active students ({len(_active_reg)})",
+                      f"📦 Archived students ({len(_archived_reg)})"]
         _show_archived = st.session_state.get("sf_show_archived", False)
-        if st.button(
-            "📦 Hide archived folders" if _show_archived
-            else "📦 Show archived folders"
-        ):
-            st.session_state["sf_show_archived"] = not _show_archived
-            st.rerun()
+        _view = st.radio(
+            "Show", _view_opts, index=1 if _show_archived else 0,
+            horizontal=True, label_visibility="collapsed", key="sf_view",
+        )
+        st.session_state["sf_show_archived"] = _view == _view_opts[1]
 
-        if _show_archived:
+        if _view == _view_opts[0]:
+            st.markdown("### 👥 Active students — by program & term")
+            if _active_reg:
+                _render_by_program_term(_active_reg, "cur", "📁")
+            else:
+                st.info(
+                    "No active students yet — add them in the Student Register "
+                    "when they arrive, and their folders will appear here."
+                )
+        else:
             st.markdown("### 📦 Archived students — by program & term")
             st.caption(
                 "Students who have transitioned out — every document remains "
                 "here, fully accessible, and you can still upload to their "
-                "folder."
+                "folder. Grouped under the term of their most recent document "
+                "(usually the term they left)."
             )
             if _archived_reg:
                 _render_by_program_term(_archived_reg, "arc", "📦")
