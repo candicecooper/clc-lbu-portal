@@ -21,6 +21,7 @@ from archive_utils import (
     add_past_students,
     extend_student,
     find_past_students,
+    reinitial_register_entry,
     lookup_student,
     set_register_status_raw,
     import_from_behaviour,
@@ -588,32 +589,76 @@ with tab_archived:
                         st.caption(f"⚠️ {_x}")
             else:
                 if len(_reg) > 1:
-                    st.warning(f"{_li} has **{len(_reg)} register entries** — the Document "
-                               "Archive shows the active one first and hides the other. Use "
-                               "*Fix* on Current Students to merge or remove the duplicate.")
-                for r in _reg:
+                    # Suggest which to keep: correctly-typed initials, archived, has an exit date
+                    _keep = max(_reg, key=lambda r: (r["initials"] == _li,
+                                                     str(r.get("status")) == "archived",
+                                                     bool(r.get("exit_date"))))
+                    _progs = {r.get("program") for r in _reg}
+                    _two = len(_progs) > 1 or len(_beh) > 1 or len(_sma) > 1
+                    st.warning(
+                        f"{_li} has **{len(_reg)} register entries**"
+                        + (f" in different programs ({', '.join(sorted(p or '—' for p in _progs))})" if len(_progs) > 1 else "")
+                        + ". Which is it?\n\n"
+                        "- **Two different students who share these initials** — give one of them "
+                        "new initials (e.g. add a letter from their surname) so each gets their own "
+                        "folder. Documents stay where they are; if any belong to the renamed "
+                        "student, move them in the Document Archive (open the folder → *Move*).\n"
+                        "- **The same student entered twice** — remove the extra entry. Documents "
+                        "aren't affected.\n\n"
+                        "Until this is sorted, the Document Archive shows **one** shared "
+                        f"{_li} folder (under the first entry's program).")
+                    if _two:
+                        st.caption("The Behaviour tool and/or SMARTAR also hold more than one "
+                                   f"{_li} record, which suggests two different students.")
+                for _n, r in enumerate(_reg, 1):
                     _st = str(r.get("status") or "")
                     _odd_ini = r["initials"] != _li
-                    if _odd_ini:
-                        st.warning(f"Register initials are stored as `{r['initials']}` (extra "
-                                   "spaces or lower case), so searches for "
-                                   f"`{_li}` don't match. Use *Fix* on the student to re-save "
-                                   f"them as {_li}.")
-                    if _st == "archived":
-                        st.success("Archived on the register — they should appear in the "
-                                   "Document Archive under **📦 Archived students** (switch at "
-                                   "the top of Student Folders), filed under the term of their "
-                                   "latest document.")
-                    elif _st == "active":
-                        st.info("Still **active** on the register, so they show under Active "
-                                "students, not Archived. Archive them from Current Students "
-                                "(that also files their end-of-placement documents).")
-                    else:
-                        st.error(f"Their register status is `{r.get('status')}` — not "
-                                 "'active' or 'archived' — so they're hidden from **both** lists.")
-                        if st.button(f"Set {r['initials']} to archived", key=f"lookup_fix_{r['id']}"):
-                            if set_register_status_raw(r["id"], "archived"):
-                                st.success("Fixed — they'll now show as archived.")
+                    with st.container(border=True):
+                        _tag = ""
+                        if len(_reg) > 1 and not _two:
+                            _tag = " · ⭐ suggested to keep" if r is _keep else " · suggested to remove"
+                        st.markdown(f"**Entry {_n}** — initials `{r['initials']}` · "
+                                    f"{r.get('program') or 'no program'} · status `{r.get('status')}` · "
+                                    f"{r.get('start_date') or '—'} → {r.get('exit_date') or '—'}{_tag}")
+                        if _odd_ini:
+                            st.warning(f"Initials are stored as `{r['initials']}` (extra spaces or "
+                                       f"lower case), so they don't match `{_li}`.")
+                            if st.button(f"Re-save initials as {_li}", key=f"lookup_ini_{r['id']}"):
+                                update_student_initials(r["id"], r["initials"], _li)
+                                st.success(f"Initials re-saved as {_li} (any documents moved with them).")
+                        if _st == "archived":
+                            st.caption("Archived ✓ — shows in the Document Archive under "
+                                       "📦 Archived students.")
+                        elif _st == "active":
+                            st.caption("Active — shows under Current Students. If they've left, "
+                                       "archive them there (that also files their documents).")
+                        else:
+                            st.error(f"Status `{r.get('status')}` isn't 'active' or 'archived', "
+                                     "so this entry is hidden from **both** lists.")
+                            if st.button("Set to archived", key=f"lookup_fix_{r['id']}"):
+                                if set_register_status_raw(r["id"], "archived"):
+                                    st.success("Fixed — now archived.")
+                        if len(_reg) > 1:
+                            _rc1, _rc2 = st.columns([2, 1])
+                            with _rc1:
+                                _ni = st.text_input("Different student? New initials for this entry",
+                                                    max_chars=4, placeholder=f"e.g. {_li}J",
+                                                    key=f"lookup_newini_{r['id']}")
+                            with _rc2:
+                                st.write("")
+                                if st.button("Give new initials", key=f"lookup_reini_{r['id']}",
+                                             disabled=not _ni.strip()):
+                                    _ok2, _msg = reinitial_register_entry(r["id"], _ni)
+                                    (st.success if _ok2 else st.error)(_msg)
+                                    if _ok2:
+                                        st.rerun()
+                            _ok = st.checkbox("Same student entered twice — remove this entry",
+                                              key=f"lookup_delok_{r['id']}")
+                            if st.button("🗑️ Remove this entry", key=f"lookup_del_{r['id']}",
+                                         disabled=not _ok):
+                                if delete_register_entry(r["id"]):
+                                    st.success("Duplicate removed.")
+                                    st.rerun()
             _variants = [k for k in _docs if k.strip().upper() != _li and "(deleted)" not in k]
             if _variants:
                 st.info("Some documents are filed under a different code ("
