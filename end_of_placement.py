@@ -234,10 +234,73 @@ def _result(item, status, detail=""):
     return {"item": item, "status": status, "detail": detail}
 
 
+def _norm_prog(v) -> str:
+    v = str(v or "").strip().upper()
+    for p in ("JP", "PY", "SY"):
+        if v == p or v.startswith(p + " ") or p in v.split():
+            return p
+    if "JUNIOR" in v:
+        return "JP"
+    if "PRIMARY" in v:
+        return "PY"
+    if "SENIOR" in v:
+        return "SY"
+    return ""
+
+
+def _identity(ini: str, register_id: str) -> dict:
+    """Who this register student is in the OTHER tools:
+      keys    — the register initials plus any old initials ([aka: EE]) the
+                tools still use (set when initials were changed to be unique)
+      program — the register's program, used to tell apart two students who
+                share initials in the tools
+      shared  — True when another student uses any of these initials, so a
+                match on initials alone isn't safe without the program."""
+    from archive_utils import fetch_register, register_aliases
+    me, others = {}, []
+    try:
+        for r in fetch_register(None):
+            if str(r.get("id")) == str(register_id):
+                me = r
+            else:
+                others.append(r)
+    except Exception:
+        pass
+    aliases = register_aliases(me.get("notes")) if me else []
+    keys = [ini] + [a for a in aliases if a != ini]
+    other_keys = set()
+    for o in others:
+        other_keys.add((o.get("initials") or "").strip().upper())
+        other_keys.update(register_aliases(o.get("notes")))
+    return {"ini": ini, "keys": keys, "program": _norm_prog(me.get("program")),
+            "shared": bool(aliases) or bool(other_keys & set(keys))}
+
+
+def _select(rows, name_of, prog_of, ident) -> list:
+    """Pick this student's records from a tool's rows.
+    Matches on any of the student's initials; when the program is known,
+    prefers records in that program. If the initials are shared with another
+    student, a record is only taken when its program matches — never guessed."""
+    matched = []
+    for r in rows:
+        nm = name_of(r)
+        if any(_name_matches(nm, k) for k in ident["keys"]):
+            matched.append((r, _name_matches(nm, ident["ini"])))
+    if not matched:
+        return []
+    if ident["program"]:
+        same = [r for r, _own in matched if _norm_prog(prog_of(r)) == ident["program"]]
+        if same:
+            return same
+    if ident["shared"]:
+        return []
+    return [r for r, own in matched if own]
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Each document
 # ──────────────────────────────────────────────────────────────────────────
-def _smartar_report(ini: str, created_by: str) -> dict:
+def _smartar_report(ini: str, created_by: str, ident: dict | None = None) -> dict:
     item = "SMARTAR Goal Report"
     try:
         import matplotlib
@@ -248,13 +311,20 @@ def _smartar_report(ini: str, created_by: str) -> dict:
                                     "SESSIONS_FOR_PERIOD", "ALL_SESSIONS", "_q"), shim)
         # Goals are stored under the SMARTAR student name — the register's
         # initials, or a legacy name that reduces to them.
-        names = {ini}
+        ident = ident or {"ini": ini, "keys": [ini], "program": "", "shared": False}
+        names = set() if ident["shared"] else {ini}
         try:
-            rows = ns["_q"](lambda c: c.table("smartar_students").select("student_name")
+            rows = ns["_q"](lambda c: c.table("smartar_students").select("*")
                             .execute().data or [])
-            names |= {r["student_name"] for r in rows if _name_matches(r.get("student_name"), ini)}
+            picked = _select(rows, lambda r: r.get("student_name"), lambda r: r.get("program"), ident)
+            names |= {r["student_name"] for r in picked if r.get("student_name")}
+            _clash = {r.get("student_name") for r in rows
+                      if r not in picked and r.get("student_name") in names}
         except Exception:
-            pass
+            _clash = set()
+        if not names:
+            return _result(item, "none", "No SMARTAR record found for this student"
+                           + (" in their program." if ident["program"] else "."))
         goals = []
         for nm in sorted(names):
             goals += ns["get_all_goals_for_student"](nm) or []
@@ -292,13 +362,17 @@ def _smartar_report(ini: str, created_by: str) -> dict:
             supersede=True,
         )
         if rec:
-            return _result(item, "filed", f"{len(charts)} goal chart(s).")
+            return _result(item, "filed", f"{len(charts)} goal chart(s)."
+                           + (f" ⚠️ SMARTAR holds another student under the same name "
+                              f"({', '.join(sorted(_clash))}) — their goals can't be told apart, "
+                              "so check this report and remove any that aren't theirs."
+                              if _clash else ""))
         return _result(item, "failed", "Built the report but the archive didn't confirm the save.")
     except Exception as exc:  # noqa: BLE001
         return _result(item, "failed", f"Couldn't build the report: {exc}")
 
 
-def _behaviour_report(ini: str, created_by: str) -> tuple[dict, list[str]]:
+def _behaviour_report(ini: str, created_by: str, ident: dict | None = None) -> tuple[dict, list[str]]:
     """Returns (result, behaviour-tool student ids) — ids are reused to find
     the Sensory Overview."""
     item = "Behaviour Summary"
@@ -310,9 +384,12 @@ def _behaviour_report(ini: str, created_by: str) -> tuple[dict, list[str]]:
                                       "build_student_full_df", "compute_analysis_stats",
                                       "generate_behaviour_analysis_plan_docx"), shim)
         students = ns["load_students_from_db"]() or []
-        matched = [s for s in students
-                   if str(s.get("first_name") or "").strip().upper() == ini
-                   or _name_matches(s.get("name"), ini)]
+        ident = ident or {"ini": ini, "keys": [ini], "program": "", "shared": False}
+
+        def _bname(s):
+            fn = str(s.get("first_name") or "").strip().upper()
+            return fn if fn in ident["keys"] else s.get("name")
+        matched = _select(students, _bname, lambda s: s.get("program"), ident)
         ids = [str(s["id"]) for s in matched]
         if not matched:
             return _result(item, "none", "Not found in the Behaviour Support Tool."), ids
@@ -359,15 +436,18 @@ def _behaviour_report(ini: str, created_by: str) -> tuple[dict, list[str]]:
         return _result(item, "failed", f"Couldn't build the report: {exc}"), ids
 
 
-def _sensory_overview(ini: str, register_id: str, beh_ids: list[str], created_by: str) -> dict:
+def _sensory_overview(ini: str, register_id: str, beh_ids: list[str], created_by: str,
+                      ident: dict | None = None) -> dict:
     item = "Sensory Overview"
     try:
         rows = (_archive_client().table("sensory_overviews").select("*")
                 .order("created_at", desc=True).execute().data or [])
         keys = {str(register_id)} | set(beh_ids)
-        mine = [r for r in rows
-                if (r.get("student_id") and str(r["student_id"]) in keys)
-                or _name_matches(r.get("student_name"), ini)]
+        ident = ident or {"ini": ini, "keys": [ini], "program": "", "shared": False}
+        by_id = [r for r in rows if r.get("student_id") and str(r["student_id"]) in keys]
+        by_name = _select([r for r in rows if r not in by_id],
+                          lambda r: r.get("student_name"), lambda r: r.get("program"), ident)
+        mine = by_id + by_name
         if not mine:
             return _result(item, "none", "No Sensory Overview has been completed.")
         mine.sort(key=lambda r: (str(r.get("overview_date") or ""), str(r.get("created_at") or "")),
@@ -454,12 +534,15 @@ def _wot_docx(ini: str, rep: dict) -> bytes | None:
     return buf.getvalue()
 
 
-def _window_of_tolerance(ini: str, register_id: str, created_by: str) -> dict:
+def _window_of_tolerance(ini: str, register_id: str, created_by: str,
+                        ident: dict | None = None) -> dict:
     item = "Window of Tolerance"
     try:
         def fetch(c):
-            rows = (c.table("wot_builder_reports").select("*")
-                    .eq("student_initials", ini).execute().data or [])
+            rows = []
+            if not (ident and ident["shared"]):   # register id is the safe link
+                rows = (c.table("wot_builder_reports").select("*")
+                        .eq("student_initials", ini).execute().data or [])
             if register_id:
                 rows += (c.table("wot_builder_reports").select("*")
                          .eq("student_register_id", register_id).execute().data or [])
@@ -531,10 +614,11 @@ def file_end_of_placement_pack(initials: str, register_id: str | None = None,
     ini = (initials or "").strip().upper()
     if not ini:
         return []
-    out = [_smartar_report(ini, created_by)]
-    beh, beh_ids = _behaviour_report(ini, created_by)
+    ident = _identity(ini, register_id or "")
+    out = [_smartar_report(ini, created_by, ident)]
+    beh, beh_ids = _behaviour_report(ini, created_by, ident)
     out.append(beh)
-    out.append(_sensory_overview(ini, register_id or "", beh_ids, created_by))
-    out.append(_window_of_tolerance(ini, register_id or "", created_by))
+    out.append(_sensory_overview(ini, register_id or "", beh_ids, created_by, ident))
+    out.append(_window_of_tolerance(ini, register_id or "", created_by, ident))
     out.append(_safety_plan(ini))
     return out
