@@ -22,6 +22,8 @@ from archive_utils import (
     extend_student,
     find_past_students,
     reinitial_register_entry,
+    register_aliases,
+    set_register_alias,
     lookup_student,
     set_register_status_raw,
     import_from_behaviour,
@@ -556,11 +558,15 @@ with tab_archived:
                 "; ".join(f"initials `{r['initials']}` · {r.get('program') or 'no program'} · "
                           f"status `{r.get('status')}`" for r in _reg) if _reg else "❌ no entry"))
             st.markdown("**Behaviour Support Tool:** " + (
-                ", ".join("archived" if b["archived"] else "**active**" for b in _beh)
-                if _beh else "not found"))
+                ", ".join(f"{b.get('program') or '—'} " + ("archived" if b["archived"] else "**active**")
+                          for b in _beh) if _beh else "not found"))
             st.markdown("**SMARTAR:** " + (
-                ", ".join("**active**" if m["active"] else "inactive" for m in _sma)
-                if _sma else "not found"))
+                ", ".join(f"{m.get('program') or '—'} " + ("**active**" if m["active"] else "inactive")
+                          for m in _sma) if _sma else "not found"))
+            if _lk.get("aka"):
+                st.markdown("**Also used by:** " + ", ".join(
+                    f"register student `{a['initials']}` ({a.get('program') or '—'}), who is "
+                    f"known as {_li} in the other tools" for a in _lk["aka"]))
             st.markdown("**Document Archive:** " + (
                 ", ".join(f"{n} filed under `{k}`" for k, n in _docs.items())
                 if _docs else "no documents"))
@@ -620,6 +626,22 @@ with tab_archived:
                         st.markdown(f"**Entry {_n}** — initials `{r['initials']}` · "
                                     f"{r.get('program') or 'no program'} · status `{r.get('status')}` · "
                                     f"{r.get('start_date') or '—'} → {r.get('exit_date') or '—'}{_tag}")
+                        _aka = register_aliases(r.get("notes"))
+                        if _aka:
+                            st.caption("Known in the other tools as: **" + ", ".join(_aka) + "** "
+                                       f"(their records there are matched using this + program).")
+                        _ac1, _ac2 = st.columns([2, 1])
+                        with _ac1:
+                            _al = st.text_input(
+                                "Known by different initials in the other tools? (e.g. their "
+                                "initials before they were changed)", max_chars=6,
+                                placeholder="e.g. EE", key=f"lookup_aka_{r['id']}")
+                        with _ac2:
+                            st.write("")
+                            if st.button("Save", key=f"lookup_aka_go_{r['id']}",
+                                         disabled=not _al.strip()):
+                                _okA, _msgA = set_register_alias(r["id"], _al)
+                                (st.success if _okA else st.error)(_msgA)
                         if _odd_ini:
                             st.warning(f"Initials are stored as `{r['initials']}` (extra spaces or "
                                        f"lower case), so they don't match `{_li}`.")
