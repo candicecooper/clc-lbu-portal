@@ -1234,3 +1234,20 @@ def set_register_status_raw(record_id: str, status: str) -> bool:
     except Exception as exc:  # noqa: BLE001
         st.error(f"Could not update status: {exc}")
         return False
+
+
+def reinitial_register_entry(record_id: str, new_initials: str) -> tuple[bool, str]:
+    """Give ONE register entry new initials WITHOUT moving any documents —
+    for two different students who were registered under the same
+    initials. (update_student_initials would move the whole shared folder,
+    i.e. both students' documents.) Returns (ok, message)."""
+    new = re.sub(r"[^A-Za-z0-9]", "", new_initials or "").upper()
+    if len(new) < 2:
+        return False, "New initials need at least 2 letters."
+    try:
+        if any(s["initials"] == new for s in fetch_register(None)):
+            return False, f"{new} is already used on the register — try another (e.g. add a letter)."
+        _get_client().table(REGISTER_TABLE).update({"initials": new}).eq("id", record_id).execute()
+        return True, f"Entry now uses {new}."
+    except Exception as exc:  # noqa: BLE001
+        return False, f"Could not update: {exc}"
