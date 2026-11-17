@@ -1446,6 +1446,7 @@ def b64img(data):
     return BytesIO(base64.b64decode(data))
 
 TEAL = "#1A7A6E"
+HEADER_NAVY = "#323E4F"          # section header bars, as on the CLC report template
 
 # ── Cover page — recreates the CLC report cover (navy / green / lavender shapes,
 #    Cowandilla Learning Centre logo top right). Coordinates are on the original's
@@ -1671,6 +1672,65 @@ def make_cover_png(report_type, name, date_str, site, note=None, dpi=200):
     fig.savefig(buf, format="png", dpi=dpi, facecolor="white")
     plt.close(fig)
     return buf.getvalue()
+
+
+def make_hits_matrix_png(chosen, dpi=200):
+    """The CLC 'High Impact Teaching Strategies' matrix (as on the report template), with the strategies and key
+    elements the teacher chose highlighted. chosen = {strategy: [elements]}."""
+    import textwrap
+    from matplotlib.patches import Rectangle
+    W = 7.1                                   # inches
+    bar_w, strat_w = 0.30, 1.00
+    el_x0 = bar_w + strat_w
+    el_w_total = W - el_x0
+    fs = 6.6                                  # font size (pt)
+    char_in = fs * 0.50 / 72                  # approx. width of one character
+    line_in = fs * 1.28 / 72
+    head_h = 0.20
+    rows = []
+    for strat, elements in HITS_ELEMENTS.items():
+        cw = el_w_total / len(elements)
+        per_line = max(8, int((cw - 0.08) / char_in))
+        wrapped = [textwrap.wrap(e, per_line) for e in elements]
+        sw = textwrap.wrap(strat, 14)
+        h = max(max(len(w) for w in wrapped), len(sw)) * line_in + 0.10
+        rows.append((strat, elements, wrapped, sw, cw, h))
+    H = head_h + sum(r[5] for r in rows)
+    fig = plt.figure(figsize=(W, H), dpi=dpi)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.set_xlim(0, W); ax.set_ylim(H, 0); ax.axis("off")
+    edge = dict(edgecolor="#000000", linewidth=0.6)
+    # header: "Key elements"
+    ax.add_patch(Rectangle((el_x0, 0), el_w_total, head_h, facecolor="#A8D08D", **edge))
+    ax.text(el_x0 + el_w_total / 2, head_h / 2, "Key elements", ha="center", va="center",
+            fontsize=fs + 0.8, fontweight="bold", style="italic")
+    # left bar
+    ax.add_patch(Rectangle((0, head_h), bar_w, H - head_h, facecolor="#FFD966", **edge))
+    ax.text(bar_w / 2, head_h + (H - head_h) / 2, "High Impact Teaching Strategies", rotation=90,
+            ha="center", va="center", fontsize=fs + 1.6, fontweight="bold")
+    y = head_h
+    any_chosen = False
+    for strat, elements, wrapped, sw, cw, h in rows:
+        picked = chosen.get(strat)
+        is_on = picked is not None
+        ax.add_patch(Rectangle((bar_w, y), strat_w, h, facecolor="#FFD966" if is_on else "#FFF2CC", **edge))
+        ax.text(bar_w + strat_w / 2, y + 0.05, "\n".join(sw), ha="center", va="top", fontsize=fs + 0.4,
+                style="italic", fontweight="bold" if is_on else "normal", linespacing=1.15)
+        for k, (el, lines) in enumerate(zip(elements, wrapped)):
+            x = el_x0 + k * cw
+            on = is_on and el in (picked or [])
+            any_chosen = any_chosen or on
+            ax.add_patch(Rectangle((x, y), cw, h, facecolor="#A8D08D" if on else "white",
+                                   edgecolor="#000000", linewidth=1.6 if on else 0.6, zorder=2 if on else 1))
+            ax.text(x + cw / 2, y + 0.05, "\n".join(lines), ha="center", va="top", fontsize=fs,
+                    fontweight="bold" if on else "normal", linespacing=1.15, zorder=3,
+                    color="#000000" if (on or not chosen) else "#555555")
+        y += h
+    buf = BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi, facecolor="white", bbox_inches="tight", pad_inches=0.02)
+    plt.close(fig)
+    return buf.getvalue()
+
 
 # ── Report types ─────────────────────────────────────────────────────────────
 # Review Report      — written about halfway through a normal placement
@@ -2303,6 +2363,9 @@ with tab1:
                 st.multiselect("Key elements used", HITS_ELEMENTS[strat], key=f"tr_hits_el_{hi}")
                 st.text_area("How it supported the student", key=f"tr_hits_c_{hi}", height=90,
                              placeholder=f"e.g. what {strat.lower()} looked like for this student and the difference it made…")
+        with st.expander("🖼️ How this will look on the report", expanded=bool(S("hits"))):
+            st.image(make_hits_matrix_png({h_: S(f"hits_el_{HITS_OPTIONS.index(h_)}", []) or []
+                                           for h_ in (S("hits", []) or [])}, dpi=110), use_container_width=True)
         st.markdown("---")
 
     if inc("restorative"):
@@ -2318,8 +2381,8 @@ with tab1:
         for strat in (S("rp", []) or []):
             ri = RP_OPTIONS.index(strat)
             with st.container(border=True):
-                pc_, tc_ = st.columns([1, 6])
-                pc_.image(b64img(RP_PETAL_JPG_B64[strat]), use_container_width=True)
+                pc_, tc_ = st.columns([1, 12])
+                pc_.image(b64img(RP_PETAL_JPG_B64[strat]), width=48)
                 tc_.text_area(strat, key=f"tr_rp_c_{ri}", height=90,
                               placeholder="How this strategy supported relational safety and connection for the student…")
         st.text_area("Other comments on restorative practice (optional)", key="tr_rp_comments", height=80)
@@ -2639,7 +2702,7 @@ def build_docx(rep):
         return RGBColor(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
 
     doc = Document()
-    from docx.enum.section import WD_SECTION
+    from docx.enum.section import WD_SECTION, WD_ORIENT
     cover_sec = doc.sections[0]
     cover_sec.page_height, cover_sec.page_width = Cm(29.7), Cm(21.0)
     for side in ("left_margin", "right_margin", "top_margin", "bottom_margin"):
@@ -2651,14 +2714,26 @@ def build_docx(rep):
     base.font.size = Pt(10.5)
 
     def heading(text):
-        p = doc.add_paragraph()
-        p.paragraph_format.space_before = Pt(12)
+        """Full-width navy header bar with white text (CLC report template style)."""
+        gap = doc.add_paragraph()
+        gap.paragraph_format.space_before = Pt(8)
+        gap.paragraph_format.space_after = Pt(0)
+        gap.paragraph_format.keep_with_next = True
+        bar = doc.add_table(rows=1, cols=1)
+        c_ = bar.cell(0, 0)
+        shade(c_, HEADER_NAVY)
+        p = c_.paragraphs[0]
+        p.paragraph_format.space_before = Pt(4)
         p.paragraph_format.space_after = Pt(4)
         p.paragraph_format.keep_with_next = True
         r = p.add_run(text)
-        r.bold = True
-        r.font.size = Pt(13)
-        r.font.color.rgb = hex_rgb(TEAL)
+        r.font.size = Pt(15)
+        r.font.name = "Calibri Light"
+        r.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+        after = doc.add_paragraph()
+        after.paragraph_format.space_before = Pt(0)
+        after.paragraph_format.space_after = Pt(2)
+        after.paragraph_format.keep_with_next = True
         return p
 
     def sub(text):
@@ -2857,29 +2932,27 @@ def build_docx(rep):
     if "hits" in rep["sections"]:
         heading("Pedagogical Strategies (HITS)")
         blurb(BLURB["hits"])
+        chosen_ = {h["name"]: h["elements"] for h in rep["hits"]}
+        mp_ = doc.add_paragraph()
+        mp_.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        mp_.add_run().add_picture(BytesIO(make_hits_matrix_png(chosen_)), width=Cm(17.2))
         if rep["hits"]:
-            ht = doc.add_table(rows=1 + len(rep["hits"]), cols=3)
+            cap_ = doc.add_paragraph()
+            cr_ = cap_.add_run("Highlighted: the strategies and key elements that promoted positive engagement for this student.")
+            cr_.italic = True; cr_.font.size = Pt(8.5)
+            sub("Comments")
+            ht = doc.add_table(rows=len(rep["hits"]), cols=2)
             ht.style = "Table Grid"
-            for j, h in enumerate(["Strategy", "Key elements used", "How it supported the student"]):
-                c = ht.cell(0, j)
-                run = c.paragraphs[0].add_run(h); run.bold = True; run.font.size = Pt(9)
-                shade(c, "EEF2EC")
-            for i, h in enumerate(rep["hits"], start=1):
+            for i, h in enumerate(rep["hits"]):
                 sc = ht.cell(i, 0)
-                sr = sc.paragraphs[0].add_run(h["name"]); sr.bold = True; sr.font.size = Pt(9.5)
-                shade(sc, "FBE7A1")
-                ec = ht.cell(i, 1)
-                if h["elements"]:
-                    for k, el in enumerate(h["elements"]):
-                        par_ = ec.paragraphs[0] if k == 0 else ec.add_paragraph()
-                        par_.add_run("• " + el).font.size = Pt(8.5)
-                else:
-                    ec.paragraphs[0].add_run("—").font.size = Pt(9)
-                cc_ = ht.cell(i, 2)
-                cr = cc_.paragraphs[0].add_run(h["comment"].strip() or "—"); cr.font.size = Pt(9)
+                sr = sc.paragraphs[0].add_run(h["name"]); sr.font.size = Pt(10)
+                sr.font.color.rgb = RGBColor(0x7F, 0x60, 0x00)
+                shade(sc, "FFD966")
+                cc_ = ht.cell(i, 1)
+                cr = cc_.paragraphs[0].add_run(h["comment"].strip() or "—"); cr.font.size = Pt(9.5)
             for row_ in ht.rows:
-                for j, w in enumerate([Cm(3.3), Cm(5.6), Cm(8.5)]):
-                    row_.cells[j].width = w
+                row_.cells[0].width, row_.cells[1].width = Cm(4.6), Cm(12.8)
+            keep_together(ht, with_next_rows=False)
         else:
             para("", empty="Not entered.")
 
@@ -2904,9 +2977,9 @@ def build_docx(rep):
             ct.style = "Table Grid"
             for i_, r_ in enumerate(rep["rp"]):
                 pc_, tc_ = ct.cell(i_, 0), ct.cell(i_, 1)
-                pc_.width, tc_.width = Cm(2.6), Cm(14.8)
+                pc_.width, tc_.width = Cm(1.8), Cm(15.6)
                 pc_.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-                pc_.paragraphs[0].add_run().add_picture(b64img(RP_PETAL_JPG_B64[r_["name"]]), width=Cm(2.2))
+                pc_.paragraphs[0].add_run().add_picture(b64img(RP_PETAL_JPG_B64[r_["name"]]), width=Cm(1.3))
                 nr_ = tc_.paragraphs[0].add_run(r_["name"]); nr_.bold = True; nr_.font.size = Pt(10)
                 tx_ = tc_.add_paragraph().add_run(r_["comment"].strip() or "—"); tx_.font.size = Pt(9.5)
             keep_together(ct, with_next_rows=False)
@@ -2916,7 +2989,12 @@ def build_docx(rep):
             para("", empty="Not entered.")
 
     if "regulation" in rep["sections"]:
-        # ── regulation profile ──
+        # ── regulation profile — landscape so the four columns fit ──
+        land = doc.add_section(WD_SECTION.NEW_PAGE)
+        land.orientation = WD_ORIENT.LANDSCAPE
+        land.page_width, land.page_height = Cm(29.7), Cm(21.0)
+        land.left_margin = land.right_margin = Cm(1.5)
+        land.top_margin = land.bottom_margin = Cm(1.4)
         heading("Regulation Profile (Window of Tolerance)")
         zones = rep["wot_zones"] or []
         if rep["wot"] and zones:
@@ -2954,7 +3032,8 @@ def build_docx(rep):
                         run = p.add_run("• " + it)
                         run.font.size = Pt(8.5)
             for row in t.rows:
-                row.cells[0].width = Cm(3.3)
+                for j_, w_ in enumerate([Cm(5.0), Cm(7.2), Cm(7.2), Cm(7.2)]):
+                    row.cells[j_].width = w_
             keep_together(t, with_next_rows=False)
             note = doc.add_paragraph()
             nr = note.add_run(f"From the Window of Tolerance Builder ({rep['initials']}), "
@@ -2966,6 +3045,14 @@ def build_docx(rep):
                 para(rep["regulation"])
         else:
             para(rep["regulation"])
+
+    if "regulation" in rep["sections"] and any(k in rep["sections"] for k in
+                                                ("smartar", "attendance", "summary", "recommendations")):
+        port = doc.add_section(WD_SECTION.NEW_PAGE)
+        port.orientation = WD_ORIENT.PORTRAIT
+        port.page_width, port.page_height = Cm(21.0), Cm(29.7)
+        port.left_margin = port.right_margin = Cm(1.8)
+        port.top_margin = port.bottom_margin = Cm(1.6)
 
     if "smartar" in rep["sections"]:
         # ── SMARTAR goals ──
@@ -3129,6 +3216,7 @@ with tab2:
     if "hits" in rep["sections"]:
         st.markdown("#### Pedagogical Strategies (HITS)")
         st.caption(BLURB["hits"])
+        st.image(make_hits_matrix_png({h["name"]: h["elements"] for h in rep["hits"]}, dpi=110), use_container_width=True)
         if not rep["hits"]:
             st.write("_None selected_")
         for h in rep["hits"]:
@@ -3143,8 +3231,8 @@ with tab2:
         if not rep["rp"]:
             st.write("_None selected_")
         for r_ in rep["rp"]:
-            pc_, tc_ = st.columns([1, 7])
-            pc_.image(b64img(RP_PETAL_JPG_B64[r_["name"]]), use_container_width=True)
+            pc_, tc_ = st.columns([1, 14])
+            pc_.image(b64img(RP_PETAL_JPG_B64[r_["name"]]), width=44)
             tc_.markdown(f"**{r_['name']}**  \n{r_['comment'] or '—'}")
         if rep["rp_comments"]:
             st.write(rep["rp_comments"])
