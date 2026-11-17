@@ -1187,10 +1187,12 @@ def lookup_student(initials: str) -> dict:
         out["register"] = [
             {"id": r.get("id"), "initials": r.get("initials"), "program": r.get("program"),
              "status": r.get("status"), "start_date": r.get("start_date"),
-             "exit_date": r.get("exit_date")}
+             "exit_date": r.get("exit_date"), "notes": r.get("notes")}
             for r in rows
             if re.sub(r"[^A-Za-z0-9]", "", str(r.get("initials") or "")).upper() == ini
         ]
+        out["aka"] = [{"initials": r.get("initials"), "program": r.get("program")}
+                      for r in rows if ini in register_aliases(r.get("notes"))]
     except Exception as exc:  # noqa: BLE001
         out["errors"].append(f"Register: {exc}")
     try:
@@ -1245,9 +1247,52 @@ def reinitial_register_entry(record_id: str, new_initials: str) -> tuple[bool, s
     if len(new) < 2:
         return False, "New initials need at least 2 letters."
     try:
-        if any(s["initials"] == new for s in fetch_register(None)):
+        rows = fetch_register(None)
+        if any(s["initials"] == new for s in rows):
             return False, f"{new} is already used on the register — try another (e.g. add a letter)."
-        _get_client().table(REGISTER_TABLE).update({"initials": new}).eq("id", record_id).execute()
-        return True, f"Entry now uses {new}."
+        me = next((s for s in rows if str(s.get("id")) == str(record_id)), {})
+        old = (me.get("initials") or "").strip().upper()
+        payload = {"initials": new}
+        if old and old != new:
+            # Other tools still hold this student under the OLD initials —
+            # remember them so end-of-placement filing can still find them.
+            payload["notes"] = _with_alias(me.get("notes"), old)
+        _get_client().table(REGISTER_TABLE).update(payload).eq("id", record_id).execute()
+        return True, (f"Entry now uses {new}. Other tools still know them as {old} — "
+                      "that's remembered, so archiving still finds their records.")
     except Exception as exc:  # noqa: BLE001
         return False, f"Could not update: {exc}"
+
+
+# "Known in other tools as" — stored in the register entry's notes so no
+# database change is needed. Format: "[aka: EE]" (several allowed).
+_ALIAS_RE = re.compile(r"\[aka:\s*([A-Za-z0-9]{2,6})\]")
+
+
+def register_aliases(notes) -> list[str]:
+    """Old initials other tools still use for this student."""
+    return sorted({a.upper() for a in _ALIAS_RE.findall(str(notes or ""))})
+
+
+def _with_alias(notes, alias: str) -> str:
+    alias = alias.strip().upper()
+    notes = str(notes or "").strip()
+    if alias in register_aliases(notes):
+        return notes
+    return (notes + " " if notes else "") + f"[aka: {alias}]"
+
+
+def set_register_alias(record_id: str, alias: str) -> tuple[bool, str]:
+    """Record that other tools know this register student by `alias`
+    (e.g. their initials before being changed to make them unique)."""
+    a = re.sub(r"[^A-Za-z0-9]", "", alias or "").upper()
+    if len(a) < 2:
+        return False, "Enter at least 2 letters."
+    try:
+        c = _get_client()
+        row = c.table(REGISTER_TABLE).select("notes").eq("id", record_id).execute().data or [{}]
+        c.table(REGISTER_TABLE).update({"notes": _with_alias(row[0].get("notes"), a)}) \
+            .eq("id", record_id).execute()
+        return True, f"Saved — other tools' {a} records will be matched by program."
+    except Exception as exc:  # noqa: BLE001
+        return False, f"Could not save: {exc}"
