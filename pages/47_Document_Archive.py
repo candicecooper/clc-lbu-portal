@@ -505,6 +505,14 @@ with tab_student:
                         st.session_state["_sf_pending"] = ini
                         st.rerun()
 
+        def _entry_label(s):
+            bits = [s["initials"]]
+            if s.get("program"):
+                bits.append(s["program"])
+            if s.get("year_level") is not None:
+                bits.append(f"Yr {s['year_level']}")
+            return " · ".join(bits)
+
         def _render_by_program_term(students, key_prefix, badge):
             by_program: dict[str, list] = {}
             for s in students:
@@ -536,23 +544,27 @@ with tab_student:
                     entries = [
                         (
                             s["initials"],
-                            f"{badge} {_labels.get(s['initials'], s['initials'])} "
-                            f"({counts.get(s['initials'], 0)})",
+                            f"{badge} {_entry_label(s)} "
+                            f"({counts.get(s['initials'], 0)})"
+                            + ("  ⚠️ shared" if s["initials"] in _shared_ini else ""),
                         )
                         for s in by_term[tkey]
                     ]
                     _folder_grid(entries, f"{key_prefix}_{prog}_{_term_key_label(tkey)}")
                 st.write("")
 
-        seen = set()
-        _active_reg = [
-            s for s in fetch_register("active")
-            if not (s["initials"] in seen or seen.add(s["initials"]))
-        ]
-        _archived_reg = [
-            s for s in fetch_register("archived")
-            if not (s["initials"] in seen or seen.add(s["initials"]))
-        ]
+        # One folder button PER REGISTER ENTRY, labelled from that entry's own
+        # program/year. (Previously entries were de-duplicated by initials, so
+        # two students sharing initials showed as ONE button, under one
+        # program, wearing the other student's label.)
+        _all_reg_rows = fetch_register(None)
+        _ini_counts: dict[str, int] = {}
+        for _r in _all_reg_rows:
+            _ini_counts[_r["initials"]] = _ini_counts.get(_r["initials"], 0) + 1
+        _shared_ini = {i for i, n in _ini_counts.items() if n > 1}
+        _active_reg = fetch_register("active")
+        _archived_reg = fetch_register("archived")
+        seen = {r["initials"] for r in _active_reg + _archived_reg}
         other_entries = [
             (ini, f"📁 {_labels.get(ini, ini)} ({counts[ini]})")
             for ini in sorted(counts) if ini not in seen
@@ -568,6 +580,15 @@ with tab_student:
             horizontal=True, label_visibility="collapsed", key="sf_view",
         )
         st.session_state["sf_show_archived"] = _view == _view_opts[1]
+
+        if _shared_ini:
+            st.warning(
+                "⚠️ **Shared initials:** " + ", ".join(sorted(_shared_ini)) + " — more than one "
+                "student on the register uses the same initials, so they currently share ONE "
+                "folder (marked ⚠️ shared below). Give one of them new initials in "
+                "**Student Register → Archived Students → 🩺 Look up a student** so each has "
+                "their own folder, then move any documents that belong to them."
+            )
 
         if _view == _view_opts[0]:
             st.markdown("### 👥 Active students — by program & term")
