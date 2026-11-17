@@ -222,6 +222,231 @@ RP_OPTIONS = ["Comic Strip Conversations", "Circles (Nurture/Restorative/Communi
 
 TEAL = "#1A7A6E"
 
+# ── Cover page — recreates the CLC report cover (navy / green / lavender shapes,
+#    Cowandilla Learning Centre logo top right). Coordinates are on the original's
+#    579 × 818 grid (A4). ──
+COVER_W, COVER_H = 579.0, 818.0
+COVER_NAVY, COVER_GREEN, COVER_GREY, COVER_LAVENDER = "#0F2B50", "#57B848", "#788FA0", "#D8DDED"
+COVER_FONTS = ["Liberation Sans", "Arial", "Helvetica", "DejaVu Sans"]
+COVER_SHAPES = [
+    (COVER_GREEN,    [(163, 0), (233, 0), (579, 346), (579, 366), (163, 366)]),
+    (COVER_NAVY,     [(48, 0), (175, 126), (48, 126)]),
+    (COVER_GREY,     [(103, 0), (126, 0), (176, 53), (103, 53)]),
+    (COVER_GREEN,    [(0, 77), (49, 126), (0, 126)]),
+    (COVER_LAVENDER, [(435, 366), (501, 366), (579, 444), (579, 632), (435, 632)]),
+    (COVER_GREEN,    [(435, 502), (492, 559), (435, 559)]),
+    (COVER_NAVY,     [(0, 204), (579, 761), (579, 818), (0, 818)]),
+]
+CLC_LOGO_JPG_B64 = (
+    "/9j/7gAOQWRvYmUAZAAAAAAB/9sAxQAGBAQEBAQGBAQGCAYGBggKCAcHCAoMCgoKCgoMDAwMDA4ODAwMDhAQFRMMExQUFBQZGhwc"
+    "HBofHx8fHx8fHx8fAQcFBQYFBggGBggJCAgICQwKCgoKDAwLDA0MCwwMDAwMDw4MDAwMDAwPDAwODg4ODhEQEBAQEBMTExMVFRUX"
+    "FxcCBwUFBgUGCAYGCAkICAgJDAoKCgoMDAsMDQwLDAwMDAwPDgwMDAwMDA8MDA4ODg4OERAQEBAQExMTExUVFRcXF//dAAQADP/A"
+    "ABEIAP4AwAMAIgABEQECEQL/xAGiAAEAAgIDAQADAAAAAAAAAAAABwgBBgMEBQIJCgsBAQACAwABBQAAAAAAAAAAAAAFBgEDBAIH"
+    "CAkKCxAAAQIDAQQGBgx/AAAAAAAAAQACAwQRBQYSITEHQVFxgaETFSIyYbEUIyRCU3KRkqKyweEICQoWFxgZGiUmJygpKjM0NTY3"
+    "ODk6Q0RFRkdISUpSVFVWV1hZWmJjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKk5SVlpeYmZqjpKWmp6ipqrO0tba3uLm6wsPExcbH"
+    "yMnK0dLT1NXW19jZ2uLj5OXm5+jp6vDx8vP09fb3+Pn6EQAAAwEEBgcGhwAAAAAAAAAAAQIDBAURIhIhMUKS0hNSYnLR8PEGFDKC"
+    "wuEHCAkKFRYXGBkaIyQlJicoKSozNDU2Nzg5OkFDREVGR0hJSlFTVFVWV1hZWmFjZGVmZ2hpanFzdHV2d3h5eoGDhIWGh4iJipGT"
+    "lJWWl5iZmqGio6SlpqeoqaqxsrO0tba3uLm6wcPExcbHyMnK09TV1tfY2dri4+Tl5ufo6ery8/T19vf4+fr/2gAMAwAAARECEQA/"
+    "ALUoiIAIhSqAPnLWCQAScQx5S8C6a7SyLmWXsw8xplwqyWhkX52JO3RsSoqt+7W3boXuZHi6glzil4RIbTpo43HPwbBcbqfFi5Yt"
+    "xrqqe5HI63xYuWKcddVT3Ik62ckS5uyHOg6m2lxm44cDWqHMJ10bqtMtLJatqO4tsyXhSjMQL9rX+wtG6LRgABQCiKLbPs6WspJy"
+    "BVmxEU2fZ0tZSTkCrNiPYm7r7p5wkxrSjAHGIZ1GN0berzYs5OzBrHmIsSuMve92zK4UXItqtdxqUq5hyLatGlxqUq5hm+eDUOIO"
+    "bhXYgWrastx7zkxDzL2K4DdKrrIvElKScJHIjxJSknCk5EbBJXfXWSRF7PujAbdjNDwdEiumtnsvJeiCjLakgensu7TLXb4VHCLo"
+    "ZO90sjlNVXNG6cOhk73SymNVXNG6cJ8sW6mwrdHEOmmPflwXazEHbpwr1yK48Kra1zob2xYZLHtNWuaSCDsCMS3S5vJNtOzS2Wtm"
+    "+nZbANSYNTNGficM/DsVIuV+ULgS6CkDqybhEi5n5QsyS3KQOrJuES+mUuhZNsWfbUq2cs2M2LDdjocLTmEYwdgV31JpMlERpOEh"
+    "JkolESknCRjKIiyMgiIgAiIgD//QtSiLBQBjGtCu3yQ22YX2TYjmxJuhEWNjbC2AzXaQWMkO7Y2Y11iWS8bS4g2vig8cWnKHTZ0g"
+    "oqw1qTUk1JOEkqKfJ8jZmbBgcaeVm1ZKtCKfJ8jZmbBgcaeVm1ZKtD6jRYsxFdGjvdEiPJL3uJJcc0kr5RFDmcJwmIczMzhMERFg"
+    "AREQAREQAREQAREQB37Gty0bAnGztnRSxwIv2HCx4zHNyxscYylMtyd1sjdPK6kg7VTMPBGl3GrmnNGa05qgtdmzrRm7JnYdoSMQ"
+    "w40I1ByiMtrhlg5YXY4netyLkTjMzuJN1EOtwu9bkVInGZnO3UQsXnJgIXhXKXTy109nNmoVGRmUbHg1qWP2Ga04wV7ozVYGa0tU"
+    "ktBwkoWBC0tEktJwkYyiIvIeQIiIA//RtPU0Wv3Z3TMuZsl8wyhmo1WSzM11MJIzAMOkvfJAbUmgzVBV2tvvuht2LHY6svAJhS4r"
+    "gvQcL89xw51Fxvi6jcrGFNxripsRyPi6rdWMU464qbEeJFjRZiK+PGcXxIji57zhLiTUkr5RduWs50zIzE814bqCNLwrylb4x3Fo"
+    "NcqlNFV9KVLOVNFeSlS1SoxjqIvZnLmYslbbrIdMNe3UUWNDmAMD2w2uc4UvsBBYQcwrrNs6RgykCPaM2+DFmoQjwoMOEYhEMkhh"
+    "e6+FC4g0ArgwryNgtJmSikZEeRsGiTMlFIyI89F2LRkXWftHLn3+0iVhzOKl7qS+1nY0vca7ZsNwt6BYepsMYwdrb3ANTMETXa5V"
+    "aLFRrhggqqaIYqJcMEFVTRDzEXpNsuRgScvNWjNxIJmw90FsKAYgvYbiw1cXAB1WnWRWgWJaxIs0JAsitaJyHHjPc8GkGHLuIe40"
+    "wuwAmgzlmoVwkUEsZqBcJFBLHnIvSNky0xChzNmTbpiEZiDLRr+EYT4boxox17UhzDhy61wFckxc5GlrVmrLdGBECWizUOMBVsWG"
+    "xt8CMOCpBacwhKgXBCRDNQNIISIeSiwMIBzQsrWNQIiIMgiIgD1LmrfmbnLVh2hAJMOobHh89w64dEYxsVPMlNwJ+VhTsq4Pgxmh"
+    "7HDLaRgVclJGRRdC6sW5yZNaAxZYk4ht9m+jRUm9DrNmuoFnKXcNeu4knodZoXbus5S7hr13EmosDEsqbE2CIiAP/9KwGSLbJsi5"
+    "uMITr2NNEQIZGMX2vEZwqoSFAKDKW9ZLVpOmLal7LaaslYV+4DFfxd+GmtGVffVvUrpNJTERaYV99m9Suk0lMRFpgXqWdMQIVjz0"
+    "CI9rXvmpF7GE0JbDe8vcNg0HCvLXckbKiz8vHmhHl5aDLuYyJEmHlgvolb0CjTWt6VysTUS4hSRyKhysTUS4UlJHIqGxQbWs2Nat"
+    "qwpqMwMhRJyYs+YJq06mY5kSCDmOqHN2IK8iYl22vJyU1LTMrDdAk4cvMQY8UQojHQb4VAcNaa4EEEZeBdSLY07CiR4btROECW2l"
+    "l7Hh0N8GoAcxw17CcWDSX06xYsOXbHmpmUl3PhiKyBFikRXMIq00DXUqMIBIJW1S2iyNK2dWs7ZMG1S2iyNK2dWs7ZMHbtOXFrSk"
+    "nOSkzLAQZCHAiw4sZsOI18K+vm3rsJrUEEY13mR5SLbkpdPtLl2SsKHBfGhOfSO2JBhBhhCHSriS0UIwUw1XkS1gzk1BgRdSS0F0"
+    "0Ky0KPFDIkYVoC1tHUBOAFxFTiXVjSMxAlROxmhrDGiS96dfESEAXgtyqVWJJZRzRWqG4VcmA1rKObK4pFVDcKh69gl7YfEQmZTV"
+    "TFc4zUrHitL2jDV0Nmvtic8luPLwL7kZ+QhQrLgxowZDdKT8rFe7CYO0h7hDc8DKwgmmVhXRh3PTb3RdSxZaA2DAgzESJFeWsDJj"
+    "jmKhpNTlimBdWekI8hEhtiuhxGxWakhRYL7+HEbUi+a7PBBBAIKSbRmkjkbhq1e6bFCTaM0kZolJq1e6bFHqSgg2LLNlpial4sWa"
+    "nZN5ECJqVsOFLxL5z3OAoKl2AY6Y6LuyVqWfF1bQ5yO1j5ds9tAecUSHNX19CB3NRzc8rVQAMAwZyUG6LxS6TTBIlKTZu48Uuo0m"
+    "UiUpNnp0sGijQNgFlEWkaAREQZBERABdmzLQjWVaEvaMDX5d4fSuNoOtNOeKhdZFlKjQolJmpBKjQolFNSLGyczCnJaDNwTWHGYI"
+    "jTsHCo2a5xiC0/IwtMz9zTIDzV8m90E5tNebpGmgtxCtLBoTZkhoU8kWlg1JsyQ0KeSCIi2DYP/T2y6+bM7dPaMYmoEYwxnQ9ZGy"
+    "XjrlnYpjzsxME4YsZ7ydzPJ31cSqjVcmtS6spQqjVcm0UurKUC9uyZiUgXPWk+clhNQtpcmDCv3QzTa2rg5uGoFaZWavEK7chZFp"
+    "2oIhs+XMYQqakIcxoaXVvalzmipossVKSuFBSRyKotyjLBSkrhQUkcirkyR7c4Nr7UEG82hmxXCz7zANo5fDLBhJN+CSHVw1XJGs"
+    "d9s2u60zBdFs2LJakEww6w10KXADXEa64ObQtO+rX22Rab511mNlYu0poJMEihDcd8STQNwg1rRcmqG2dpmq4Sr9TlupDCa9hF7i"
+    "vi4OvQKimErbUilXEyUopLk0kqLcNamDdUilylMlKKS5NJKi3DWpg9R9nT1susa0bPh6ll4cpKwo8UFobAfAcdSCISdZpjqcYxLN"
+    "oQo1vSU0LGhmbe21ZqMYcPC/UUZo1G8DHektOHKy15bbn7YfNRZBkq4x4bGxIsO/YAGE0a4uvr2hODGuPVPaonhZwlYomi0kQxgJ"
+    "bluDgaXnTVabFYNSjIyNkqPcVe0iLYjBqUZGRslR7ir2kRbEbFNR5WCy2GxoTJtstI2bAiwtSFoMRjgHtDmZbTgwYKryLozDdGlH"
+    "yQDbOdLgyDRUlrC4mI15JcS8PJvq7JdWJYlqwJyHZz5V+0iKKw4TS15Lc3WSQAKGtTgXKLm7dMwZQSjjFa0PvA+GTeuJAIN9Q1Ip"
+    "QYUWto0SaJCzJSUjyaZtoLW0aJNEhZkpKR5NM20eci7U/ZdoWW9kO0IBgOfW9Bcwk0x66XUpUY11VoUk0nAopExzqSpJwKKRMERF"
+    "gAREQAREQAREQBIWQ/Nls5aEiTgexkUZ7atOzClIhQ3kVRCy6q8GKJLRAdAtKmMKwPSo1OUiqqlJFgelck5CI51Skj6REXcO0f/U"
+    "9V4Ie4HGCQd1WF2rVgmWtScltw5iK3QDjRdVVJSTSo0nOipKI0qMjnQXt2U2z3XO2oLTdFZBM3JAughrnA7W4aOwEAaK8RcsFk7G"
+    "hxJeVbGiMcWuiQ4bXOBLa3rnBodiqaErzZLkFQwSUVSaJI82KpBcMElFVyZI2eK2DCnbTko8KLElJOyGQoRhvBiR4AiwnMih16Rr"
+    "QdWlKAYMpeLLz9nykSYl4EnGfITcJsOYgRX7Wm9dfNe17WtvSDSlQQctdSBOWlCjwjLRo7Y8EGFBvC7UjW1OsNAwgYTrOkuY2vbr"
+    "JwxjNzLZsgQiSXCJe1qGkUrSprSi2KbkqAyJSYyp1Krl7iAbVN5KAyJSYyp1Krine4gHrw7LkbPlLVhRokUyczISsywiG0RmtiRx"
+    "etcwkAOBGHDQjCF92VOyMyJmThwph0pJWNNQwC5ojxA6Kx7yKAtbhNABWgXgzD7V1JE2lmY1JMAal1KHh0VrTUVvhVwFK5gWJaHa"
+    "cCIyZk2TEN4wsiwmPBoRlOAxEaBWSbmlZEhEpM7c0kMk3kVkSESJJHpWaJR0O1odlQY8J7rOcGsiODojqRYZeQWtZgvcYpiXnWUw"
+    "NtWQBbe1moJApTlo3EsxbQtePMMnY0xMPjwgbyMS6/a0HDQjEATh018R560JuKJuajxY0SDe0iuJJZQ1bR23cOEbFeCmiTkTjRVU"
+    "U8NamiYUnGiqop4clsAC2J+mXNRq7vcuouWNBnBWZmYUYCKb4xYjHgOc7DW+IoScJXFRwbflpvSSA4g0JGMA4lqVCajMyuIa1Qmo"
+    "zMriBFm9iYNYdhBcMBwty3DNGxxJevBbfNdrQBbgIqMojNGckBjEBjCLkhy01EDjCgRXhhIeWMeb05YdQYNFfMJkSM/UcCG+I81I"
+    "axpcTm4BUpInmwSKs2Hyi+2wJh0Uy7YMQxRjhBji8du0qvraJOXxbtGjVZQOGo3VbXFUUwaKSKjmEEio5hDiRfUSHEguvIzHQ3Ur"
+    "evaWmmbQr5SZKMDKCUY2zIwBN10EjcCNXdoU0Zah/Ing6kukixcqHLO3kWhTBXAp55ygctzKE885QOWGtKGURF3jvH//1d0u+kzJ"
+    "XWTzaYIzmxm7EPAJ06rX1I+S9ZVHyVtQxjDpeLvZhOmFHCrLvZGydLVNakqKMK072RsnS1KtSVFGBe9YpiC561dRTu0B20mT2uvn"
+    "twUi6zWGC7Dui8FcjZyNDlIsmHAQYz2RHtoK30Kt4a5VL5amSyQqSOqq5MkamKyQo1HVVcmSNjjWg18ralpyEZz5qWlZGVdPAFj4"
+    "jnOcIsUbeBdQNqaEhfMK1jKylj2zP6kjRnidlIkw1wEfUWshj2udjcy/N6TnVXgyNoTFnxXRZYsOpGlkRkRrXseytb1zTgcKiuwK"
+    "5YlszkaZhTMZsB+oGmHCgmEzULGnCQIeIYcNcdctbSdE8ZyJ8luKSkriqtqNpOmEpIzkT5LcUlJXFVbUe5ZsCb1bS82+efaMpHlJ"
+    "4S0eI5xcL2C6/Y5riS1wwVGI4wulZ9p2nDuXn7ycmG6ijSTYZEVwvGnUlWtw4AaDAF03XQWi6LCjsdChiBDiw4UOFDYyEwRgWxKN"
+    "GCrgcJOFdOFNxYcpFkobhqGO6G57aAkmFW8w5VL4opskjgRJT3JkpT04YU3Sk4EGqf5MlKenDYrOjNaLAhzDjqObZOy0ZxONsxFL"
+    "CTm60QV82XAMjCsuzplm1s/a7THY7EYUq8QmtOwLy40XgRJ2PFgy8BzwIcrfahIoC0udfk1y8OFc89bU/aE3DtCZit1PBvdRvY1r"
+    "A0tdf3wAwVJJcTllEt0kUMEtMjQxZLpvIjJN0kUMEtMjdMl03kR3boJmHHix2i15mecJl9ZeLDexjKOcKtJeRrOIUAwLvS0SRi3K"
+    "2fZdpxRLwZiPNRGTN6XGHFhPh5Qw0c1zm59F4s9a0e0mUjQpZri6/dFhQWMiOdhqXObjrWpXA+amIsrBknkail3RHQwAAQ6KQX1O"
+    "XUtCxU6UrWso0kmR5MmtDFTpStSijSSZHkyZsYbZGnGz8WRmobBDhusa0mQmAUvYUNz2Q25960VOauOIxlpSliyTWjaXIycnMwCB"
+    "hiwS7a5hzS2geNhVa5DtSdhMhMY9oEGBFloesg0hRiS9uxJJx5SzCta0IM1KTkKIGxpGGyFAcANZYyt6CNvYzWuNedvSDuIrikZL"
+    "ktLFHnb0hVxFcUjJclpYR7luTs5JyE3Ek5iLLudbs5fGE9zCaNBFaEVziszlpS8pPzMCNGiSLrRlpKO+dlxR7Iuo75181tCWOLqu"
+    "DSDXDhXkMugtBrIsOIyWjtix3zREaA2IBGfrzm1xVpixLiZa02JmNNx2wZqLHIMR0zCbFFRivQddwYKDBTAinQkzhI1UNw3FWslk"
+    "tIBTpSZkZGqhuG4q1kslpA9yWhzEhK2ybStCJLxi+SpPwb+M+JDffuZeuDmOvXADLwYiuvYM/Mi6eWZLWjMzEKLE1uK4vYYhEN2v"
+    "NLjWmIVJxLz229aQmJiYiGFG2khojQ40Nj4bhD45gNpRt7iFKUXA20plloNtOA2FBjMNWiFDa1gN6W4G4sRK8TbIKRNElFVdSlVY"
+    "eKm6CNJoNUVV1KVVhwxpiamn6lmo0SM8CgfEcXkDMqcpfCxiwITgqtCjhOEc5majhMSXkPSREK0bRcMDnMgtObQFztmFJQGCi124"
+    "OzRZVzMpBcKRIrdTRc2+iYdlQLYcuisrhZGxczNJzZGGiliyuFlULmZoObIyVFGH0iIugdA//9ayN1Vitt2wpqztvvbWEcyI3C3T"
+    "FFAb2PhPdDiNLXsJa5pxhwNCDoqyWPDmqIck65t1m2pq5lm7Zp07WU25Fph0HDDnqLflzGtBN0lLRFVXRGPy5TWgm6Slpiqro0rK"
+    "XsWDGgtgTEvBiQJe0Ij2GXjTLGPhuYAb6CC4OaxxJqCRQ4qhePlLsSkWz4IeJ6T2lh1L0aldCvc0ayMIKiGS5BZGdmhEQxVILhPk"
+    "3tR6UeDH1T2rEtKC2HOw56WY/WGsLasdUANFADQHBgONdmDAlYctKTxgw3vlrGizLWvaCx8YRzDa5429S+rQroPugfMxpsz8tDjy"
+    "85qK/l2uMMM1A29hFjhUggYMNajGvnV7EE22KyXhCWZLGTEmS4sMualzS6t8XEm+vsdVuJoyScJHWbhjXFJSRjcTRkRwkdZuGtXE"
+    "OxITsWdM9ak8yBHi2dJuiQG6hY1mpHPYwFzWgB17fEgHLXNYseNacxPTc06UbHlZJzoEaNCZDgw3GIxt85obekgGgJBouhCtWVlZ"
+    "gvkpFsOBFhOgTMvEiviiMx5BILjQtIIqCMRSFaslLRohlpANlpiAYEeA6M95eCQ6+D9ZLXAjBRYQ0Sk0yS5KRuK4o1auGzAMJaJI"
+    "0yS5KRuK4o1auGzBKHoS81DZaEdtoTki6aiwGslJ1kNr5eC++qQ9ohgAuGC+INFiXix5a0pqDbO0aWtCLChtlJmLChul2m+rfUa1"
+    "zL14wB9DTLXmCbsnaUYmq06hLKah2kvqHV16+pXFgpSi+4tqyk1MMdOSLXy8GA2Xl5dkV8PUbGkka1hLiamtUJqUBQqTClVa5GLv"
+    "xzQJqmVCaYUqrXIxd+OaOK1mz7Z57bTY1kcAVvGtaxzaay4Xga1wIwgjGuou1aU+bRjsiajbBhwoTIEGE0khkOHW9bfHC44SSSuq"
+    "tKzI1maTkiGhoZGszSckQIiLxGAREQAREQAXsXJ2K637elpGlYTXakj5mo2mpGjgC8c4qlTDkaXNmx7JNpTTKTU8A/DjZD263YVx"
+    "nfl1Pe5jdTdJGURMZVnSR0ve5jdLckncCYyrOkjcmta0BoFABQDKAzF9IEVkFkBERAH/17ULo2vZUrbVnxrOnG30OK2hzQcpwzCM"
+    "a7xplpRYUklEZHMMYMiURpMpRivVuWLO2BaUSzZ5pDmGrH5T2HXXN33MK6CnW625SUunkDAfSHMw6mXj0wtdmHNacsKErRs6csmc"
+    "iSE/DMKNDOEHERlOacsHKKrzvcKnIuEozNVw0pivO9wqci4UxmarhpTHXREXGOQEREAEREAEREAEREAEREAERe9clclOXUTgaAYc"
+    "nDI1PGyqc8tzXHSxrzZMltlkhBSRqHkyZLbLJmzKSNQ9DI+uSdbs+LRnGbYZZwNCMESIMIaM1oxndFMgGDAuvISErZkrDkpNghQY"
+    "TQ1rQMQ2OxOWV2RnqxOJyJcjKQK4juJWkixuNyJcjKQKWZ3EofSIi6R0AiIgD//QtSiIgDGwXhXTXLWddPK6hmheRmA6hjtGtsO+"
+    "jNBXu4CEpmrxWzS1SaFlJEY8VoS0SaVlCRiALoLmrVubmdQWhDrDcaQ47amG8bA5R2BwrygaqxFp2bJ2xIxbPn4YiwYzS1wxEZhB"
+    "yiMYKgu6y5ufuQtEQJwGLJRiRKzlMDhzw8DE8ZebjChHa9S2JmtjGRVZ4qYRDpeVpCanNHKqz22VbpR5aLljykzKtZEjwyIcQVhx"
+    "RhY4ZrXDAdAriUepJpOBRSJiLUlSFGlRSJpBERYAEREAERDQCtQEAEqF9zEGNKSwnJljocJ2uF+Av3KDhcNiMC3jI6uFi2gYV0Nv"
+    "QbyWBD5SVdr0Q5USIOectrcvGcGPoczhbOlREkpEqsodblex0OopMkyDOrKuHbKsOlclkfT1vOZOWiHSsjgOEUiRRmNBxN2J0FLs"
+    "hISlmysOTkoTYMGGKNa0UA+GdiuwBSgxUykwKecrjZORMCJajuJWSiacrjZORMCChOeUPpERdA6AREQAREQB/9G1KIiACIiAC6Fs"
+    "WPIW7Z8WzLShCLAjCjgcBBynA5TgcIK76LBlCUBgRmRwkIGtCBdFkX2q+ULWztkzTiWQ44v4EdoyiNuRAMZGfhC2mxbFyP7u5d0e"
+    "yg+QmmgGNKsdR0M5oaatLa5bcGct9t2wrPuis2LZdpw7+FEFQRgcx23XNOU4ZqgC3bEtu4S3mw9SvhRYZ1JKTcMkB7K0BGxynNOy"
+    "IXK2YoTcbNK0dNG9TBg+KZFslNSFPVYb/OZEE2CTZ1oMfmNjQ6abSdkvNi5Fd1UM0YJeIM0RL3ZhbLcDklwboyyybZvZe0gKMcMD"
+    "I9Blc8vzW5eVmLzsma6S0JBspYMjEdBbNMfFmHtNC5gN61gIwgVqTmrSt7XGpMmklJrqhHm8LBTWozSpCq8Nfg5H90ExFMCA6UfE"
+    "FasZMsJGeAar0IORPdNEwxYktBGXrZdsmqNIEaLKRmTMrEdBjMIcyIwlrgRlghWFuGuifbdyUva9ovayJDa9sxEcQGkwiQXk5VQK"
+    "leDB7XKszIyVRDyb2zrmc5EqFSirw12SyHoAIdaNovfmtgsDRuri7ZLxLorauLuOc6QuclIVo2k2ofMxjqWHAObhwOcMwYBlnKXW"
+    "u7yUpm1jEsm5x7oEjhbEmRURI2UQ3LazTOwC48jPI+NvxWW5a7KWbBcTBhHl4eDl9MA4804M1bkOZghUiwZJhq1xdOHS53qcjlTU"
+    "zRmmu3Erkw9G4S4meunnRdfde58eE4h8vCjY4pBqHluIQxt1owHMpjl4AAUAwDKWGNDGBrQAAKAAUAGVgX2uxDNKCgIZatVNVQnK"
+    "KdTmwIiLyHgCIiACIiACIiAP/9K1KIiACIiACIiAMY14V19ysldbZL7PmdZitq+WjUww4lMBzjiIywvdWVhREooDBKjSolJOWQqx"
+    "OSc9Y9oRJOaa6BNSkS9NCQWuaahzTmYiCMpbo2LGyT7MgST4jBdFZjHBheQ1s5ANK4cQe00JysNcvBsOTLcsI8qy6mTbtZLhsKcA"
+    "xuhE0Y/PaTQ7A7BRTIzs1Zs5AtCSiGFMS72xIbxlOGbmg4iMsLkUmolmhVwqEklROhBLTFWnp1KY2CUyN7s5qa2jPs90uAdbjRnM"
+    "bDaMs1BdUZy+rpboocGzYNxlgxSbMkqiYjjAZuNWr3bkDq0GXgOYtnu0yTodp3KSkpZT9RzdpQztOa0kOgNGB7K5RccA2CjGFBiR"
+    "osOXgML4kRzWQ2DGXEgNA0SsLkERWZ3EDKTaR2xQSM7dQ2O4K4+LddbAhRAWyEsQ+biDBUZUMHnp2kMOYrCS0vAlIEOWloYhwoTQ"
+    "yGxuANaBQABaxZFnQLgLk4MtCh6mmnFgeBgMaZjENpXKaCabBoXfi2pa9lSMxaNsQ5dzIbRqNks55c57nBrWm/FMJIFVuZyLIoDm"
+    "yMkrSBwOp1E0aHmybMI9w7FAvAh2tbcpOSkvbEvAZDnXOZCfAeXXkQNLgx98BWoBwjLyl2rJtqHPWZLTk2WQIsclmoy6mttcWlra"
+    "4zULzJskzkZh1qVm1MNJNUGcEw61KszR6pCAZa8QXQXhtmLFYBAsshrXA4XkQw9wOZhIC4ZG6Cci2VaMzOwWQpuzgXOhNcS0jUYi"
+    "sNThoQaHRSpkQwQ5vyW0GKmRDBDm/JbQbCRlpSi1uXurjRrAbaj5cQ5pkWDBjy5PHN0R7WnDlijw4HLX0bWt6YnLQbZ8CWiQpGKI"
+    "d5Ee5sSJtW15oQC0HWqCqxU6DIjKXDZ7gKnQZEZS4bPcDY6hMC8CBdK2bjSG0eFtVOSkaY1o0c0wr3WKDBjJBXdsy03z1iwLUewN"
+    "fFgalLAagGhNK6C8ktUKOBJ2ZVMMpapUcBHZi2I9InClQuhYtoPtSypSfiNDHTEMRC0YQCcoLzZS6WNHt82aYLRKPfFgwYwJvnRo"
+    "LWue0jFShIGcUNqkiSZncdwgbVJEkzO47hH/07UoiIAIiIAIiIAIiIA61oSUC0ZKYkJlt9CmIbocQdMuBBVYbSkYtlWhM2ZMcdJS"
+    "M+C44q3rqB2iKFWnUA5LUgJO7SPEaKCagwo2jS9Om1aHUmFJKqo6nAqBZoqw07OC3jIisNtq3UiejtvoVmw9TCuEGK7WYe6YXZ60"
+    "dTPkIyLYVz85aJ16amiwblgtAGm4rSwKFoQ6XWqQYnBPRRtt1MpMzNnNiSrDFiS0eDMCENeeITw5zW7GmLYrp2vO8HFZE1K2bAj6"
+    "nhiHGDIsJ8K+LHtdeAva0XxvSF7s9OS0lBEeaeIbC5rKmp1p7g1owZpISdnJaz5d83ORBCgwhVz3YsODdamlAuhaCUao0BGmNyYQ"
+    "60JUaoVQEaY3I78PAizsS6CfsyFKysxCZKxzMTL48J0MMvWOaGa1S+cS7KqMC8eJY89PRJ6T2jxGNsx0xMSby0gOjRYrYsO8OXQN"
+    "IwZtFt9n21JWoXslNSVhgE38J7BQ4qXzW10Fmz7Ys+03R2SUYRTLuvItARQ4aYxhGA4RgWs2KGsEkuEz5GL7WEeCmSGkBqXDJcjF"
+    "7iCEao2TtKfsJkuIMaBEtq0TFj1ZR0KCH3xLgcWswwKHNXZnbNtKRmrRhl8adZaNnRAYmo2ikWCCGNN4GipD6CuE0XrwbrbCjxGQ"
+    "mzBaYrryG90OI1jnVpehxYGk1FMa7svacjMz0xZ0GK10xLBpjQhWrQ4VadjoIlkyURQLklRUyVF0ssYSyZKggXJHcM3SFZJpMsal"
+    "a9l2hLy8jHkoD4rZxsnBnoLQS5joLmOZFI2ABa7QzF35a0tVE/bLIsrMxIsaZD4DYcF7hEGomNFHBt6MIIwle5CtmzYxgCFGDtpM"
+    "SJChUB1p8Kt+MWVelJa2rNnJaYnJaO18KUc9kZwrrDoevgjHgWSZJJUklcB+1l9OhGSZJJUklcH2ZfToRr1m2RPykex5eNCdfQ5G"
+    "bbFcMLWRIrmODScVcJGguewLRbCsiWsKNAmIc2yCYLw6DEDA4AjX729psar1pq6CyJSFLxo0bBNND4DWte9720BqGtBNKEYaLtyU"
+    "7AtGA2Zli4sdUC+a5hqDQ1DgCsoZJSqBK5fcRaUZSzSSoELl0UqLSjXrBthtn2NLWbFlpkTkrALHwzAiUL4bTgDr29INMBrhXnMs"
+    "O1ZCxZG0Xx40WNLxmTkWUENhN9FedSgEC/JAecvKW9UCUGEJbtCREaoZFMinSLhpRk3PCREarhTIp5LSj//UtSiIgAiIgAiIgAiI"
+    "gDBxKE8m2nBzyexkh6EepsUDZL842Zu0iwmmolpeFCOwJBeRvJanScQdDhKFtco0qlc5TxkPAC4mBTcePXd5UEZSmnISnGxbmpqS"
+    "J1qWm3GmY2K1rhpgrQ5jgXco6HcULKGtDZrsiNVDa8/Ur6GYvm7MudYoEIta/aVK3hfhaHamZQkDGF7M5KS09LvlZuG2LCiCj2OF"
+    "QQulCubseDAjS7ZesKOA2I173vBANRrznUocxbmjJSjXBMWmR6dTCJaMlKNcExaZHp1MOjPztuWTZM/PWnElohhwTtHEBj2HUh1l"
+    "tb57q1JGJeXYcObsm2JGXmZR8q2ZkTKlznseIkWBrYdrJdQkOfjWwQrnLFgsdDbLkte5jnNfEiPF9DdfMNHOOI4V3ZiSlpp8F8xD"
+    "D3QH6khE1q11CKimwJC8TYrNRKM7huGenpcuRkpgxUK1KJRncNwy5LJY0uRGiS0W0I9iWVZM42DAs6ejXjZoFz4gLIpexhBADXOL"
+    "aB1SN1XbjQ4snblp2/Kgl8hNQxHaBhiSz4LA8bEt14Z2xW1OsazXyDbMdAaZZuuwsNAQ6+BGXWuGq5YclKQnTERjGgzJBjGlb8ho"
+    "aK12AovEnKcBEZzJGNm0immHiTmOAiM7hkY2bSKaaWNNslzHCwYjCHMdaM85rgagg6lIIOWutBabKs2PajTSWnxOS03lBsXUkXUM"
+    "U5+FpOxC3SXsOypSFLQpeWZDZJuc+A0Voxz6hxGHLqvt1kWa6QiWW+XaZWLfX8E1LTfOvnbHCTVCcyoChNMklPJpFKaGKME5lSJQ"
+    "mmFKeTSKU0MXfhrlzZDbal9TY9U0sIVcdL52pKaNK6C9+xbUdasq+O6GIRZMRoIaDWohPLK12NKrM1YNkzkGDBmJcOZLi9g0LmuY"
+    "KUo1zSCBQZq5pCzpOzJcSkhDEKE0ucGipwuNXGpJJJJqtjJmtnARmmC0u42s0LQZFCmC0HcREW4bR//VtSiIgAiIgAiIgAiIgDgm"
+    "pmDJS0WbmHXkKAx0R7sxrQSTugVYrYtKJbNrTlrRRR03GdFpjo0nWW6DaBSrkw3WiWlBcrIv2vmQHzhGNkHG1me4jdM9RFBgxpmN"
+    "DlpZhiRYrmshsbhLnONA0DPXK6VwqJBZIO5wspFJtFZKPgrfMh222WddI+zI7r1lowr1lcA1LDq5o0RUbos3X5Gca565mTteATEj"
+    "wG8RMA1ALjUPbmNaTQ7DCtGl5iNKx4U1KvvIsF7YkN4xhzSC07qFrIlMVkahuM0OlmokmLH3VTMxL2YyFLPMJ81MQZfUjdeY2I8B"
+    "xByjStDlLoW1ZcC56wZ+bs2JMMiuhsYXujRIhwvaC4Bz3UdQnCMKWTacnkgXLQ5iDE1BMAsL72hdAmYRDgaZYqKjNBXai2TblpyE"
+    "1Z9rTMsWxWNEJ8vCe1we1wcHG+e4UqBgG6rc0SazUpJQwpiqza4hCt2SyUsjTLkZFOkKjDypiHZkpY9qRbMZPwIwk4m1kw6YAp0y"
+    "YjqB1csYVxC0ZyHZkvZUzGftLk52Ta6JUh0WDFeCxxOXUVa7Ygr2Ytm3QWjZ87Z9pzEreTEB0KG6DDeCHOwXxvnuqKVwBYtS5fVj"
+    "Fs2ZgxxCiyboYiuvaiNChkOvCK4MLag5WFeCmS7iQUEWRkbhyWNK34a1Ml3EgoIsjI3DksvuB0rSsGSddJIywiTLYc22ZiRmiZjA"
+    "EsDS2lImAAuOAUXUtMWJL27OQbZmJmHBl5aXEC8ixxe4HAmsM68cGF2MraZmzHzFsSVpteGtlWRmOZTC7UoaAQcql6uF9hQ48/aE"
+    "xNlsSBPwYUF0KmEBgeCSdjfYMxZU5zlyKUy2kltkjTDKmBnDIpTipyWRphrUePOmTsKUtp026HHdMmMyHfaneyHhg3+or19aEF1N"
+    "FbPYMKShSV7IQ5iHDD3EtmTEv6mleOpLqaS883P2syXs50GchvnLMdEbCixYZLIkKILwB4Dgb6lMIOPPXsyAtJkDiKPgvjlxpqBr"
+    "msvcoUcXGq8mKFJVCop0rirqclhzcZYoUlUKizbpqclhzcd1ERdA6AREQB//1rUoiIAIiIAIi6dqT7bLkI089he2E2paDQnDmoEs"
+    "zgHaw0WnXd5IUjcpLulJZzZi1HtOo4IwiHXE+JmDMGM6a1C38ki6e2dsNhsg2bCiG91KXl8Yg4MDtR0boAnYrq2RkQ2xar9pdqWj"
+    "BhtiG/e6HfxojicZJeGCuxNVpW2M5SCljpZOYk4KNjgTmxDQ4sWetafdGiGJNzk1EJNAXPiPccQAx5gAxKZMjfI51Q3tuW2xrrQe"
+    "3aqDgcJdpx4ct5yyMWIZa2G5i4a565Zl9Z8HUkwRR81F1qKc44mjYNAWxIyYSBya5Zg3dVSFIIKRSOOJChxoboUVocx7S1zSKggi"
+    "hBGWCoOyQMjiauejRbVseG6NZjzfOa0Evl67dIxlmY7KxHNU7UXy5jXAtcKgjCDmLY0ZpaFAY1MWy2KoUzBW64+62euRtMTktWLL"
+    "xaNmpeuCIzNGY8ZR0DgKn+wroLLujkG2hZMYRYZ19uJ7HZbHDGCP1YFq10mRJc/bUR83ZrjZsw4m+1E0GE4nLLMo7lIWiTNyF1tw"
+    "kybSs60YDC00vobntLxlB7CwtI2BJWhJrYSlRiHQsmbrloirE741lRzcvkmWhPTMGzbYk4WpnuDRGl3kNOVUtc3BoFSMuhKiUUJD"
+    "lWzUzOBQIiLI8QREQAREQAREQB//2Q=="
+)
+
+
+def make_cover_png(report_type, name, date_str, site, note=None, dpi=200):
+    """Full-page A4 cover image matching the CLC report template."""
+    import base64
+    from matplotlib.patches import Polygon
+    from PIL import Image
+
+    fig = plt.figure(figsize=(8.27, 11.69), dpi=dpi)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.set_xlim(0, COVER_W)
+    ax.set_ylim(COVER_H, 0)
+    ax.axis("off")
+    pt = 8.27 * 72 / COVER_W
+    for colour, pts in COVER_SHAPES:
+        ax.add_patch(Polygon(pts, closed=True, facecolor=colour, edgecolor="none"))
+    logo = Image.open(BytesIO(base64.b64decode(CLC_LOGO_JPG_B64)))
+    lw = 125
+    lh = lw * logo.height / logo.width
+    ax.imshow(logo, extent=(437, 437 + lw, 20 + lh, 20), zorder=3)
+
+    renderer = fig.canvas.get_renderer()
+
+    def text(x, y, s_, size, max_w=None, **kw):
+        t = ax.text(x, y, s_, fontsize=size * pt, family=COVER_FONTS, color="white", **kw)
+        if max_w:                                   # shrink to fit (e.g. long school names)
+            for _ in range(25):
+                w = t.get_window_extent(renderer=renderer).width / fig.dpi / 8.27 * COVER_W
+                if w <= max_w:
+                    break
+                t.set_fontsize(t.get_fontsize() * 0.95)
+        return t
+
+    words = report_type.upper().split()
+    lines = [" ".join(words[:-1]), words[-1]] if len(words) > 1 else words
+    y = 497
+    for line in lines:
+        text(20, y, line, 45, max_w=395, fontweight="bold", va="top")
+        y += 50
+    text(18, y + 10, "LEARNING AND BEHAVIOUR UNIT", 22, max_w=285, va="top")
+    if note:
+        import textwrap
+        text(20, y + 42, "\n".join(textwrap.wrap(note, 62)[:3]), 10.5, max_w=405, va="top",
+             style="italic", linespacing=1.35)
+    for (label, value), ly in zip([("Student name:", name), ("Date:", date_str), ("Enrolled site:", site)],
+                                  [732, 761, 787]):
+        text(133, ly, label, 17, ha="right", va="center")
+        text(141, ly - 4, value or "", 11.5, max_w=420, ha="left", va="center")
+    buf = BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi, facecolor="white")
+    plt.close(fig)
+    return buf.getvalue()
+
 # ── Report types ─────────────────────────────────────────────────────────────
 # Review Report      — written about halfway through a normal placement
 # Transition Report  — the completed report at the end; built on the Review
@@ -1176,11 +1401,13 @@ def build_docx(rep):
         return RGBColor(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
 
     doc = Document()
-    sec = doc.sections[0]
-    sec.page_height, sec.page_width = Cm(29.7), Cm(21.0)
-    for side in ("left_margin", "right_margin"):
-        setattr(sec, side, Cm(1.8))
-    sec.top_margin, sec.bottom_margin = Cm(1.6), Cm(1.6)
+    from docx.enum.section import WD_SECTION
+    cover_sec = doc.sections[0]
+    cover_sec.page_height, cover_sec.page_width = Cm(29.7), Cm(21.0)
+    for side in ("left_margin", "right_margin", "top_margin", "bottom_margin"):
+        setattr(cover_sec, side, Cm(0))
+    cover_sec.header_distance = cover_sec.footer_distance = Cm(0)
+    sec = cover_sec
     base = doc.styles["Normal"]
     base.font.name = "Calibri"
     base.font.size = Pt(10.5)
@@ -1231,39 +1458,40 @@ def build_docx(rep):
                     cell.width = widths[j]
         return t
 
-    # ── cover page (every report type) ──
-    for _ in range(6):
-        doc.add_paragraph()
-    cp = doc.add_paragraph(); cp.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    ct = cp.add_run(rep["type"].upper()); ct.bold = True; ct.font.size = Pt(36); ct.font.color.rgb = hex_rgb(TEAL)
-    cp2 = doc.add_paragraph(); cp2.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    c2 = cp2.add_run("LEARNING AND BEHAVIOUR UNIT"); c2.bold = True; c2.font.size = Pt(14)
-    c2.font.color.rgb = RGBColor(0x55, 0x55, 0x55)
-    cp3 = doc.add_paragraph(); cp3.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    c3 = cp3.add_run("Cowandilla Learning Centre"); c3.font.size = Pt(12); c3.font.color.rgb = RGBColor(0x77, 0x77, 0x77)
-    for _ in range(3):
-        doc.add_paragraph()
-    fmt = lambda d: d.strftime("%d %B %Y").lstrip("0")
-    cover_rows = [("Student name", rep["name"] + (f" ({rep['program']})" if rep["program"] else "")),
-                  ("Date", fmt(rep["report_date"])),
-                  ("Enrolled site", rep["school"] or "—"),
-                  ("LC teacher", rep["teacher"] or "—"),
-                  ("Placement", f"{fmt(rep['pstart'])} to {fmt(rep['pend'])}")]
-    ctab = doc.add_table(rows=len(cover_rows), cols=2)
-    ctab.alignment = WD_TABLE_ALIGNMENT.CENTER
-    for i_, (k_, v_) in enumerate(cover_rows):
-        kr = ctab.cell(i_, 0).paragraphs[0]; kr.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        kk = kr.add_run(k_ + ":"); kk.bold = True; kk.font.size = Pt(13)
-        vv = ctab.cell(i_, 1).paragraphs[0].add_run(v_); vv.font.size = Pt(13)
-        ctab.cell(i_, 0).width, ctab.cell(i_, 1).width = Cm(5.5), Cm(9.5)
+    # ── cover page (every report type) — full-page artwork in its own section ──
+    note = None
     if rep["type"] == "Modified Report":
-        for _ in range(2):
-            doc.add_paragraph()
-        mp = doc.add_paragraph(); mp.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        mr = mp.add_run("This modified report includes: " +
-                        (", ".join(SECTION_LABEL[k] for k, _ in SECTIONS if k in rep["sections"]) or "cover page only"))
-        mr.italic = True; mr.font.size = Pt(10.5); mr.font.color.rgb = RGBColor(0x55, 0x55, 0x55)
-    doc.add_page_break()
+        note = "This modified report includes: " + (
+            ", ".join(SECTION_LABEL[k] for k, _ in SECTIONS if k in rep["sections"]) or "cover page only")
+    cover_png = make_cover_png(rep["type"], rep["name"], rep["report_date"].strftime("%d/%m/%Y"),
+                               rep["school"] or "", note=note)
+    cp = doc.paragraphs[0] if doc.paragraphs else doc.add_paragraph()
+    cp.paragraph_format.space_before = cp.paragraph_format.space_after = Pt(0)
+    cp.paragraph_format.line_spacing = 1.0
+    cp.add_run().add_picture(BytesIO(cover_png), width=Cm(21.0), height=Cm(29.55))
+
+    body = doc.add_section(WD_SECTION.NEW_PAGE)
+    body.page_height, body.page_width = Cm(29.7), Cm(21.0)
+    body.left_margin = body.right_margin = Cm(1.8)
+    body.top_margin = body.bottom_margin = Cm(1.6)
+    body.header_distance = body.footer_distance = Cm(1.0)
+    body.footer.is_linked_to_previous = False
+    body.header.is_linked_to_previous = False
+    sec = body
+
+    # details strip at the top of page 2 (the cover only carries name / date / site, as on the template)
+    fmt = lambda d: d.strftime("%d %B %Y").lstrip("0")
+    strip = doc.add_table(rows=1, cols=4)
+    strip.style = "Table Grid"
+    for j_, (k_, v_) in enumerate([("Student", rep["name"] + (f" ({rep['program']})" if rep["program"] else "")),
+                                   ("School", rep["school"] or "—"), ("LC teacher", rep["teacher"] or "—"),
+                                   ("Placement", f"{fmt(rep['pstart'])} – {fmt(rep['pend'])}")]):
+        c_ = strip.cell(0, j_)
+        shade(c_, "EEF2EC")
+        kr_ = c_.paragraphs[0].add_run(k_.upper()); kr_.bold = True; kr_.font.size = Pt(7.5)
+        kr_.font.color.rgb = RGBColor(0x55, 0x55, 0x55)
+        c_.add_paragraph().add_run(v_).font.size = Pt(9.5)
+
 
     if "literacy" in rep["sections"]:
         # ── literacy ──
