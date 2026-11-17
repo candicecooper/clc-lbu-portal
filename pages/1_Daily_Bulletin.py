@@ -269,8 +269,16 @@ def transition_students_by_program(student_absent_rows):
     for r in (student_absent_rows or []):
         if not isinstance(r, dict):
             continue
-        name = (r.get("Student") or "").strip()
-        reason = (r.get("Reason") or "")
+        # Belt-and-suspenders: every caller is now expected to have already
+        # passed these rows through _clean_row_list(), but this function's
+        # whole job is to produce names that get written straight onto the
+        # staff-room TV display, so it shouldn't trust that and crash the
+        # whole page if a future code path ever skips that step. NaN is
+        # truthy in Python, so `x or ""` alone does not catch it.
+        raw_name = r.get("Student")
+        name = "" if raw_name is None or raw_name != raw_name else str(raw_name).strip()
+        raw_reason = r.get("Reason")
+        reason = "" if raw_reason is None or raw_reason != raw_reason else str(raw_reason)
         if not name or "transition" not in reason.lower():
             continue
         key = _travel_key_for_program(r.get("Program", ""))
@@ -1375,7 +1383,7 @@ with page_tab:
                 if edit:
                     sa_df = pd.DataFrame(bulletin_data["staff_absent"])
                     sa_edited = st.data_editor(sa_df, key="sa_editor", hide_index=True, use_container_width=True, num_rows="dynamic")
-                    bulletin_data["staff_absent"] = sa_edited.to_dict("records")
+                    bulletin_data["staff_absent"] = _clean_row_list(sa_edited.to_dict("records"))
                 else:
                     _s_rows = [r for r in bulletin_data["staff_absent"] if (r.get("Staff Member") or "").strip() or (r.get("TRT") or "").strip()]
                     if _s_rows: st.markdown('<table class="data-table"><tr><th>Staff Member</th><th>TRT</th></tr>'+"".join([f"<tr><td><strong>{r.get('Staff Member','')}</strong></td><td>{r.get('TRT','')}</td></tr>" for r in _s_rows])+"</table>", unsafe_allow_html=True)
@@ -1383,7 +1391,7 @@ with page_tab:
 
             with card("excursions", "blue", "\U0001f68c", "Excursions"):
                 if edit:
-                    df = pd.DataFrame(bulletin_data["excursions"]); edited = st.data_editor(df, key="ex_editor", hide_index=True, use_container_width=True, num_rows="dynamic"); bulletin_data["excursions"] = edited.to_dict("records")
+                    df = pd.DataFrame(bulletin_data["excursions"]); edited = st.data_editor(df, key="ex_editor", hide_index=True, use_container_width=True, num_rows="dynamic"); bulletin_data["excursions"] = _clean_row_list(edited.to_dict("records"))
                 else:
                     rows = bulletin_data["excursions"]; has_data = any(any(v for v in r.values()) for r in rows)
                     if has_data: st.markdown('<table class="data-table"><tr><th>Program</th><th>Staff</th><th>Departing</th><th>Returning</th><th>Location</th></tr>'+"".join([f"<tr><td>{r.get('Program','')}</td><td>{r.get('Staff Member','')}</td><td>{r.get('Time Departing','')}</td><td>{r.get('Time Returning','')}</td><td>{r.get('Location','')}</td></tr>" for r in rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
@@ -1394,7 +1402,7 @@ with page_tab:
                 if edit:
                     st_df = pd.DataFrame(bulletin_data["student_absent"])
                     st_edited = st.data_editor(st_df, key="st_editor", hide_index=True, use_container_width=True, num_rows="dynamic")
-                    bulletin_data["student_absent"] = st_edited.to_dict("records")
+                    bulletin_data["student_absent"] = _clean_row_list(st_edited.to_dict("records"))
                 else:
                     _st_rows = [r for r in bulletin_data["student_absent"] if (r.get("Student") or "").strip()]
                     if _st_rows: st.markdown('<table class="data-table"><tr><th>Student</th><th>Program</th><th>Reason</th></tr>'+"".join([f"<tr><td><strong>{r.get('Student','')}</strong></td><td>{r.get('Program','')}</td><td>{r.get('Reason','')}</td></tr>" for r in _st_rows])+"</table>", unsafe_allow_html=True)
@@ -1402,7 +1410,7 @@ with page_tab:
 
             with card("entry_meetings", "brown", "\U0001f4e5", "Entry Meetings \u2013 Annette"):
                 if edit:
-                    df = pd.DataFrame(bulletin_data["entry_meetings"]); edited = st.data_editor(df, key="em_editor", hide_index=True, use_container_width=True, num_rows="dynamic"); bulletin_data["entry_meetings"] = edited.to_dict("records")
+                    df = pd.DataFrame(bulletin_data["entry_meetings"]); edited = st.data_editor(df, key="em_editor", hide_index=True, use_container_width=True, num_rows="dynamic"); bulletin_data["entry_meetings"] = _clean_row_list(edited.to_dict("records"))
                 else:
                     rows = bulletin_data["entry_meetings"]; has_data = any(any(v for v in r.values()) for r in rows)
                     if has_data: st.markdown('<table class="data-table"><tr><th>Time</th><th>Program</th><th>Student</th></tr>'+"".join([f"<tr><td>{r.get('Time','')}</td><td>{r.get('Program','')}</td><td>{r.get('Student','')}</td></tr>" for r in rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
@@ -1410,7 +1418,7 @@ with page_tab:
 
             with card("staff_meetings", "navy", "\U0001f91d", "Staff Meetings"):
                 if edit:
-                    df = pd.DataFrame(bulletin_data["staff_meetings"]); edited = st.data_editor(df, key="sm_editor", hide_index=True, use_container_width=True, num_rows="dynamic"); bulletin_data["staff_meetings"] = edited.to_dict("records")
+                    df = pd.DataFrame(bulletin_data["staff_meetings"]); edited = st.data_editor(df, key="sm_editor", hide_index=True, use_container_width=True, num_rows="dynamic"); bulletin_data["staff_meetings"] = _clean_row_list(edited.to_dict("records"))
                 else:
                     all_mtgs = list(bulletin_data["staff_meetings"] or []) + load_scheduled_meetings(current_date); has_data = any(any(v for v in r.values()) for r in all_mtgs)
                     if has_data: st.markdown('<table class="data-table"><tr><th>Type</th><th>Staff</th><th>Location</th><th>Depart</th><th>Return</th><th>Student</th></tr>'+"".join([f"<tr><td>{r.get('Type','')}</td><td>{r.get('Staff Member','')}</td><td>{r.get('Location','')}</td><td>{r.get('Time Departing','')}</td><td>{r.get('Time Returning','')}</td><td>{r.get('Student','')}</td></tr>" for r in all_mtgs if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
@@ -1419,7 +1427,7 @@ with page_tab:
         with col_c:
             with card("additional_messages", "slate", "\U0001f4ac", "Additional Staff Messages"):
                 if edit:
-                    df = pd.DataFrame(bulletin_data["additional_messages"]); edited = st.data_editor(df, key="msg_editor", hide_index=True, use_container_width=True, num_rows="dynamic"); bulletin_data["additional_messages"] = edited.to_dict("records")
+                    df = pd.DataFrame(bulletin_data["additional_messages"]); edited = st.data_editor(df, key="msg_editor", hide_index=True, use_container_width=True, num_rows="dynamic"); bulletin_data["additional_messages"] = _clean_row_list(edited.to_dict("records"))
                 else:
                     rows = bulletin_data["additional_messages"]; has_data = any(any(v for v in r.values()) for r in rows)
                     if has_data: st.markdown('<table class="data-table"><tr><th>Staff Member</th><th>Information</th></tr>'+"".join([f"<tr><td><strong>{r.get('Staff Member','')}</strong></td><td>{r.get('Information','')}</td></tr>" for r in rows if any(v for v in r.values())])+"</table>", unsafe_allow_html=True)
@@ -1440,7 +1448,7 @@ with page_tab:
                             "Program": st.column_config.SelectboxColumn("Program", options=["JP","PY","SY"], required=False,
                                 help="Which program they're visiting — Student Observations with a program appear on the CLC Calendar"),
                         })
-                    bulletin_data["visitors_on_site"] = vis_edited.to_dict("records")
+                    bulletin_data["visitors_on_site"] = _clean_row_list(vis_edited.to_dict("records"))
                     if _trade_vis_rows:
                         st.caption("🔧 Auto-added from Trade Bookings — edit or cancel these there, not here:")
                         st.markdown('<table class="data-table"><tr><th>Visitor</th><th>Reason</th><th>Program</th><th>Staff Responsible</th><th>Arriving</th><th>Departing</th><th>Location</th></tr>'+"".join([f"<tr><td><strong>{r.get('Visitor Name','')}</strong></td><td>{r.get('Reason','')}</td><td>{r.get('Program','')}</td><td>{r.get('Staff Responsible','')}</td><td>{r.get('Arriving','')}</td><td>{r.get('Departing','')}</td><td>{r.get('Location','')}</td></tr>" for r in _trade_vis_rows])+"</table>", unsafe_allow_html=True)
@@ -1470,7 +1478,7 @@ with page_tab:
                         df = pd.DataFrame(rows)
                         edited = st.data_editor(df, key=f"{key}_editor", hide_index=True, use_container_width=True, num_rows="dynamic",
                             column_config={"Transport": st.column_config.SelectboxColumn("Transport", options=TRANSPORT_OPTIONS, required=False)})
-                        bulletin_data[key] = edited.to_dict("records")
+                        bulletin_data[key] = _clean_row_list(edited.to_dict("records"))
                     else:
                         has_data = any(any(v for v in r.values()) for r in rows)
                         if has_data:
@@ -1497,7 +1505,7 @@ with page_tab:
                         "Change Type": st.column_config.SelectboxColumn("Change Type", options=CHANGE_TYPE_OPTIONS, required=False),
                         "How Departed": st.column_config.SelectboxColumn("How Departed", options=TRANSPORT_OPTIONS, required=False),
                     })
-                bulletin_data["travel_changes"] = tc_edited.to_dict("records")
+                bulletin_data["travel_changes"] = _clean_row_list(tc_edited.to_dict("records"))
                 st.markdown('<div style="background:#fff8f7;border:1px solid #f5c6c0;border-radius:8px;padding:.5rem .75rem;margin-top:.5rem;font-size:.75rem;color:#7a2a2a;">\U0001f4a1 <strong>Tip:</strong> Fill in whenever a student\u2019s travel plan changes \u2014 e.g. early departure, parent collecting instead of taxi. Appears highlighted on the staff room display so staff notice it immediately.</div>', unsafe_allow_html=True)
             else:
                 has_tc = any(any(v for v in r.values()) for r in tc_rows)
