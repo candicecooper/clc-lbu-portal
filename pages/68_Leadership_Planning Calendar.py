@@ -911,6 +911,10 @@ def _dp_load_into_state(d: date):
         return
     plan, err = load_day_plan(d)
     st.session_state["dp_load_error"] = err
+    if err:
+        # Don't mark this date as loaded, so it retries on the next interaction
+        st.session_state.pop("dp_loaded_date", None)
+        return
     plan = plan or {}
     st.session_state["dp_loaded_date"] = k
     st.session_state["dp_focus"] = plan.get("focus") or ""
@@ -977,10 +981,12 @@ def render_day_planner(events: list[dict]):
     if st.session_state.get("dp_load_error"):
         e = st.session_state["dp_load_error"]
         if "does not exist" in e or "PGRST205" in e or "schema cache" in e:
-            st.error(f"The `{DAY_TABLE}` table hasn't been created yet — run the updated "
-                     "`leadership_planning_schema.sql` in Supabase, then refresh.")
+            st.error(f"The `{DAY_TABLE}` table hasn't been found yet — run the Day Planner SQL "
+                     "in Supabase (same project as the calendar), then press Retry.")
         else:
             st.error(f"Could not load this day: {e}")
+        if st.button("🔄 Retry", key="dp_retry"):
+            _dp_rerun()
         return
 
     day_events = events_on(events, d)
