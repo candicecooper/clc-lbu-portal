@@ -2326,6 +2326,12 @@ with tab1:
         st.info(st.session_state.pop("tr_loaded_note"))
     if REPORT_TYPE == "Modified Report" and not S("sections"):
         st.info("Choose the sections to include in the sidebar — only the cover page is included so far.")
+    _left_out = [SECTION_LABEL[k] for k, _ in SECTIONS if not inc(k)]
+    if _left_out:
+        st.caption(f"**Not in this {REPORT_TYPE}:** " + ", ".join(_left_out) + (
+            " — tick them under *Sections to include* in the sidebar to add them."
+            if REPORT_TYPE == "Modified Report" else
+            " — switch the report type to Transition Report to include it."))
 
     if inc("literacy"):
         # ── LITERACY ─────────────────────────────────────────────────────────────
