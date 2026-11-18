@@ -38,7 +38,8 @@ except Exception:
     def archive_document(**_k):
         return None
 
-st.set_page_config(page_title="Transition Report Builder", layout="wide", page_icon="📄")
+st.set_page_config(page_title="Transition Report Builder", layout="wide", page_icon="📄",
+                   initial_sidebar_state="expanded")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -92,7 +93,8 @@ def _students_client():
                 break
             except Exception:
                 continue
-    st.session_state["_tr_students_client"] = client
+    if client is not None:                      # only remember a working connection — retry on the next run otherwise
+        st.session_state["_tr_students_client"] = client
     return client
 
 
@@ -108,7 +110,8 @@ def _smartar_client():
             client = create_client(url, key)
         except Exception:
             client = None
-    st.session_state["_tr_smartar_client"] = client
+    if client is not None:
+        st.session_state["_tr_smartar_client"] = client
     return client
 
 
@@ -1787,18 +1790,28 @@ EDITORS = ["sw", "biin0", "biin1", "biin2", "biin3"]
 # ══════════════════════════════════════════════════════════════════════════════
 # DATA — STUDENT REGISTER
 # ══════════════════════════════════════════════════════════════════════════════
-@st.cache_data(ttl=120, show_spinner=False)
+REGISTER_ERROR = ""
+
+
 def load_register():
     """Current students from the register (same list the WoT Builder reads).
     Students who've left (status 'archived') are hidden; a missing status is
     kept, so a data gap never hides an enrolled student. Returns None if the
-    register can't be reached."""
+    register can't be reached (the reason is left in REGISTER_ERROR). A good
+    result is kept for 2 minutes; a failure is retried on the next run."""
+    global REGISTER_ERROR
+    cached = st.session_state.get("_tr_register_cache")
+    if cached and (datetime.now() - cached[0]).total_seconds() < 120:
+        return cached[1]
     c = _students_client()
     if c is None:
+        REGISTER_ERROR = ("No database connection to the Student Register project — check the Render environment "
+                          "variables (SUPABASE_URL_STUDENTS / SUPABASE_KEY_STUDENTS) or that archive_utils.py is deployed.")
         return None
     try:
         rows = c.table("student_directory").select("*").execute().data or []
-    except Exception:
+    except Exception as e:
+        REGISTER_ERROR = f"Couldn't read the student_directory table: {e}"
         return None
     out = []
     for r in rows:
@@ -1808,7 +1821,9 @@ def load_register():
         if str(r.get("status") or "").strip().lower() == "archived":
             continue
         out.append({"id": r.get("id"), "initials": ini, "program": r.get("program") or ""})
-    return sorted(out, key=lambda r: (r["initials"].upper()))
+    out = sorted(out, key=lambda r: (r["initials"].upper()))
+    st.session_state["_tr_register_cache"] = (datetime.now(), out)
+    return out
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2182,11 +2197,22 @@ with st.sidebar:
     st.header("Report Configuration")
 
     if register is None:
-        st.error("Can't reach the Student Register right now — check your connection and reload.")
-        st.stop()
-    if not register:
+        st.error("Can't reach the Student Register right now.")
+    elif not register:
         st.info("No current students on the register.")
-        st.stop()
+
+if register is None:
+    st.error("**Can't reach the Student Register**, so the student list can't load.")
+    st.caption(f"Details: {REGISTER_ERROR}")
+    if st.button("🔄 Try again"):
+        st.rerun()
+    st.stop()
+if not register:
+    st.info("There are no current students on the Student Register yet. Add students in the Student Register, "
+            "then reload this page.")
+    st.stop()
+
+with st.sidebar:
 
     reg_by_id = {str(r["id"]): r for r in register}
     picked = st.selectbox(
@@ -2207,7 +2233,14 @@ with st.sidebar:
                 st.session_state["tr_records"] = _recs
     if not picked:
         st.warning("Choose a student to continue")
-        st.stop()
+
+if not picked:
+    st.info("👈 **Choose a student** (by register initials) in the **Report Configuration** panel on the left to "
+            "start or open their Review, Transition or Modified report.")
+    st.caption("Can't see the panel? Click the **›** arrow at the top-left of the page to open it.")
+    st.stop()
+
+with st.sidebar:
     student = reg_by_id[picked]
     INITIALS = student["initials"]
 
