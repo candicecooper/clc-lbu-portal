@@ -2949,9 +2949,25 @@ def build_docx(rep):
                 sr.font.color.rgb = RGBColor(0x7F, 0x60, 0x00)
                 shade(sc, "FFD966")
                 cc_ = ht.cell(i, 1)
-                cr = cc_.paragraphs[0].add_run(h["comment"].strip() or "—"); cr.font.size = Pt(9.5)
+                # key elements the teacher chose for this strategy, then how it supported the student
+                if h["elements"]:
+                    kh = cc_.paragraphs[0].add_run("Key elements used:"); kh.bold = True; kh.font.size = Pt(9)
+                    for el in h["elements"]:
+                        ep = cc_.add_paragraph()
+                        ep.paragraph_format.left_indent = Cm(0.3)
+                        ep.paragraph_format.space_after = Pt(0)
+                        er = ep.add_run("• " + el); er.font.size = Pt(9)
+                    hp = cc_.add_paragraph()
+                    hp.paragraph_format.space_before = Pt(4)
+                else:
+                    hp = cc_.paragraphs[0]
+                if h["comment"].strip():
+                    hh = hp.add_run("How it supported the student: "); hh.bold = True; hh.font.size = Pt(9)
+                cr = hp.add_run(h["comment"].strip() or ("—" if not h["elements"] else "")); cr.font.size = Pt(9.5)
+            ht.autofit = False
+            ht.columns[0].width, ht.columns[1].width = Cm(4.2), Cm(13.2)
             for row_ in ht.rows:
-                row_.cells[0].width, row_.cells[1].width = Cm(4.6), Cm(12.8)
+                row_.cells[0].width, row_.cells[1].width = Cm(4.2), Cm(13.2)
             keep_together(ht, with_next_rows=False)
         else:
             para("", empty="Not entered.")
