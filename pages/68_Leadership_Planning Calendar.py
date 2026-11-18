@@ -156,6 +156,8 @@ st.markdown("""
   .lp-chip b { font-weight:600; }
   .lp-chip .lp-meta { display:block;font-size:0.68rem;opacity:0.85; }
   .lp-cancel { text-decoration:line-through;opacity:0.7; }
+  .lp-dayplan { display:block;margin-top:3px;font-size:0.68rem;color:#0f5f5f;
+    background:#f0f7f7;border:1px dashed #1A7A7A;border-radius:5px;padding:2px 5px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -213,7 +215,7 @@ def save_event(data: dict, event_id: str | None = None) -> bool:
         st.error("Supabase credentials not found.")
         return False
     payload = dict(data)
-    payload["updated_at"] = datetime.utcnow().isoformat()
+    payload["updated_at"] = _utcnow_iso()
     try:
         if event_id:
             sb.table(TABLE).update(payload).eq("id", event_id).execute()
@@ -319,7 +321,8 @@ def events_on(events: list[dict], d: date) -> list[dict]:
     return sorted(hits, key=lambda r: (r.get("start_time") or "99", r.get("title") or ""))
 
 
-def render_term_grid(term: int, events: list[dict], include_pre_term: bool) -> set[date]:
+def render_term_grid(term: int, events: list[dict], include_pre_term: bool,
+                     plan_days: dict | None = None) -> set[date]:
     start, end = TERMS[term]
     weeks = term_weeks(term, include_pre_term)
     shown: set[date] = set()
@@ -345,6 +348,10 @@ def render_term_grid(term: int, events: list[dict], include_pre_term: bool) -> s
             if hol:
                 inner += f'<div class="lp-holname">🎌 {html.escape(hol)}</div>'
             inner += "".join(chip_html(r) for r in events_on(events, d))
+            if plan_days and d in plan_days:
+                tip = html.escape(plan_days[d] or "Day plan")
+                inner += (f'<span class="lp-dayplan" title="{tip}">🗒️ Day plan'
+                          + (f": {tip}" if plan_days[d] else "") + "</span>")
             cls = f' class="{" ".join(classes)}"' if classes else ""
             cells.append(f"<td{cls}>{inner}</td>")
         rows.append("<tr>" + "".join(cells) + "</tr>")
@@ -453,121 +460,691 @@ def build_csv(events: list[dict]) -> bytes:
 
 # ══════════════════════════════════════════════════════════════════════════════
 # FORM (used for both new entries and edits)
+#
+# Why it's built this way (so details are never lost):
+#  • Each form runs as a Streamlit *fragment*: typing/choosing in it only
+#    refreshes that form, never the whole page or calendar.
+#  • Values live in session_state under stable keys, so filters, tab changes
+#    or other reruns never wipe what's been typed.
+#  • Every field change auto-saves a draft to Supabase
+#    (leadership_planning_drafts). If the session drops (laptop sleeps,
+#    Render reconnects, password re-prompt), the draft is restored.
+#  • A failed save or missing title keeps everything on screen.
+#  • The draft is only cleared after a successful save, or on "Discard".
 # ══════════════════════════════════════════════════════════════════════════════
-def render_event_form(prefix: str, existing: dict | None = None):
+DRAFT_TABLE = "leadership_planning_drafts"
+FIELDS = ["title", "etype", "status", "sdate", "edate", "stime", "etime", "lmode",
+          "loc", "aud", "lead", "summary", "next", "owner", "by"]
+
+try:
+    from zoneinfo import ZoneInfo
+    _ADL = ZoneInfo("Australia/Adelaide")
+except Exception:
+    _ADL = None
+
+_fragment = getattr(st, "fragment", None) or getattr(st, "experimental_fragment", None)
+if _fragment is None:
+    def _fragment(func):  # older Streamlit: run as normal
+        return func
+
+
+def _utcnow_iso() -> str:
+    from datetime import timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _now_hm() -> str:
+    return (datetime.now(_ADL) if _ADL else datetime.now()).strftime("%I:%M %p").lstrip("0")
+
+
+def _fmt_ts(value) -> str:
+    try:
+        ts = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return (ts.astimezone(_ADL) if _ADL else ts).strftime("%a %d %b, %I:%M %p")
+    except Exception:
+        return ""
+
+
+def load_drafts() -> dict:
+    """All saved drafts keyed by draft_key. Missing table → feature quietly off."""
+    if st.session_state.get("lp_drafts_unavailable"):
+        return {}
+    sb = get_supabase()
+    if sb is None:
+        return {}
+    try:
+        res = sb.table(DRAFT_TABLE).select("*").execute()
+        return {r["draft_key"]: r for r in (res.data or [])}
+    except Exception:
+        st.session_state["lp_drafts_unavailable"] = True
+        return {}
+
+
+def _collect(prefix: str) -> dict:
+    out = {}
+    for f in FIELDS:
+        v = st.session_state.get(f"{prefix}_{f}")
+        if isinstance(v, date):
+            v = v.isoformat()
+        out[f] = v
+    return out
+
+
+def _autosave(prefix: str, draft_key: str):
+    if st.session_state.get("lp_drafts_unavailable"):
+        return
+    sb = get_supabase()
+    if sb is None:
+        return
+    try:
+        sb.table(DRAFT_TABLE).upsert({
+            "draft_key": draft_key,
+            "data": _collect(prefix),
+            "saved_by": (st.session_state.get(f"{prefix}_by")
+                         or st.session_state.get("lp_entered_by") or None),
+            "updated_at": _utcnow_iso(),
+        }).execute()
+        st.session_state[f"{prefix}_saved_at"] = _now_hm()
+    except Exception:
+        st.session_state["lp_drafts_unavailable"] = True
+
+
+def _delete_draft(draft_key: str):
+    sb = get_supabase()
+    if sb is None or st.session_state.get("lp_drafts_unavailable"):
+        return
+    try:
+        sb.table(DRAFT_TABLE).delete().eq("draft_key", draft_key).execute()
+    except Exception:
+        pass
+
+
+def _defaults(ex: dict) -> dict:
+    s = ex.get("start_date") or st.session_state.get("lp_prefill_date") or TERMS[1][0]
+    return {
+        "title": ex.get("title") or "",
+        "etype": ex.get("event_type") if ex.get("event_type") in EVENT_TYPES else EVENT_TYPES[0],
+        "status": ex.get("status") if ex.get("status") in STATUSES else STATUSES[0],
+        "sdate": s,
+        "edate": ex.get("end_date") or s,
+        "stime": ex.get("start_time") if ex.get("start_time") in TIME_SLOTS else NO_TIME,
+        "etime": ex.get("end_time") if ex.get("end_time") in TIME_SLOTS else NO_TIME,
+        "lmode": ex.get("location_mode") if ex.get("location_mode") in LOCATION_MODES else LOCATION_MODES[0],
+        "loc": ex.get("location") or "",
+        "aud": [a.strip() for a in (ex.get("audience") or "").split(",") if a.strip() in AUDIENCES],
+        "lead": ex.get("lead") or "",
+        "summary": ex.get("summary") or "",
+        "next": ex.get("next_action") or "",
+        "owner": ex.get("action_owner") or "",
+        "by": ex.get("created_by") or st.session_state.get("lp_entered_by", ""),
+    }
+
+
+def _clean_draft_values(data: dict, base: dict) -> dict:
+    vals = dict(base)
+    for k, v in (data or {}).items():
+        if k not in vals or v is None:
+            continue
+        if k in ("sdate", "edate"):
+            v = _to_date(v) or vals[k]
+        elif k == "etype" and v not in EVENT_TYPES:
+            continue
+        elif k == "status" and v not in STATUSES:
+            continue
+        elif k in ("stime", "etime") and v not in TIME_SLOTS:
+            continue
+        elif k == "lmode" and v not in LOCATION_MODES:
+            continue
+        elif k == "aud":
+            v = [a for a in (v or []) if a in AUDIENCES]
+        vals[k] = v
+    return vals
+
+
+def _init_form(prefix: str, ex: dict, draft: dict | None):
+    # A pending reset (after a successful save / discard) clears keys
+    # before any widget is created on this run.
+    if st.session_state.pop(f"{prefix}_reset", False):
+        for f in FIELDS:
+            st.session_state.pop(f"{prefix}_{f}", None)
+        for extra in ("init", "restored", "saved_at"):
+            st.session_state.pop(f"{prefix}_{extra}", None)
+        draft = None
+    if st.session_state.get(f"{prefix}_init"):
+        return
+    vals = _defaults(ex)
+    if draft and draft.get("data"):
+        vals = _clean_draft_values(draft["data"], vals)
+        who = f" by {draft['saved_by']}" if draft.get("saved_by") else ""
+        st.session_state[f"{prefix}_restored"] = f"{_fmt_ts(draft.get('updated_at'))}{who}".strip()
+    for k, v in vals.items():
+        st.session_state[f"{prefix}_{k}"] = v
+    st.session_state[f"{prefix}_init"] = True
+
+
+@_fragment
+def render_event_form(prefix: str, existing: dict | None = None, draft: dict | None = None):
     ex = existing or {}
-    default_start = ex.get("start_date") or TERMS[1][0]
-    default_end = ex.get("end_date") or default_start
+    is_edit = existing is not None
+    draft_key = f"edit:{ex['id']}" if is_edit else "new"
+    _init_form(prefix, ex, draft)
 
-    with st.form(f"{prefix}_form", clear_on_submit=existing is None):
-        title = st.text_input("Title *", value=ex.get("title", ""),
-                              placeholder="e.g. Term 1 leadership planning day",
-                              key=f"{prefix}_title")
-        c1, c2 = st.columns(2)
-        with c1:
-            etype = st.selectbox(
-                "Type", EVENT_TYPES,
-                index=EVENT_TYPES.index(ex["event_type"]) if ex.get("event_type") in EVENT_TYPES else 0,
-                key=f"{prefix}_type",
-            )
-        with c2:
-            status = st.selectbox(
-                "Status", STATUSES,
-                index=STATUSES.index(ex["status"]) if ex.get("status") in STATUSES else 0,
-                key=f"{prefix}_status",
-            )
+    def autosave():
+        _autosave(prefix, draft_key)
 
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            sdate = st.date_input("Start date *", value=default_start, format="DD/MM/YYYY",
-                                  key=f"{prefix}_sdate")
-        with c2:
-            edate = st.date_input("End date (multi-day)", value=default_end, format="DD/MM/YYYY",
-                                  key=f"{prefix}_edate",
-                                  help="Leave the same as the start date for a one-day item.")
-        with c3:
-            stime_val = ex.get("start_time") or NO_TIME
-            stime = st.selectbox("Start time", TIME_SLOTS,
-                                 index=TIME_SLOTS.index(stime_val) if stime_val in TIME_SLOTS else 0,
-                                 key=f"{prefix}_stime")
-        with c4:
-            etime_val = ex.get("end_time") or NO_TIME
-            etime = st.selectbox("End time", TIME_SLOTS,
-                                 index=TIME_SLOTS.index(etime_val) if etime_val in TIME_SLOTS else 0,
-                                 key=f"{prefix}_etime")
+    restored = st.session_state.get(f"{prefix}_restored")
+    if restored:
+        st.info(f"↩️ Restored unsaved {'changes' if is_edit else 'draft'} from {restored}. "
+                "Check the details, then save.")
 
-        c1, c2 = st.columns([1, 2])
-        with c1:
-            lmode = st.selectbox(
-                "Where", LOCATION_MODES,
-                index=LOCATION_MODES.index(ex["location_mode"]) if ex.get("location_mode") in LOCATION_MODES else 0,
-                key=f"{prefix}_lmode",
-            )
-        with c2:
-            location = st.text_input("Venue / room / link details", value=ex.get("location", "") or "",
-                                     placeholder="e.g. Staff room, LBU head office, Teams link to follow",
-                                     key=f"{prefix}_loc")
+    st.text_input("Title *", key=f"{prefix}_title", on_change=autosave,
+                  placeholder="e.g. Term 1 leadership planning day")
+    c1, c2 = st.columns(2)
+    c1.selectbox("Type", EVENT_TYPES, key=f"{prefix}_etype", on_change=autosave)
+    c2.selectbox("Status", STATUSES, key=f"{prefix}_status", on_change=autosave)
 
-        existing_aud = [a.strip() for a in (ex.get("audience") or "").split(",") if a.strip() in AUDIENCES]
-        c1, c2 = st.columns([2, 1])
-        with c1:
-            audience = st.multiselect("Who's involved", AUDIENCES, default=existing_aud,
-                                      key=f"{prefix}_aud")
-        with c2:
-            lead = st.text_input("Lead / facilitator", value=ex.get("lead", "") or "",
-                                 key=f"{prefix}_lead")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.date_input("Start date *", key=f"{prefix}_sdate", format="DD/MM/YYYY", on_change=autosave)
+    c2.date_input("End date (multi-day)", key=f"{prefix}_edate", format="DD/MM/YYYY",
+                  on_change=autosave, help="Leave the same as the start date for a one-day item.")
+    c3.selectbox("Start time", TIME_SLOTS, key=f"{prefix}_stime", on_change=autosave)
+    c4.selectbox("End time", TIME_SLOTS, key=f"{prefix}_etime", on_change=autosave)
 
-        summary = st.text_area("Summary details", value=ex.get("summary", "") or "", height=100,
-                               placeholder="Purpose, focus, key details, bookings or costs to note…",
-                               key=f"{prefix}_summary")
-        c1, c2 = st.columns([2, 1])
-        with c1:
-            next_action = st.text_input("Next action to progress this", value=ex.get("next_action", "") or "",
-                                        placeholder="e.g. Confirm venue with presenter",
-                                        key=f"{prefix}_next")
-        with c2:
-            action_owner = st.text_input("Action owner", value=ex.get("action_owner", "") or "",
-                                         key=f"{prefix}_owner")
+    c1, c2 = st.columns([1, 2])
+    c1.selectbox("Where", LOCATION_MODES, key=f"{prefix}_lmode", on_change=autosave)
+    c2.text_input("Venue / room / link details", key=f"{prefix}_loc", on_change=autosave,
+                  placeholder="e.g. Staff room, LBU head office, Teams link to follow")
 
-        created_by = ex.get("created_by") or ""
-        if existing is None:
-            created_by = st.text_input("Entered by", value=st.session_state.get("lp_entered_by", ""),
-                                       key=f"{prefix}_by")
+    c1, c2 = st.columns([2, 1])
+    c1.multiselect("Who's involved", AUDIENCES, key=f"{prefix}_aud", on_change=autosave)
+    c2.text_input("Lead / facilitator", key=f"{prefix}_lead", on_change=autosave)
 
-        submitted = st.form_submit_button("💾 Save changes" if existing else "➕ Add to calendar",
-                                          type="primary")
+    st.text_area("Summary details", key=f"{prefix}_summary", height=110, on_change=autosave,
+                 placeholder="Purpose, focus, key details, bookings or costs to note…")
+    c1, c2 = st.columns([2, 1])
+    c1.text_input("Next action to progress this", key=f"{prefix}_next", on_change=autosave,
+                  placeholder="e.g. Confirm venue with presenter")
+    c2.text_input("Action owner", key=f"{prefix}_owner", on_change=autosave)
 
-    if submitted:
-        if not title.strip():
-            st.warning("Please give the item a title.")
-            return False
-        if edate < sdate:
+    if not is_edit:
+        st.text_input("Entered by", key=f"{prefix}_by", on_change=autosave)
+
+    b1, b2, b3 = st.columns([1.3, 1, 2.2])
+    save_clicked = b1.button("💾 Save changes" if is_edit else "➕ Add to calendar",
+                             type="primary", key=f"{prefix}_save", use_container_width=True)
+    discard_clicked = b2.button("↺ Discard changes" if is_edit else "🧹 Clear form",
+                                key=f"{prefix}_discard", use_container_width=True)
+    if st.session_state.get("lp_drafts_unavailable"):
+        b3.caption("⚠️ Draft auto-save is off — run the updated schema SQL to turn it on.")
+    elif st.session_state.get(f"{prefix}_saved_at"):
+        b3.caption(f"✓ Draft auto-saved {st.session_state[f'{prefix}_saved_at']}")
+    else:
+        b3.caption("Drafts auto-save as you move between fields.")
+
+    if discard_clicked:
+        _delete_draft(draft_key)
+        st.session_state[f"{prefix}_reset"] = True
+        st.rerun()
+
+    if save_clicked:
+        v = _collect(prefix)
+        sdate, edate = _to_date(v["sdate"]), _to_date(v["edate"])
+        if not (v["title"] or "").strip():
+            st.warning("Please give the item a title — everything else you've typed is still here.")
+            return
+        if sdate and edate and edate < sdate:
             st.warning("End date can't be before the start date.")
-            return False
-        if existing is None and created_by:
-            st.session_state["lp_entered_by"] = created_by
+            return
+        if v.get("by"):
+            st.session_state["lp_entered_by"] = v["by"].strip()
         data = {
-            "title": title.strip(),
-            "event_type": etype,
-            "status": status,
+            "title": v["title"].strip(),
+            "event_type": v["etype"],
+            "status": v["status"],
             "start_date": sdate.isoformat(),
-            "end_date": edate.isoformat(),
-            "start_time": None if stime == NO_TIME else stime,
-            "end_time": None if etime == NO_TIME else etime,
-            "location_mode": lmode,
-            "location": location.strip() or None,
-            "audience": ", ".join(audience) or None,
-            "lead": lead.strip() or None,
-            "summary": summary.strip() or None,
-            "next_action": next_action.strip() or None,
-            "action_owner": action_owner.strip() or None,
-            "created_by": (created_by or "").strip() or None,
+            "end_date": (edate or sdate).isoformat(),
+            "start_time": None if v["stime"] == NO_TIME else v["stime"],
+            "end_time": None if v["etime"] == NO_TIME else v["etime"],
+            "location_mode": v["lmode"],
+            "location": (v["loc"] or "").strip() or None,
+            "audience": ", ".join(v["aud"] or []) or None,
+            "lead": (v["lead"] or "").strip() or None,
+            "summary": (v["summary"] or "").strip() or None,
+            "next_action": (v["next"] or "").strip() or None,
+            "action_owner": (v["owner"] or "").strip() or None,
         }
-        ok = save_event(data, ex.get("id"))
-        if ok:
-            st.success("Saved." if existing else f"Added “{title.strip()}”.")
-            return True
-    return False
+        if not is_edit:
+            data["created_by"] = (v.get("by") or "").strip() or None
+        if save_event(data, ex.get("id")):  # on failure the error shows and fields stay
+            _delete_draft(draft_key)
+            st.session_state[f"{prefix}_reset"] = True
+            st.session_state["lp_flash"] = ("Changes saved." if is_edit
+                                            else f"Added “{data['title']}” to the calendar.")
+            st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DAY PLANNER (sandbox) — pick any date, build up the day freely
+#
+#  • Everything for a date lives in one row of leadership_day_plans.
+#  • Runs as a fragment and auto-saves to Supabase whenever anything changes
+#    (on leaving a text box, or after each table edit) — no Save button to forget.
+#  • Calendar items already booked on that date are shown alongside.
+# ══════════════════════════════════════════════════════════════════════════════
+DAY_TABLE = "leadership_day_plans"
+TT_COLS = ["start", "end", "activity", "who", "where", "notes"]
+LINK_COLS = ["label", "url", "note"]
+TASK_COLS = ["done", "task", "owner"]
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def load_day_plan_index() -> dict:
+    """{date: focus} for every saved day plan — used to flag days on the grid."""
+    sb = get_supabase()
+    if sb is None:
+        return {}
+    try:
+        res = sb.table(DAY_TABLE).select("plan_date,focus").execute()
+    except Exception:
+        return {}
+    out = {}
+    for r in res.data or []:
+        d = _to_date(r.get("plan_date"))
+        if d:
+            out[d] = r.get("focus") or ""
+    return out
+
+
+def load_day_plan(d: date) -> tuple[dict | None, str | None]:
+    sb = get_supabase()
+    if sb is None:
+        return None, "no_credentials"
+    try:
+        res = sb.table(DAY_TABLE).select("*").eq("plan_date", d.isoformat()).execute()
+    except Exception as e:
+        return None, str(e)
+    rows = res.data or []
+    return (rows[0] if rows else None), None
+
+
+def save_day_plan(d: date, payload: dict) -> str | None:
+    sb = get_supabase()
+    if sb is None:
+        return "Supabase credentials not found."
+    row = dict(payload)
+    row["plan_date"] = d.isoformat()
+    row["updated_at"] = _utcnow_iso()
+    try:
+        sb.table(DAY_TABLE).upsert(row).execute()
+    except Exception as e:
+        return str(e)
+    load_day_plan_index.clear()
+    return None
+
+
+def delete_day_plan(d: date) -> str | None:
+    sb = get_supabase()
+    if sb is None:
+        return "Supabase credentials not found."
+    try:
+        sb.table(DAY_TABLE).delete().eq("plan_date", d.isoformat()).execute()
+    except Exception as e:
+        return str(e)
+    load_day_plan_index.clear()
+    return None
+
+
+def _rows(df_or_list, cols: list[str]) -> list[dict]:
+    """Clean editor output → list of dicts, dropping fully blank rows."""
+    try:
+        records = df_or_list.to_dict("records")
+    except AttributeError:
+        records = list(df_or_list or [])
+    out = []
+    for r in records:
+        row = {}
+        for c in cols:
+            v = r.get(c)
+            if c == "done":
+                v = bool(v) if v == v and v is not None else False  # NaN-safe
+            else:
+                v = "" if v is None or v != v else str(v).strip()
+                if c in ("start", "end") and v == NO_TIME:
+                    v = ""
+            row[c] = v
+        if any(row[c] for c in cols if c != "done"):
+            out.append(row)
+    return out
+
+
+def _df(rows: list[dict], cols: list[str]):
+    import pandas as pd
+    clean = []
+    for r in rows or []:
+        clean.append({c: (bool(r.get(c)) if c == "done" else (r.get(c) or "")) for c in cols})
+    if not clean:
+        return pd.DataFrame({c: pd.Series(dtype="bool" if c == "done" else "object") for c in cols})
+    return pd.DataFrame(clean, columns=cols)
+
+
+def _sort_tt(rows: list[dict]) -> list[dict]:
+    return sorted(rows, key=lambda r: (r.get("start") or "99:99", r.get("end") or ""))
+
+
+def _template_rows() -> list[dict]:
+    return [{"start": f"{h:02d}:00", "end": f"{h + 1:02d}:00", "activity": "",
+             "who": "", "where": "", "notes": ""} for h in range(8, 16)]
+
+
+def build_day_docx(d: date, plan: dict, day_events: list[dict]) -> bytes | None:
+    try:
+        from docx import Document
+        from docx.shared import Pt, Cm, RGBColor
+    except Exception:
+        return None
+    doc = Document()
+    sec = doc.sections[0]
+    for side in ("left_margin", "right_margin", "top_margin", "bottom_margin"):
+        setattr(sec, side, Cm(1.8))
+    doc.styles["Normal"].font.name = "Calibri"
+    doc.styles["Normal"].font.size = Pt(10.5)
+
+    h = doc.add_heading(f"Day Plan — {d.strftime('%A %d %B %Y')}", level=1)
+    h.runs[0].font.color.rgb = RGBColor(0x1A, 0x7A, 0x7A)
+    doc.add_paragraph(f"{term_and_week_for(d)}   ·   CONFIDENTIAL — leadership only")
+    if plan.get("focus"):
+        p = doc.add_paragraph()
+        p.add_run("Focus: ").bold = True
+        p.add_run(plan["focus"])
+    if plan.get("location"):
+        p = doc.add_paragraph()
+        p.add_run("Where: ").bold = True
+        p.add_run(plan["location"])
+
+    if day_events:
+        doc.add_heading("Calendar items", level=2)
+        for r in day_events:
+            doc.add_paragraph(f"{fmt_time(r) or 'All day'} — {r.get('title')} "
+                              f"({r.get('status')}, {fmt_location(r)})", style="List Bullet")
+
+    tt = _sort_tt(plan.get("timetable") or [])
+    if tt:
+        doc.add_heading("Timetable", level=2)
+        t = doc.add_table(rows=1, cols=5)
+        t.style = "Light Grid Accent 1"
+        for i, c in enumerate(["Time", "Activity", "Who", "Where", "Notes"]):
+            t.rows[0].cells[i].text = c
+        for r in tt:
+            cells = t.add_row().cells
+            time_txt = "–".join(x for x in (r.get("start"), r.get("end")) if x)
+            for i, v in enumerate([time_txt, r.get("activity"), r.get("who"), r.get("where"), r.get("notes")]):
+                cells[i].text = v or ""
+
+    if plan.get("notes"):
+        doc.add_heading("Notes", level=2)
+        for line in plan["notes"].splitlines():
+            doc.add_paragraph(line)
+
+    tasks = plan.get("tasks") or []
+    if tasks:
+        doc.add_heading("To do", level=2)
+        for r in tasks:
+            owner = f" ({r['owner']})" if r.get("owner") else ""
+            doc.add_paragraph(f"{'☑' if r.get('done') else '☐'} {r.get('task')}{owner}")
+
+    links = plan.get("links") or []
+    if links:
+        doc.add_heading("Links", level=2)
+        for r in links:
+            note = f" — {r['note']}" if r.get("note") else ""
+            doc.add_paragraph(f"{r.get('label') or r.get('url')}: {r.get('url')}{note}", style="List Bullet")
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
+def _dp_load_into_state(d: date):
+    """Load a date's plan into session_state once (re-load only when asked)."""
+    k = d.isoformat()
+    if st.session_state.get("dp_loaded_date") == k:
+        return
+    plan, err = load_day_plan(d)
+    st.session_state["dp_load_error"] = err
+    plan = plan or {}
+    st.session_state["dp_loaded_date"] = k
+    st.session_state["dp_focus"] = plan.get("focus") or ""
+    st.session_state["dp_location"] = plan.get("location") or ""
+    st.session_state["dp_notes"] = plan.get("notes") or ""
+    st.session_state["dp_tt_base"] = _sort_tt(plan.get("timetable") or [])
+    st.session_state["dp_links_base"] = plan.get("links") or []
+    st.session_state["dp_tasks_base"] = plan.get("tasks") or []
+    st.session_state["dp_ver"] = st.session_state.get("dp_ver", 0) + 1  # fresh editor keys
+    st.session_state["dp_last_saved"] = _dp_payload_from(plan) if plan else None
+    st.session_state["dp_saved_note"] = (
+        f"Last saved {_fmt_ts(plan.get('updated_at'))}"
+        + (f" by {plan['updated_by']}" if plan.get("updated_by") else "")
+    ) if plan else ""
+
+
+def _dp_payload_from(plan: dict) -> dict:
+    return {
+        "focus": (plan.get("focus") or "").strip(),
+        "location": (plan.get("location") or "").strip(),
+        "notes": plan.get("notes") or "",
+        "timetable": _rows(plan.get("timetable") or [], TT_COLS),
+        "links": _rows(plan.get("links") or [], LINK_COLS),
+        "tasks": _rows(plan.get("tasks") or [], TASK_COLS),
+    }
+
+
+def _dp_reset_editors(tt=None, links=None, tasks=None):
+    if tt is not None:
+        st.session_state["dp_tt_base"] = tt
+    if links is not None:
+        st.session_state["dp_links_base"] = links
+    if tasks is not None:
+        st.session_state["dp_tasks_base"] = tasks
+    st.session_state["dp_ver"] = st.session_state.get("dp_ver", 0) + 1
+
+
+def _dp_rerun():
+    try:
+        st.rerun(scope="fragment")
+    except Exception:
+        st.rerun()
+
+
+@_fragment
+def render_day_planner(events: list[dict]):
+    c1, c2, c3 = st.columns([1.2, 1.6, 1.2])
+    with c1:
+        d = st.date_input("Pick a date", key="dp_date", format="DD/MM/YYYY")
+    plan_index = load_day_plan_index()
+    with c2:
+        upcoming = sorted(x for x in plan_index if x >= date.today())
+        if upcoming:
+            st.markdown("**Days with a plan**")
+            st.caption(" · ".join(x.strftime("%a %d %b") for x in upcoming[:8])
+                       + (" …" if len(upcoming) > 8 else ""))
+    with c3:
+        st.markdown(f"**{d.strftime('%A %d %B %Y')}**")
+        hol = PUBLIC_HOLIDAYS.get(d)
+        st.caption(term_and_week_for(d) + (f" · 🎌 {hol}" if hol else "")
+                   + (" · weekend" if d.weekday() >= 5 else ""))
+
+    _dp_load_into_state(d)
+    if st.session_state.get("dp_load_error"):
+        e = st.session_state["dp_load_error"]
+        if "does not exist" in e or "PGRST205" in e or "schema cache" in e:
+            st.error(f"The `{DAY_TABLE}` table hasn't been created yet — run the updated "
+                     "`leadership_planning_schema.sql` in Supabase, then refresh.")
+        else:
+            st.error(f"Could not load this day: {e}")
+        return
+
+    day_events = events_on(events, d)
+    if day_events:
+        st.markdown("**Already on the calendar this day**")
+        st.markdown("".join(chip_html(r) for r in day_events), unsafe_allow_html=True)
+    if st.button("➕ Add a calendar item on this date", key="dp_add_item"):
+        st.session_state["lp_prefill_date"] = d
+        st.session_state["lp_new_reset"] = True
+        st.session_state["lp_flash"] = (f"The ➕ Add item form is set to {d.strftime('%a %d %b')} "
+                                        "— open that tab to fill it in.")
+        st.rerun()
+
+    st.divider()
+    c1, c2 = st.columns([2, 1])
+    c1.text_input("Focus / title for the day", key="dp_focus",
+                  placeholder="e.g. Pupil-free day — Reflection Loops + Term 1 planning")
+    c2.text_input("Where", key="dp_location", placeholder="e.g. CLC staff room / Teams")
+
+    ver = st.session_state.get("dp_ver", 0)
+
+    # ── Timetable ──
+    st.markdown("#### 🕘 Timetable")
+    t1, t2, t3 = st.columns([1.3, 1.3, 3])
+    if t1.button("Add hourly slots 8–4", key="dp_tpl",
+                 help="Adds blank hour slots you can fill in, rename or delete."):
+        current = _rows(st.session_state.get(f"dp_tt_out_{ver}", st.session_state["dp_tt_base"]), TT_COLS)
+        have = {r["start"] for r in current}
+        _dp_reset_editors(tt=_sort_tt(current + [r for r in _template_rows() if r["start"] not in have]))
+        _dp_rerun()
+    if t2.button("Sort by time", key="dp_sort"):
+        current = _rows(st.session_state.get(f"dp_tt_out_{ver}", st.session_state["dp_tt_base"]), TT_COLS)
+        _dp_reset_editors(tt=_sort_tt(current))
+        _dp_rerun()
+    t3.caption("Click a cell to type. Use the + row at the bottom to add; tick a row's box and press 🗑 to remove.")
+
+    tt_df = st.data_editor(
+        _df(st.session_state["dp_tt_base"], TT_COLS),
+        key=f"dp_tt_{ver}", num_rows="dynamic", use_container_width=True, hide_index=True,
+        column_config={
+            "start": st.column_config.SelectboxColumn("Start", options=TIME_SLOTS[1:], width="small"),
+            "end": st.column_config.SelectboxColumn("End", options=TIME_SLOTS[1:], width="small"),
+            "activity": st.column_config.TextColumn("Activity", width="large"),
+            "who": st.column_config.TextColumn("Who"),
+            "where": st.column_config.TextColumn("Where"),
+            "notes": st.column_config.TextColumn("Notes", width="medium"),
+        },
+    )
+    st.session_state[f"dp_tt_out_{ver}"] = tt_df
+
+    # ── Notes ──
+    st.markdown("#### 📝 Notes & information")
+    n1, n2 = st.tabs(["✏️ Write", "👁 Preview"])
+    with n1:
+        st.text_area("Notes", key="dp_notes", height=220, label_visibility="collapsed",
+                     placeholder="Anything for the day — agenda, reminders, who's covering, room set-up…\n"
+                                 "Tip: start lines with - for bullets, **bold** for emphasis, "
+                                 "and paste links straight in.")
+    with n2:
+        if st.session_state.get("dp_notes"):
+            st.markdown(st.session_state["dp_notes"])
+        else:
+            st.caption("Nothing written yet.")
+
+    c1, c2 = st.columns(2)
+    # ── Links ──
+    with c1:
+        st.markdown("#### 🔗 Links & documents")
+        links_df = st.data_editor(
+            _df(st.session_state["dp_links_base"], LINK_COLS),
+            key=f"dp_links_{ver}", num_rows="dynamic", use_container_width=True, hide_index=True,
+            column_config={
+                "label": st.column_config.TextColumn("Name"),
+                "url": st.column_config.LinkColumn("Link (paste URL)", width="medium",
+                                                   validate=r"^https?://.+"),
+                "note": st.column_config.TextColumn("Note"),
+            },
+        )
+        clickable = [r for r in _rows(links_df, LINK_COLS) if r["url"].startswith("http")]
+        if clickable:
+            st.markdown("  \n".join(f"🔗 [{r['label'] or r['url']}]({r['url']})" for r in clickable))
+    # ── To-do ──
+    with c2:
+        st.markdown("#### ✅ To do for this day")
+        tasks_df = st.data_editor(
+            _df(st.session_state["dp_tasks_base"], TASK_COLS),
+            key=f"dp_tasks_{ver}", num_rows="dynamic", use_container_width=True, hide_index=True,
+            column_config={
+                "done": st.column_config.CheckboxColumn("✓", width="small", default=False),
+                "task": st.column_config.TextColumn("Task", width="large"),
+                "owner": st.column_config.TextColumn("Who"),
+            },
+        )
+
+    # ── Auto-save ──
+    payload = {
+        "focus": (st.session_state.get("dp_focus") or "").strip(),
+        "location": (st.session_state.get("dp_location") or "").strip(),
+        "notes": st.session_state.get("dp_notes") or "",
+        "timetable": _rows(tt_df, TT_COLS),
+        "links": _rows(links_df, LINK_COLS),
+        "tasks": _rows(tasks_df, TASK_COLS),
+    }
+    is_blank = not any([payload["focus"], payload["location"], payload["notes"].strip(),
+                        payload["timetable"], payload["links"], payload["tasks"]])
+    last = st.session_state.get("dp_last_saved")
+    if payload != last and not (is_blank and last is None):
+        who = st.session_state.get("lp_entered_by") or None
+        err = save_day_plan(d, {**payload, "updated_by": who})
+        if err:
+            if "does not exist" in err or "PGRST205" in err or "schema cache" in err:
+                st.error(f"Not saved — the `{DAY_TABLE}` table hasn't been created yet. "
+                         "Run the updated schema SQL; what you've typed stays on screen.")
+            else:
+                st.error(f"Not saved yet ({err}). What you've typed stays on screen — "
+                         "it will retry on your next change.")
+        else:
+            st.session_state["dp_last_saved"] = payload
+            st.session_state["dp_saved_note"] = f"✓ Auto-saved {_now_hm()}"
+
+    st.divider()
+    f1, f2, f3 = st.columns([2, 1.4, 1.4])
+    f1.caption(st.session_state.get("dp_saved_note") or "Auto-saves as you go — nothing to press.")
+    with f2:
+        docx_bytes = build_day_docx(d, payload, day_events)
+        if docx_bytes:
+            st.download_button("📄 Day plan (Word)", data=docx_bytes,
+                               file_name=f"CLC_Day_Plan_{d.isoformat()}.docx",
+                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                               use_container_width=True, key="dp_dl")
+    with f3:
+        with st.popover("More…", use_container_width=True):
+            copy_to = st.date_input("Copy this plan to", key=f"dp_copy_to_{d.isoformat()}",
+                                    format="DD/MM/YYYY", value=d + timedelta(days=7))
+            if st.button("📋 Copy", key="dp_copy_btn", disabled=is_blank):
+                existing, _ = load_day_plan(copy_to)
+                if existing and not st.session_state.get("dp_copy_ok"):
+                    st.session_state["dp_copy_ok"] = True
+                    st.warning(f"{copy_to.strftime('%a %d %b')} already has a plan — press Copy again to replace it.")
+                else:
+                    st.session_state.pop("dp_copy_ok", None)
+                    err = save_day_plan(copy_to, {**payload, "updated_by": st.session_state.get("lp_entered_by")})
+                    if err:
+                        st.error(f"Could not copy: {err}")
+                    else:
+                        st.success(f"Copied to {copy_to.strftime('%a %d %b %Y')}.")
+            st.divider()
+            if not st.session_state.get("dp_del_confirm"):
+                if st.button("🗑️ Clear this day's plan", key="dp_del", disabled=last is None):
+                    st.session_state["dp_del_confirm"] = True
+                    _dp_rerun()
+            else:
+                st.warning("Delete everything planned for this day?")
+                if st.button("Yes, clear it", key="dp_del_yes", type="primary"):
+                    st.session_state.pop("dp_del_confirm", None)
+                    err = delete_day_plan(d)
+                    if err:
+                        st.error(f"Could not delete: {err}")
+                    else:
+                        st.session_state.pop("dp_loaded_date", None)
+                        _dp_rerun()
+                if st.button("Keep it", key="dp_del_no"):
+                    st.session_state.pop("dp_del_confirm", None)
+                    _dp_rerun()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -591,6 +1168,11 @@ elif err:
     else:
         st.error(f"Could not load the planning calendar: {err}")
     st.stop()
+
+drafts = load_drafts()
+_flash = st.session_state.pop("lp_flash", None)
+if _flash:
+    st.success(_flash)
 
 # ── Term + filters ────────────────────────────────────────────────────────────
 c1, c2, c3 = st.columns([1, 2, 2])
@@ -617,8 +1199,8 @@ m3.metric("Proposed", sum(r.get("status") == "Proposed" for r in all_term_events
 m4.metric("Location TBC", sum(
     (r.get("location_mode") == "TBC") and r.get("status") != "Cancelled" for r in all_term_events))
 
-tab_cal, tab_add, tab_list, tab_export = st.tabs(
-    ["📅 Term calendar", "➕ Add item", "📝 Review & edit", "⬇️ Export"]
+tab_cal, tab_day, tab_add, tab_list, tab_export = st.tabs(
+    ["📅 Term calendar", "🗒️ Day Planner", "➕ Add item", "📝 Review & edit", "⬇️ Export"]
 )
 
 # ── Calendar ──────────────────────────────────────────────────────────────────
@@ -628,7 +1210,8 @@ with tab_cal:
     include_pre = st.toggle("Show the week before term starts", value=True, key="lp_pre",
                             help="Useful for planning leadership days and SDDs before students return.")
     legend()
-    shown_days = render_term_grid(term, term_events, include_pre)
+    shown_days = render_term_grid(term, term_events, include_pre, load_day_plan_index())
+    st.caption("🗒️ marks days that have a Day Planner page — open the 🗒️ Day Planner tab to view or edit it.")
 
     hidden = [r for r in term_events
               if not any(r["start_date"] <= d <= r["end_date"] for d in shown_days)]
@@ -644,11 +1227,17 @@ with tab_cal:
             for r in holiday_events:
                 st.markdown(f"- {fmt_date_range(r)} — {r.get('title')} ({r.get('status')}, {fmt_location(r)})")
 
+# ── Day Planner ───────────────────────────────────────────────────────────────
+with tab_day:
+    st.caption("Your sandbox for any single day — pick a date and build it up: timetable, notes, "
+               "links and to-dos. Everything auto-saves to that date.")
+    st.session_state.setdefault("dp_date", TERMS[1][0])
+    render_day_planner(events)
+
 # ── Add ───────────────────────────────────────────────────────────────────────
 with tab_add:
     st.caption("Start with what you know — an item can be Proposed with the location TBC and updated later.")
-    if render_event_form("lp_new"):
-        st.rerun()
+    render_event_form("lp_new", draft=drafts.get("new"))
 
 # ── Review & edit ─────────────────────────────────────────────────────────────
 with tab_list:
@@ -683,8 +1272,7 @@ with tab_list:
             if r.get("created_by"):
                 st.caption(f"Entered by {r['created_by']}")
 
-            if render_event_form(f"lp_edit_{r['id']}", existing=r):
-                st.rerun()
+            render_event_form(f"lp_edit_{r['id']}", existing=r, draft=drafts.get(f"edit:{r['id']}"))
 
             confirm_key = f"lp_del_confirm_{r['id']}"
             if not st.session_state.get(confirm_key):
