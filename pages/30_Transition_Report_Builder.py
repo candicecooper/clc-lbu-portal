@@ -2602,7 +2602,7 @@ def _bst_incident_summary(incidents, criticals, start, end):
     for r in incidents:
         dt = _d(r.get("date"))
         if dt and start <= dt <= end:
-            recs.append({"date": dt, "severity": r.get("severity") or 0, "behaviour": r.get("behaviour_type") or "",
+            recs.append({"date": dt, "behaviour": r.get("behaviour_type") or "",
                          "trigger": r.get("antecedent") or "", "session": r.get("session") or "", "critical": False,
                          "location": r.get("location") or "", "day": r.get("day_of_week") or dt.strftime("%A"),
                          "function": r.get("hypothesis_function") or "", "response": r.get("intervention") or "",
@@ -2610,7 +2610,7 @@ def _bst_incident_summary(incidents, criticals, start, end):
     for r in criticals:
         dt = _d(r.get("created_at"))
         if dt and start <= dt <= end:
-            recs.append({"date": dt, "severity": r.get("severity") or 5, "behaviour": "Critical incident",
+            recs.append({"date": dt, "behaviour": "Critical incident",
                          "trigger": r.get("primary_context") or "", "session": r.get("primary_time") or "", "critical": True,
                          "location": r.get("primary_location") or "", "day": dt.strftime("%A"),
                          "function": r.get("primary_hypothesis_function") or "", "response": "", "minutes": None,
@@ -2630,13 +2630,11 @@ def _bst_incident_summary(incidents, criticals, start, end):
             for v in _flat(r.get(key)):
                 cnt[v] += 1
         return [k for k, _ in sorted(cnt.items(), key=lambda kv: -kv[1])[:n]]
-    avg = lambda rows: round(sum(_num(r["severity"]) for r in rows) / len(rows), 1) if rows else None
     return {
         "total_incidents": len(recs), "critical_incidents": sum(r["critical"] for r in recs),
         "incidents_per_week_first_half_of_placement": round(len(first) / half_weeks, 1),
         "incidents_per_week_second_half_of_placement": round(len(second) / half_weeks, 1),
         "critical_first_half": sum(r["critical"] for r in first), "critical_second_half": sum(r["critical"] for r in second),
-        "average_severity_first_half": avg(first), "average_severity_second_half": avg(second),
         "most_common_behaviours": top("behaviour", [r for r in recs if not r["critical"]]),
         "most_common_triggers": top("trigger", recs), "most_common_session": (top("session", recs, 1) or [""])[0],
         "most_common_locations": top("location", recs), "most_common_days": top("day", recs, 2),
@@ -2742,7 +2740,20 @@ AI_SYSTEM = ("You write sections of student reports for Cowandilla Learning Cent
              "education setting using the Berry Street Education Model (BSEM) and restorative practice. Write in "
              "Australian English, third person, warm, professional and strengths-based. Refer to the student ONLY by "
              "the initials given. Use ONLY facts in the data provided — never invent events, numbers, people or "
-             "strategies. If the data doesn't support something, leave it out. Return ONLY valid JSON.")
+             "strategies. If the data doesn't support something, leave it out. Never mention incident severity, severity "
+             "ratings or scores, or describe incidents as severe. Return ONLY valid JSON.")
+
+
+_SEVERITY_RX = re.compile(r"\bseverit|\bsevere", re.I)
+
+
+def _drop_severity(text):
+    """Remove any sentence that mentions incident severity (the report never reports it)."""
+    out = []
+    for para_ in str(text or "").split("\n"):
+        sents = re.split(r"(?<=[.!?])\s+", para_)
+        out.append(" ".join(x for x in sents if not _SEVERITY_RX.search(x)))
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
 
 
 def ai_draft(section, initials, ctx):
@@ -2782,7 +2793,7 @@ def ai_draft(section, initials, ctx):
                   "(about 200-280 words in total), elaborating on what the Behaviour Support Tool shows about the student:\n"
                   "1) Who the student is and their behaviour profile: strengths and interests, the behaviours seen, the most "
                   "common triggers, times, days and places, the likely functions of behaviour, early warning signs, and how "
-                  "incidents changed from the first to the second half of the placement (frequency, severity, critical "
+                  "incidents changed from the first to the second half of the placement (frequency, critical "
                   "incidents, days since the last incident).\n"
                   "2) What helped: support plan strategies and adjustments, staff responses, regulation/recovery supports, "
                   "strategy trials and what was learned (including anything that didn't help), and SMARTAR goal progress.\n"
@@ -2790,6 +2801,14 @@ def ai_draft(section, initials, ctx):
                   "Only include points the data supports; skip any that it doesn't. Separate paragraphs with a blank line. "
                   'Return JSON: {"text": "<paragraphs>"}')
     out = _parse_json(groq_ai_call(prompt, system=AI_SYSTEM, max_tokens=1800 if section in ("summary", "recommendations") else 1200))
+    for it in out.get("items") or []:                  # no severity anywhere in a draft
+        if isinstance(it, dict) and "text" in it:
+            it["text"] = _drop_severity(it["text"])
+    if isinstance(out.get("items"), list):
+        out["items"] = [(_drop_severity(x) if isinstance(x, str) else x) for x in out["items"]]
+        out["items"] = [x for x in out["items"] if not (isinstance(x, str) and not x.strip())]
+    if "text" in out:
+        out["text"] = _drop_severity(out["text"])
     if section == "hits":
         items = []
         for it in out.get("items") or []:
