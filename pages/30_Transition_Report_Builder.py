@@ -1756,7 +1756,7 @@ SECTIONS = [
     ("restorative", "Restorative Practice & Relational Safety"),
     ("regulation", "Regulation Profile (Window of Tolerance)"),
     ("smartar", "Behaviour Progress: SMARTAR Goals"),
-    ("voice", "Student Voice (optional)"),
+    ("voice", "Student Voice"),
     ("attendance", "Attendance"),
     ("summary", "Overall Progress Summary"),
 ]
@@ -2120,6 +2120,61 @@ BST_TERM_STARTS = {  # SA public school terms (Monday of week 1) — same as the
 }
 BST_LEGACY_REASONS = {"Day end to avoid escalation": "Day end: avoid potential escalation",
                       "Day end: needs reset, negotiated time": "Day end: needs reset"}
+ATT_DAY_COLOURS = {   # status: (fill, label for the key)
+    "attended":   ("70AD47", "Attended"),
+    "absent":     ("E06666", "Absent"),
+    "transition": ("8E7CC3", "Transition (at the enrolled school)"),
+    "noschool":   ("D9D9D9", "No school"),
+}
+
+
+def _att_cell_status(cell):
+    """Status for a table cell; older saved tables stored text lines instead."""
+    if cell.get("status"):
+        return cell["status"]
+    txt = " ".join(t for t, _ in cell.get("lines") or [])
+    return "noschool" if "No school" in txt else "absent" if "Absent" in txt else "attended"
+
+
+def transition_days(initials):
+    """Dates the Transition Timetables tool has the student away from CLC (same rule as the Behaviour Support
+    Tool's 'before vs after starting to split time between sites'). Empty set if that tool isn't deployed."""
+    try:
+        import transition_utils as tu
+        rows = (tu.get_students_client().table(tu.TABLE_TIMETABLES).select("*")
+                .eq("student_initials", initials).order("updated_at", desc=True).execute().data or [])
+    except Exception:
+        return set()
+    if not rows:
+        return set()
+    tt = None
+    for want in ("published", "active", "draft", "complete"):
+        tt = next((r for r in rows if r.get("status") == want), None)
+        if tt:
+            break
+    tt = tt or rows[0]
+    try:
+        view = tu.live_view(tt) if tu.is_live(tt) else tt
+    except Exception:
+        view = tt
+    weeks = view.get("weeks")
+    if isinstance(weeks, str):
+        try:
+            weeks = json.loads(weeks)
+        except Exception:
+            weeks = []
+    if isinstance(weeks, dict):
+        weeks = list(weeks.values())
+    out = set()
+    for wk in weeks or []:
+        for d_ in (wk.get("days") or []) if isinstance(wk, dict) else []:
+            loc = d_.get("loc") if isinstance(d_, dict) else None
+            dd = _d(d_.get("date")) if isinstance(d_, dict) else None
+            if loc and loc != "CLC" and dd:
+                out.add(dd)
+    return out
+
+
 ATT_TABLE_STYLE = {"ci": "B91C1C", "event": "B45309", "absent": "166534", "time": "111827", "note": "374151", "muted": "6B7280"}
 
 
@@ -2290,7 +2345,8 @@ def bst_attendance_table(initials, start, end):
     end = min(today, max(ends)) if ends and max(ends) < today else today
     if start > end:
         return None, "The placement hasn't started yet, so there's no attendance to show."
-    weeks, counts = {}, {"attended": 0, "school_days": 0, "absent": 0}
+    weeks, counts = {}, {"attended": 0, "school_days": 0, "absent": 0, "transition": 0}
+    trans = transition_days(initials)
     d_ = start - timedelta(days=start.weekday())
     while d_ <= end:
         in_term = (d_.year not in BST_TERM_STARTS) or _bst_term_week(d_) is not None     # skip school holidays
@@ -2314,16 +2370,24 @@ def bst_attendance_table(initials, start, end):
                    "times": "" if day["no_school"] else _bst_day_times(day, exc),
                    "ci_description": _scrub_names("; ".join(c for c in cis if c), stu, initials),
                    "late_min": int(_num(exc.get("late_min"))), "quick_incidents": quick.get(d_, 0)}
-            if not day["no_school"] and (day["planned"] or day["actual"] or status == "Absent"):
+            if day["no_school"]:
+                cell_status = "noschool"
+            elif d_ in trans:
+                cell_status = "transition"
+            elif status == "Absent":
+                cell_status = "absent"
+            else:
+                cell_status = "attended"       # includes part-time days off — shown as attended
+            counts["transition"] += cell_status == "transition"
+            if cell_status in ("attended", "absent"):
                 counts["school_days"] += 1
-                counts["attended"] += status == "Attended"
-                counts["absent"] += status == "Absent"
+                counts["attended"] += cell_status == "attended"
+                counts["absent"] += cell_status == "absent"
             ws = d_ - timedelta(days=d_.weekday())
             tw = _bst_term_week(ws)
             wk = weeks.setdefault(ws.isoformat(), {"week_label": f"{tw[0]} Wk {tw[1]}" if tw else f"Wk of {ws.strftime('%-d %b')}",
                                                    "days": [None] * 5})
-            wk["days"][d_.weekday()] = {"label": d_.strftime("%-d %B") if d_.day == 1 else str(d_.day),
-                                        "lines": _bst_cell_lines(rec)}
+            wk["days"][d_.weekday()] = {"label": d_.strftime("%-d %b"), "status": cell_status}
         d_ += timedelta(days=1)
     if not weeks:
         return None, "No school days in the placement dates."
@@ -2344,25 +2408,30 @@ def pull_attendance_table(initials, start, end):
         st.session_state["tr_days_tot"] = tbl["counts"]["school_days"]
 
 
+def att_table_key_html():
+    return "".join(f"<span style='display:inline-block;margin:4px 12px 0 0;font-size:0.8rem'>"
+                   f"<span style='display:inline-block;width:14px;height:14px;vertical-align:middle;margin-right:4px;"
+                   f"background:#{c};border:1px solid #777'></span>{lbl}</span>" for c, lbl in ATT_DAY_COLOURS.values())
+
+
 def att_table_html(tbl):
     import html as _h
-    col = {k: "#" + v for k, v in ATT_TABLE_STYLE.items()}
-    out = ["<table style='width:100%;border-collapse:collapse;font-size:0.8rem'><tr>" +
-           "".join(f"<th style='background:#a9d18e;border:1px solid #444;padding:5px'>{h}</th>"
+    out = ["<table style='width:100%;border-collapse:collapse;font-size:0.8rem;table-layout:fixed'><tr>" +
+           "".join(f"<th style='background:#323E4F;color:#fff;border:1px solid #444;padding:5px'>{h}</th>"
                    for h in ["Week"] + BST_DAYS_FULL) + "</tr>"]
     for wk in tbl["weeks"]:
-        row = (f"<tr><td style='background:#e2f0d9;border:1px solid #444;padding:5px;text-align:center;font-weight:600'>"
+        row = (f"<tr><td style='background:#EEF2EC;border:1px solid #444;padding:5px;text-align:center;font-weight:600'>"
                f"{_h.escape(wk['week_label'])}</td>")
         for cell in wk["days"]:
             if not cell:
                 row += "<td style='border:1px solid #444;background:#f3f4f6'></td>"
                 continue
-            body = "".join(f"<div style='color:{col.get(s, '#111')};{'font-weight:700;' if s in ('ci', 'absent', 'event') else ''}'>"
-                           f"{_h.escape(t)}</div>" for t, s in cell["lines"])
-            row += (f"<td style='border:1px solid #444;padding:4px;vertical-align:top'><div style='font-size:0.7rem;"
-                    f"color:#6b7280'>{cell['label']}</div>{body}</td>")
+            fill = ATT_DAY_COLOURS.get(_att_cell_status(cell), ATT_DAY_COLOURS["attended"])[0]
+            fg = "#fff" if _att_cell_status(cell) in ("attended", "absent", "transition") else "#333"
+            row += (f"<td style='border:1px solid #444;padding:5px;text-align:center;background:#{fill};color:{fg};"
+                    f"font-weight:600'>{_h.escape(cell['label'])}</td>")
         out.append(row + "</tr>")
-    return "".join(out) + "</table>"
+    return "".join(out) + "</table>" + att_table_key_html()
 
 
 def pull_student_voice(initials):
@@ -3665,11 +3734,11 @@ with tab1:
              "trend": g_["stats"]["trend"], "observations": g_["stats"]["total"]} for g_ in pulled_goals]
         st.markdown("---")
 
-    # ── STUDENT VOICE (optional) ─────────────────────────────────────────────
+    # ── STUDENT VOICE ─────────────────────────────────────────────
     if inc("voice"):
-        st.subheader("🗣️ Student Voice (optional)")
+        st.subheader("🗣️ Student Voice")
         st.caption(VOICE_BLURB + " Type it in, pull it from the Behaviour Support plan, and/or upload a photo of the "
-                   "student's writing or a document. Leave it empty and it won't appear on the report.")
+                   "student's writing or a document.")
         st.button("📥 Pull student voice from the Behaviour Support plan", key="tr_voice_pull",
                   on_click=pull_student_voice, args=(INITIALS,))
         if st.session_state.get("tr_voice_msg"):
@@ -3696,8 +3765,8 @@ with tab1:
         st.button("📋 Pull attendance table from the Behaviour Support Tool" if not S("att_table") else
                   "🔄 Refresh attendance table from the Behaviour Support Tool", key="tr_att_pull",
                   on_click=pull_attendance_table, args=(INITIALS, placement_start, placement_end),
-                  help="The week-by-week (Mon–Fri) table from the Behaviour Support Tool for the whole placement — "
-                       "from the placement start to today (or the placement end, if it has passed).")
+                  help="A week-by-week (Mon–Fri) colour table for the whole placement: green attended, red absent, purple "
+                       "transition days at the enrolled school (from the Transition Timetable).")
         if S("att_table_msg"):
             st.warning(S("att_table_msg"))
         if S("att_table"):
@@ -3954,40 +4023,51 @@ def build_docx(rep):
         pp.add_run().add_picture(BytesIO(raw), width=Cm(w_cm))
 
     def att_table(tbl_):
-        widths = [Cm(1.9)] + [Cm(3.1)] * 5
+        widths = [Cm(2.4)] + [Cm(3.0)] * 5
         t_ = doc.add_table(rows=1, cols=6)
         t_.style = "Table Grid"
         t_.autofit = False
         hdr_ = t_.rows[0]
         trPr = hdr_._tr.get_or_add_trPr(); th = OxmlElement("w:tblHeader"); th.set(qn("w:val"), "true"); trPr.append(th)
         for i_, h_ in enumerate(["Week"] + BST_DAYS_FULL):
-            c_ = hdr_.cells[i_]; c_.width = widths[i_]; shade(c_, "A9D18E")
+            c_ = hdr_.cells[i_]; c_.width = widths[i_]; shade(c_, HEADER_NAVY)
             c_.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-            r_ = c_.paragraphs[0].add_run(h_); r_.bold = True; r_.font.size = Pt(8)
+            r_ = c_.paragraphs[0].add_run(h_); r_.bold = True; r_.font.size = Pt(8.5)
+            r_.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
         for wk in tbl_["weeks"]:
             row_ = t_.add_row()
             trPr = row_._tr.get_or_add_trPr(); cs = OxmlElement("w:cantSplit"); trPr.append(cs)
+            row_.height = Cm(0.6)
             for i_ in range(6):
                 row_.cells[i_].width = widths[i_]
-            wc = row_.cells[0]; shade(wc, "E2F0D9")
+                row_.cells[i_].vertical_alignment = 1          # centre
+            wc = row_.cells[0]; shade(wc, "EEF2EC")
             wc.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-            wr = wc.paragraphs[0].add_run(wk["week_label"]); wr.bold = True; wr.font.size = Pt(8)
+            wr = wc.paragraphs[0].add_run(wk["week_label"]); wr.bold = True; wr.font.size = Pt(8.5)
             for i_, cell in enumerate(wk["days"]):
                 c_ = row_.cells[i_ + 1]
                 if not cell:
                     shade(c_, "F3F4F6"); continue
-                lb = c_.paragraphs[0].add_run(cell["label"]); lb.font.size = Pt(7)
-                lb.font.color.rgb = RGBColor(0x6B, 0x72, 0x80)
-                c_.paragraphs[0].paragraph_format.space_after = Pt(0)
-                for txt, sty in cell["lines"]:
-                    q = c_.add_paragraph(); q.paragraph_format.space_after = Pt(0)
-                    rr = q.add_run(txt); rr.font.size = Pt(7.5)
-                    rr.font.color.rgb = hex_rgb(ATT_TABLE_STYLE.get(sty, "111827"))
-                    rr.bold = sty in ("ci", "absent", "event")
+                stt = _att_cell_status(cell)
+                shade(c_, ATT_DAY_COLOURS.get(stt, ATT_DAY_COLOURS["attended"])[0])
+                c_.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                lb = c_.paragraphs[0].add_run(cell["label"]); lb.font.size = Pt(8.5); lb.bold = True
+                lb.font.color.rgb = (RGBColor(0xFF, 0xFF, 0xFF) if stt in ("attended", "absent", "transition")
+                                     else RGBColor(0x33, 0x33, 0x33))
+        # colour key — one line of coloured squares
+        kp = doc.add_paragraph()
+        kp.paragraph_format.space_before = Pt(4)
+        kp.paragraph_format.space_after = Pt(0)
+        for fill, lbl in ATT_DAY_COLOURS.values():
+            sq = kp.add_run("■ " if fill != "FFFFFF" else "□ ")
+            sq.font.size = Pt(12)
+            sq.font.color.rgb = hex_rgb(fill if fill != "FFFFFF" else "777777")
+            lr = kp.add_run(lbl + "      ")
+            lr.font.size = Pt(8)
         k_ = doc.add_paragraph()
         k_.paragraph_format.space_before = Pt(3)
-        kr = k_.add_run("From the Behaviour Support Tool. Times are shown where known; otherwise the sessions attended "
-                        "(AM, Mid, PM). CI = critical incident. Days with no entry follow the student's usual weekly pattern.")
+        kr = k_.add_run("From the Behaviour Support Tool attendance records"
+                        + (" and the Transition Timetable." if tbl_.get("counts", {}).get("transition") else "."))
         kr.italic = True; kr.font.size = Pt(7.5); kr.font.color.rgb = RGBColor(0x77, 0x77, 0x77)
 
     def table(rows, header=True, widths=None, size=9.5):
@@ -4627,7 +4707,7 @@ with tab3:
         "voice": bool(rep["voice_text"].strip() or rep["voice_files"]),
     }
     checks = [("Cover page — LC Teacher", bool(rep["teacher"])), ("Cover page — Enrolled School", bool(rep["school"]))]
-    checks += [(SECTION_LABEL[k], filled[k]) for k, _ in SECTIONS if k in rep["sections"] and k != "voice"]
+    checks += [(SECTION_LABEL[k], filled[k]) for k, _ in SECTIONS if k in rep["sections"]]
     checks += [(f"Appendix {chr(65 + n_) if n_ < 26 else n_ + 1}: {ap['title']}", bool(ap.get("text") or ap.get("pages")))
                for n_, ap in enumerate(rep["appendices"])]
     cc = st.columns(2)
