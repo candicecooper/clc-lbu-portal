@@ -2031,12 +2031,18 @@ def _bst_incident_summary(incidents, criticals, start, end):
         dt = _d(r.get("date"))
         if dt and start <= dt <= end:
             recs.append({"date": dt, "severity": r.get("severity") or 0, "behaviour": r.get("behaviour_type") or "",
-                         "trigger": r.get("antecedent") or "", "session": r.get("session") or "", "critical": False})
+                         "trigger": r.get("antecedent") or "", "session": r.get("session") or "", "critical": False,
+                         "location": r.get("location") or "", "day": r.get("day_of_week") or dt.strftime("%A"),
+                         "function": r.get("hypothesis_function") or "", "response": r.get("intervention") or "",
+                         "minutes": r.get("duration_minutes")})
     for r in criticals:
         dt = _d(r.get("created_at"))
         if dt and start <= dt <= end:
             recs.append({"date": dt, "severity": r.get("severity") or 5, "behaviour": "Critical incident",
-                         "trigger": r.get("primary_context") or "", "session": "", "critical": True})
+                         "trigger": r.get("primary_context") or "", "session": r.get("primary_time") or "", "critical": True,
+                         "location": r.get("primary_location") or "", "day": dt.strftime("%A"),
+                         "function": r.get("primary_hypothesis_function") or "", "response": "", "minutes": None,
+                         "critical_behaviour": r.get("primary_behaviour") or ""})
     if not recs:
         return {"total_incidents": 0}
     recs.sort(key=lambda x: x["date"])
@@ -2061,6 +2067,15 @@ def _bst_incident_summary(incidents, criticals, start, end):
         "average_severity_first_half": avg(first), "average_severity_second_half": avg(second),
         "most_common_behaviours": top("behaviour", [r for r in recs if not r["critical"]]),
         "most_common_triggers": top("trigger", recs), "most_common_session": (top("session", recs, 1) or [""])[0],
+        "most_common_locations": top("location", recs), "most_common_days": top("day", recs, 2),
+        "likely_functions_of_behaviour": top("function", recs),
+        "staff_responses_used": top("response", [r for r in recs if not r["critical"]], 4),
+        "critical_incident_behaviours": [r["critical_behaviour"] for r in recs if r.get("critical_behaviour")][:5],
+        "average_incident_minutes": (round(sum(float(r["minutes"]) for r in recs if r.get("minutes")) /
+                                     max(1, sum(1 for r in recs if r.get("minutes"))), 1)
+                                     if any(r.get("minutes") for r in recs) else None),
+        "last_incident": recs[-1]["date"].isoformat(),
+        "days_since_last_incident": (end - recs[-1]["date"]).days,
     }
 
 
@@ -2095,11 +2110,14 @@ def bst_context(initials, report_start=None, report_end=None):
                                           "what_was_learned": t.get("conclusion"), "staff_observations": obs}.items() if v})
     prof_rows = _bst_rows("starting_profiles", sid)
     prof = (prof_rows[0].get("profile") if prof_rows else None) or {}
-    profile = {k: prof.get(k) for k in ("what_helps", "what_doesnt_help") if prof.get(k)}
+    profile = {k: prof.get(k) for k in ("what_helps", "what_doesnt_help", "tags") if prof.get(k)}
     ctx = {"student": initials, "placement": f"{start.isoformat()} to {end.isoformat()}",
            "attendance": attendance, "incidents": incidents, "support_plan": plan,
            "strategy_trials": trials, "starting_profile": profile,
-           "smartar_goals": st.session_state.get("tr_goal_digest", [])}
+           "smartar_goals": st.session_state.get("tr_goal_digest", []),
+           "strategies_already_in_this_report": {
+               "teaching_strategies": list(st.session_state.get("tr_hits") or []),
+               "restorative_strategies": list(st.session_state.get("tr_rp") or [])}}
     # never send a name: swap any first/last name held in the Behaviour Support record for the initials
     raw = json.dumps(ctx, default=str)
     for nm in {stu.get("first_name"), stu.get("last_name")}:
@@ -2178,12 +2196,28 @@ def ai_draft(section, initials, ctx):
                   "Write 2-3 sentences describing the attendance pattern (e.g. part-time timetable, absences, early finishes "
                   "or day ends used to avoid escalation, late arrivals), framed supportively. Do not restate the total days "
                   'attended (it is shown separately). Return JSON: {"text": "<2-3 sentences>"}')
+    elif section == "recommendations":
+        prompt = (f"Data about student {initials}:\n{data}\n\nWrite Transition Recommendations for the staff at the school "
+                  f"{initials} is moving to. Give 6-10 specific, practical recommendations drawn ONLY from the data: what to put "
+                  "in place before and in the first weeks (e.g. relationship building, visual supports, timetable/attendance "
+                  "build-up), teaching strategies that worked, early warning signs to watch for and how to respond, known "
+                  "triggers/times/places to plan around, regulation and recovery supports, restorative repair after incidents, "
+                  "strategy trials that worked (and any that made things harder, to avoid), and continuing the SMARTAR goals. "
+                  "Each recommendation is one or two sentences, starting with an action verb. Return JSON: "
+                  '{"items": ["<recommendation>", "..."]}')
     else:
-        prompt = (f"Data about student {initials}:\n{data}\n\nWrite the Overall Progress Summary (4-6 sentences): behaviour "
-                  "trends across the placement (compare first and second half), what helped (strategies, trials), SMARTAR goal "
-                  "progress if given, attendance, and a forward-looking closing sentence about readiness for transition. "
-                  'Return JSON: {"text": "<paragraph>"}')
-    out = _parse_json(groq_ai_call(prompt, system=AI_SYSTEM))
+        prompt = (f"Data about student {initials}:\n{data}\n\nWrite the Overall Progress Summary as 3 short paragraphs "
+                  "(about 200-280 words in total), elaborating on what the Behaviour Support Tool shows about the student:\n"
+                  "1) Who the student is and their behaviour profile: strengths and interests, the behaviours seen, the most "
+                  "common triggers, times, days and places, the likely functions of behaviour, early warning signs, and how "
+                  "incidents changed from the first to the second half of the placement (frequency, severity, critical "
+                  "incidents, days since the last incident).\n"
+                  "2) What helped: support plan strategies and adjustments, staff responses, regulation/recovery supports, "
+                  "strategy trials and what was learned (including anything that didn't help), and SMARTAR goal progress.\n"
+                  "3) Attendance and engagement, then a forward-looking closing on readiness for transition.\n"
+                  "Only include points the data supports; skip any that it doesn't. Separate paragraphs with a blank line. "
+                  'Return JSON: {"text": "<paragraphs>"}')
+    out = _parse_json(groq_ai_call(prompt, system=AI_SYSTEM, max_tokens=1800 if section in ("summary", "recommendations") else 1200))
     if section == "hits":
         items = []
         for it in out.get("items") or []:
@@ -2199,6 +2233,9 @@ def ai_draft(section, initials, ctx):
             if nm and it.get("text"):
                 items.append({"name": nm, "text": str(it["text"]).strip()})
         return {"items": items}
+    if section == "recommendations":
+        recs_ = [str(x).strip().lstrip("-•* ").strip() for x in (out.get("items") or []) if str(x).strip()]
+        return {"text": "\n".join(f"• {r_}" for r_ in recs_)} if recs_ else {"text": str(out.get("text") or "").strip()}
     res = {"text": str(out.get("text") or "").strip()}
     if section == "attendance" and ctx.get("attendance"):
         res["days_attended"] = ctx["attendance"]["days_attended"]
@@ -2262,7 +2299,7 @@ def accept_ai_draft(section):
             if text.strip():
                 _append("tr_att_comment", text.strip())
         elif text.strip():
-            _append("tr_summary", text.strip())
+            _append("tr_recs" if section == "recommendations" else "tr_summary", text.strip())
     discard_ai_draft(section)
     st.session_state["tr_ai_added_note"] = "Added to the report — check the wording below."
 
@@ -2316,9 +2353,10 @@ def ai_draft_box(section, initials, report_start, report_end):
                 st.markdown(f"**From attendance records:** {d_['days_attended']} of {d_['expected_days']} expected days attended "
                             "(these numbers will fill the Days Attended / Total Days boxes).")
             if editing:
-                st.text_area("Draft", key=f"tr_aitext_{section}_0", height=130, label_visibility="collapsed")
+                st.text_area("Draft", key=f"tr_aitext_{section}_0", height=260 if section in ("summary", "recommendations") else 130,
+                             label_visibility="collapsed")
             elif d_.get("text"):
-                st.markdown(f"*{d_['text']}*")
+                st.markdown("\n\n".join(f"*{ln_.strip()}*" for ln_ in d_["text"].split("\n") if ln_.strip()))
         b1, b2, b3 = st.columns(3)
         b1.button("✅ Add edited version" if editing else "✅ Add to report", key=f"tr_aiadd_{section}", type="primary",
                   on_click=accept_ai_draft, args=(section,), use_container_width=True)
@@ -3110,6 +3148,7 @@ with tab1:
                      placeholder="Summarise key achievements, challenges, and demonstrated growth...")
     if inc("recommendations"):
         st.subheader("➡️ Transition Recommendations")
+        ai_draft_box("recommendations", INITIALS, placement_start, placement_end)
         st.text_area("Transition Recommendations", key="tr_recs", height=150, label_visibility="collapsed",
                      placeholder="Specific strategies, accommodations, or supports recommended for successful transition...")
 attendance_pct = days_attended / total_days * 100 if total_days else 0
@@ -3287,6 +3326,18 @@ def build_docx(rep):
             r.italic = True
             r.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
         return p
+
+    def paras(text, empty="Not entered."):
+        """One Word paragraph per line / paragraph, so drafted paragraphs and • bullets keep their layout."""
+        lines = [ln.strip() for ln in str(text or "").split("\n") if ln.strip()]
+        if not lines:
+            return para("", empty)
+        for ln in lines:
+            p = para(ln)
+            p.paragraph_format.space_after = Pt(4 if ln.startswith("•") else 8)
+            if ln.startswith("•"):
+                p.paragraph_format.left_indent = Cm(0.5)
+                p.paragraph_format.first_line_indent = Cm(-0.4)
 
     def table(rows, header=True, widths=None, size=9.5):
         t = doc.add_table(rows=len(rows), cols=len(rows[0]))
@@ -3671,10 +3722,10 @@ def build_docx(rep):
             para(rep["att_comment"])
     if "summary" in rep["sections"]:
         heading("Overall Progress Summary")
-        para(rep["summary"])
+        paras(rep["summary"])
     if "recommendations" in rep["sections"]:
         heading("Transition Recommendations")
-        para(rep["recs"])
+        paras(rep["recs"])
 
     foot = sec.footer.paragraphs[0]
     foot.alignment = WD_ALIGN_PARAGRAPH.CENTER
