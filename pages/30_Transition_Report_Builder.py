@@ -16,6 +16,8 @@ filed to the Document Archive always uses initials.
 """
 import os
 import re
+import base64
+import uuid
 import json
 import statistics
 from io import BytesIO
@@ -144,9 +146,9 @@ ALL_SESSIONS = ["Morning", "Middle", "Afternoon"]
 # ── Window of Tolerance — same zones/columns/colours as the WoT Builder's Regulation Map ──
 WOT_ZONES = [
     {"id": "hyper",      "name": "Mobilisation",        "tag": "Hyperarousal",     "color": "#C1543A", "tint": "#F3E2DC"},
-    {"id": "copingup",   "name": "Coping — rising",     "tag": "Early warning",    "color": "#C98A2E", "tint": "#F3E7D3"},
+    {"id": "copingup",   "name": "Coping",               "tag": "Early warning",    "color": "#C98A2E", "tint": "#F3E7D3"},
     {"id": "wot",        "name": "Window of Tolerance", "tag": "Regulated",        "color": "#4C7A5A", "tint": "#E1EBE3"},
-    {"id": "copingdown", "name": "Coping — falling",    "tag": "Early withdrawal", "color": "#3E6E8E", "tint": "#DEE7ED"},
+    {"id": "copingdown", "name": "Coping",               "tag": "Early withdrawal", "color": "#3E6E8E", "tint": "#DEE7ED"},
     {"id": "hypo",       "name": "Immobilisation",      "tag": "Hypoarousal",      "color": "#38456B", "tint": "#DFE2EA"},
 ]
 WOT_COLS = [("context", "Context"), ("behaviour", "Behaviour descriptors"), ("interventions", "What helps")]
@@ -1450,6 +1452,7 @@ def b64img(data):
     return BytesIO(base64.b64decode(data))
 
 TEAL = "#1A7A6E"
+WOT_CHAR_CM, WOT_LINE_K = float(os.environ.get("TR_WOT_CHAR", 0.0185)), float(os.environ.get("TR_WOT_LINE", 1.18))  # tuned against renders
 HEADER_NAVY = "#323E4F"          # section header bars, as on the CLC report template
 
 # ── Cover page — recreates the CLC report cover (navy / green / lavender shapes,
@@ -1753,13 +1756,16 @@ SECTIONS = [
     ("restorative", "Restorative Practice & Relational Safety"),
     ("regulation", "Regulation Profile (Window of Tolerance)"),
     ("smartar", "Behaviour Progress: SMARTAR Goals"),
+    ("voice", "Student Voice (optional)"),
     ("attendance", "Attendance"),
     ("summary", "Overall Progress Summary"),
-    ("recommendations", "Transition Recommendations"),
 ]
 SECTION_LABEL = dict(SECTIONS)
-# Review Report = everything except the end-of-placement recommendations
-REVIEW_SECTIONS = [k for k, _ in SECTIONS if k != "recommendations"]
+SECTION_LABEL["recommendations"] = "Transition Recommendations (Appendix)"
+# Transition Recommendations are now an optional appendix (any report type), so Review = all sections
+REVIEW_SECTIONS = [k for k, _ in SECTIONS]
+VOICE_BLURB = ("Student voice records the student's own views about their learning and their time at the Learning Centre — "
+               "what they are proud of, what helps them, and what they would like their next school to know.")
 
 # Saved reports live in the students/register project, next to wot_builder_reports
 REPORTS_TABLE = "student_reports"
@@ -1783,7 +1789,8 @@ alter table student_reports disable row level security;"""
 SAVED_KEY_RE = re.compile(
     r"^(report_type|sections|report_date|pstart|pend|teacher|school|vocab_(type|pre|post|summary)|numeracy|"
     r"biin_c_\d+|hits|hits_el_\d+|hits_c_\d+|rp|rp_comments|rp_c_\d+|wot|wotz_\w+|regulation|goal_sel|goal_known|"
-    r"g_current_.+|days_att|days_tot|att_comment|summary|recs|sm_override|finalised)$")
+    r"g_current_.+|days_att|days_tot|att_comment|att_table|att_table_on|summary|recs|app_recs|apps|app_title_\w+|"
+    r"app_text_\w+|uploads|voice_text|voice_files|sm_override|finalised)$")
 DATE_KEYS = ("report_date", "pstart", "pend")
 EDITORS = ["sw", "biin0", "biin1", "biin2", "biin3"]
 
@@ -1920,6 +1927,450 @@ def draft_wot_summary(wot, zones_on, who):
     return " ".join(p).replace("..", ".")
 
 
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# UPLOADS (Student Voice + Appendices) — photos, PDFs, Word documents, text
+# Stored inside the saved report as compressed JPEG pages / plain text, so a
+# reopened report keeps them. Photos are shrunk to 1600px to keep saves small.
+# ══════════════════════════════════════════════════════════════════════════════
+UPLOAD_TYPES = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "heic", "heif", "pdf", "docx", "txt", "md"]
+UPLOAD_MAX_MB = 15
+UPLOAD_MAX_PDF_PAGES = 20
+
+
+def _img_b64(img):
+    from PIL import Image, ImageOps
+    try:
+        img = ImageOps.exif_transpose(img)          # phone photos come in sideways otherwise
+    except Exception:
+        pass
+    if img.mode in ("RGBA", "LA", "P"):
+        img = img.convert("RGBA")
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        bg.paste(img, mask=img.split()[-1])
+        img = bg
+    elif img.mode != "RGB":
+        img = img.convert("RGB")
+    img.thumbnail((1600, 1600))
+    buf = BytesIO()
+    img.save(buf, "JPEG", quality=82, optimize=True)
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+def process_upload(name, data):
+    """File bytes -> {"kind", "pages": [jpeg b64], "text"}. Raises ValueError with a staff-friendly message."""
+    from PIL import Image
+    ext = (name.rsplit(".", 1)[-1] if "." in name else "").lower()
+    if len(data) > UPLOAD_MAX_MB * 1024 * 1024:
+        raise ValueError(f"{name} is bigger than {UPLOAD_MAX_MB} MB — please use a smaller file.")
+    if ext in ("heic", "heif"):
+        try:
+            import pillow_heif
+            pillow_heif.register_heif_opener()
+        except Exception:
+            raise ValueError("iPhone HEIC photos can't be read here. On the iPhone choose Settings → Camera → Formats → "
+                             "Most Compatible, or share/save the photo as a JPG, then upload again.")
+    if ext in ("png", "jpg", "jpeg", "gif", "webp", "bmp", "heic", "heif"):
+        try:
+            return {"kind": "image", "pages": [_img_b64(Image.open(BytesIO(data)))], "text": ""}
+        except Exception:
+            raise ValueError(f"Couldn't open {name} as a picture.")
+    if ext == "pdf":
+        pages = []
+        try:
+            import pypdfium2 as pdfium
+            pdf = pdfium.PdfDocument(data)
+            for i in range(min(len(pdf), UPLOAD_MAX_PDF_PAGES)):
+                pages.append(_img_b64(pdf[i].render(scale=150 / 72).to_pil()))
+        except ImportError:
+            try:
+                import fitz
+                pdf = fitz.open(stream=data, filetype="pdf")
+                for i in range(min(len(pdf), UPLOAD_MAX_PDF_PAGES)):
+                    pix = pdf[i].get_pixmap(dpi=150)
+                    pages.append(_img_b64(Image.open(BytesIO(pix.tobytes("png")))))
+            except ImportError:
+                pages = []
+        except Exception:
+            raise ValueError(f"Couldn't read {name} — is it a password-protected PDF?")
+        if pages:
+            return {"kind": "pdf", "pages": pages, "text": ""}
+        try:                                        # no PDF renderer installed: keep the text at least
+            from pypdf import PdfReader
+            text = "\n\n".join((p.extract_text() or "").strip() for p in PdfReader(BytesIO(data)).pages)
+        except Exception:
+            text = ""
+        if not text.strip():
+            raise ValueError("PDF pages can't be shown on this server yet (add pypdfium2 to requirements.txt). "
+                             "Upload a photo/screenshot of the page instead.")
+        return {"kind": "pdf", "pages": [], "text": text.strip()}
+    if ext == "docx":
+        from docx import Document as _Doc
+        try:
+            d_ = _Doc(BytesIO(data))
+        except Exception:
+            raise ValueError(f"Couldn't open {name} as a Word document.")
+        lines = [p.text for p in d_.paragraphs]
+        for tb in d_.tables:
+            for row in tb.rows:
+                cells = [c.text.strip() for c in row.cells]
+                lines.append(" | ".join(dict.fromkeys(c for c in cells if c)))
+        pages = []
+        for rel in d_.part.rels.values():
+            if "image" in rel.reltype and not rel.is_external:
+                try:
+                    pages.append(_img_b64(Image.open(BytesIO(rel.target_part.blob))))
+                except Exception:
+                    pass
+        text = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+        return {"kind": "docx", "pages": pages, "text": text}
+    if ext in ("txt", "md"):
+        return {"kind": "text", "pages": [], "text": data.decode("utf-8", errors="replace").strip()}
+    raise ValueError(f"{name}: that file type can't be added. Use a photo, PDF, Word document or text file.")
+
+
+def add_upload(list_key, prefix, title_required):
+    """Form-submit callback: read the uploaded file + title into the saved list."""
+    ver = st.session_state.get(f"_tr_upl_ver_{prefix}", 0)
+    f_ = st.session_state.get(f"tr_upl_{prefix}_{ver}")
+    title = (st.session_state.get(f"tr_uplt_{prefix}_{ver}") or "").strip()
+    st.session_state[f"tr_upl_msg_{prefix}"] = ""
+    if f_ is None:
+        st.session_state[f"tr_upl_msg_{prefix}"] = "Choose a file to upload first."
+        return
+    if title_required and not title:
+        st.session_state[f"tr_upl_msg_{prefix}"] = "Give this upload a title — it becomes the appendix heading."
+        return
+    try:
+        item = process_upload(f_.name, f_.getvalue())
+    except ValueError as e:
+        st.session_state[f"tr_upl_msg_{prefix}"] = str(e)
+        return
+    item.update(id=uuid.uuid4().hex[:8], title=title, name=f_.name)
+    st.session_state[list_key] = list(st.session_state.get(list_key) or []) + [item]
+    st.session_state[f"_tr_upl_ver_{prefix}"] = ver + 1          # clears the uploader + title
+
+
+def remove_upload(list_key, item_id):
+    st.session_state[list_key] = [x for x in (st.session_state.get(list_key) or []) if x.get("id") != item_id]
+
+
+def move_upload(list_key, item_id, step):
+    items = list(st.session_state.get(list_key) or [])
+    i = next((n for n, x in enumerate(items) if x.get("id") == item_id), None)
+    if i is None or not (0 <= i + step < len(items)):
+        return
+    items[i], items[i + step] = items[i + step], items[i]
+    st.session_state[list_key] = items
+
+
+def upload_panel(list_key, prefix, title_required, title_label, help_text):
+    """Upload form + the list of what's been added (thumbnail, title, remove/reorder)."""
+    items = st.session_state.get(list_key) or []
+    for n_, it in enumerate(items):
+        with st.container(border=True):
+            c1, c2, c3 = st.columns([1, 5, 2])
+            if it.get("pages"):
+                c1.image(base64.b64decode(it["pages"][0]), use_container_width=True)
+            else:
+                c1.markdown("📄")
+            pg = len(it.get("pages") or [])
+            c2.markdown(f"**{it.get('title') or '(no title)'}**  \n"
+                        f"<span style='color:#666;font-size:0.85rem'>{it.get('name', '')}"
+                        f"{f' · {pg} page' + ('s' if pg != 1 else '') if pg else ''}"
+                        f"{' · text' if it.get('text') else ''}</span>", unsafe_allow_html=True)
+            b1, b2, b3 = c3.columns(3)
+            b1.button("↑", key=f"tr_upup_{prefix}_{it['id']}", on_click=move_upload, args=(list_key, it["id"], -1),
+                      disabled=n_ == 0, help="Move up")
+            b2.button("↓", key=f"tr_updn_{prefix}_{it['id']}", on_click=move_upload, args=(list_key, it["id"], 1),
+                      disabled=n_ == len(items) - 1, help="Move down")
+            b3.button("✕", key=f"tr_uprm_{prefix}_{it['id']}", on_click=remove_upload, args=(list_key, it["id"]),
+                      help="Remove")
+    ver = st.session_state.get(f"_tr_upl_ver_{prefix}", 0)
+    with st.form(f"tr_uplform_{prefix}_{ver}", clear_on_submit=False, border=True):
+        st.text_input(title_label, key=f"tr_uplt_{prefix}_{ver}")
+        st.file_uploader("File", type=UPLOAD_TYPES, key=f"tr_upl_{prefix}_{ver}", help=help_text)
+        st.form_submit_button("➕ Add upload", on_click=add_upload, args=(list_key, prefix, title_required))
+    if st.session_state.get(f"tr_upl_msg_{prefix}"):
+        st.warning(st.session_state[f"tr_upl_msg_{prefix}"])
+
+
+# ── text appendices ──────────────────────────────────────────────────────────
+def add_text_appendix():
+    st.session_state["tr_apps"] = list(st.session_state.get("tr_apps") or []) + [uuid.uuid4().hex[:8]]
+
+
+def remove_text_appendix(aid):
+    st.session_state["tr_apps"] = [x for x in (st.session_state.get("tr_apps") or []) if x != aid]
+    for k in (f"tr_app_title_{aid}", f"tr_app_text_{aid}"):
+        st.session_state.pop(k, None)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ATTENDANCE TABLE — the Behaviour Support Tool's "Attendance table for reports"
+# (Term-week × Mon–Fri), rebuilt from the same records with the same rules.
+# ══════════════════════════════════════════════════════════════════════════════
+BST_DAYS_FULL = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+BST_SESSION_LABEL = {"Morning": "AM", "Middle": "Mid", "Afternoon": "PM"}
+BST_SESSION_TIMES = {"Morning": ("9:00", "11:00"), "Middle": ("11:00", "13:30"), "Afternoon": ("13:30", "14:45")}
+BST_CI_REASON = "C.I. (critical incident)"
+BST_TERM_STARTS = {  # SA public school terms (Monday of week 1) — same as the Behaviour Support Tool
+    2026: [date(2026, 2, 2), date(2026, 4, 27), date(2026, 7, 20), date(2026, 10, 12)],
+}
+BST_LEGACY_REASONS = {"Day end to avoid escalation": "Day end: avoid potential escalation",
+                      "Day end: needs reset, negotiated time": "Day end: needs reset"}
+ATT_TABLE_STYLE = {"ci": "B91C1C", "event": "B45309", "absent": "166534", "time": "111827", "note": "374151", "muted": "6B7280"}
+
+
+def _bst_att_state(row):
+    """Attendance model exactly as the Behaviour Support Tool builds it (legacy fields converted)."""
+    state = {"schedule": list(row.get("schedule") or []), "exceptions": [dict(e) for e in (row.get("exceptions") or [])
+                                                                         if isinstance(e, dict) and isinstance(e.get("date"), str)]}
+    if not state["schedule"]:
+        pt_days = row.get("pt_days") or BST_DAYS_FULL
+        sess = set()
+        for o in row.get("pt_sessions") or ["Full day"]:
+            sess |= {"Full day": set(BST_ATT_SESSIONS), "Morning only": {"Morning"}, "Middle of day only": {"Middle"},
+                     "Afternoon only": {"Afternoon"}, "Morning + Middle": {"Morning", "Middle"},
+                     "Middle + Afternoon": {"Middle", "Afternoon"}}.get(o, set())
+        sess = [x for x in BST_ATT_SESSIONS if x in sess] or list(BST_ATT_SESSIONS)
+        days_map = {BST_ATT_DAYS[i]: (sess if BST_DAYS_FULL[i] in pt_days else []) for i in range(5)}
+        if any(v != list(BST_ATT_SESSIONS) for v in days_map.values()):
+            state["schedule"] = [{"from": "2000-01-01", "days": days_map}]
+    have = {e["date"] for e in state["exceptions"]}
+    for d_ in row.get("absent_dates") or []:
+        if isinstance(d_, str) and d_ not in have:
+            state["exceptions"].append({"date": d_, "type": "Absent", "sessions": [], "reason": "", "note": ""})
+    for e in state["exceptions"]:
+        if e.get("reason") in BST_LEGACY_REASONS:
+            e["reason"] = BST_LEGACY_REASONS[e["reason"]]
+    return state
+
+
+def _bst_version(state, d):
+    vers = sorted(state.get("schedule") or [], key=lambda v: v.get("from", ""))
+    if not vers:
+        return None
+    chosen = vers[0]
+    for v in vers:
+        if v.get("from", "") <= d.isoformat():
+            chosen = v
+    return chosen
+
+
+def _bst_att_day(state, d):
+    exc = next((e for e in state["exceptions"] if e.get("date") == d.isoformat()), None)
+    ver = _bst_version(state, d)
+    dn = BST_ATT_DAYS[d.weekday()] if d.weekday() < 5 else None
+    planned = (list(BST_ATT_SESSIONS) if ver is None else list((ver.get("days") or {}).get(dn, []))) if dn else []
+    if exc and exc.get("type") == "No school":
+        return {"planned": [], "actual": [], "exc": exc, "no_school": True, "expected_start": ""}
+    actual = planned
+    if exc:
+        actual = [] if exc.get("type") == "Absent" else [x for x in BST_ATT_SESSIONS if x in (exc.get("sessions") or [])]
+    start_ = ((ver.get("starts") or {}).get(dn, "") if ver and dn else "")
+    return {"planned": planned, "actual": actual, "exc": exc, "no_school": False, "expected_start": start_}
+
+
+def _bst_clock(hhmm):
+    m = re.match(r"^\s*(\d{1,2}):(\d{2})\s*(am|pm)?\s*$", hhmm or "", re.I)
+    if not m:
+        return None
+    h, mi, suf = int(m.group(1)), m.group(2), (m.group(3) or "").lower()
+    if not suf:
+        suf = "pm" if (h >= 12 or h <= 6) else "am"
+    return (f"{h - 12 if h > 12 else h}" + ("" if mi == "00" else f":{mi}"), suf)
+
+
+def _bst_range_text(a_, b_):
+    a, b = _bst_clock(a_), _bst_clock(b_)
+    if not a or not b:
+        return f"{a_}-{b_}"
+    return f"{a[0]}{a[1] if a[1] == 'pm' else ''}-{b[0]}{b[1]}"
+
+
+def _bst_term_week(d):
+    for yr, starts in BST_TERM_STARTS.items():
+        if d.year != yr:
+            continue
+        for i in range(len(starts) - 1, -1, -1):
+            if d >= starts[i]:
+                wk = (d - starts[i]).days // 7 + 1
+                return (f"T{i + 1}", wk) if wk <= 10 else None
+    return None
+
+
+def _bst_day_times(day, exc):
+    act = [x for x in BST_ATT_SESSIONS if x in day["actual"]]
+    if not act:
+        return ""
+    exc = exc or {}
+    start_ = exc.get("arrived") or day.get("expected_start") or BST_SESSION_TIMES[act[0]][0]
+    end_ = exc.get("left") or BST_SESSION_TIMES[act[-1]][1]
+    full = len(act) == len(BST_ATT_SESSIONS)
+    contiguous = BST_ATT_SESSIONS.index(act[-1]) - BST_ATT_SESSIONS.index(act[0]) == len(act) - 1
+    if full or (contiguous and (exc.get("left") or exc.get("arrived"))):
+        return _bst_range_text(start_, end_)
+    return " + ".join(BST_SESSION_LABEL[x] for x in act)
+
+
+def _bst_cell_lines(r):
+    L = []
+    if r["no_school"]:
+        return [["No school", "muted"]]
+    if r["late_min"] and r["event"] != "Late arrival":
+        L.append([f"Late arrival ({r['late_min']} min)", "event"])
+    if r["event"] == "CI":
+        L.append(["CI", "ci"])
+        if r["ci_description"] or r["note"]:
+            L.append([r["ci_description"] or r["note"], "note"])
+    elif r["event"]:
+        L.append([r["event"] + (f" ({r['late_min']} min)" if r["event"] == "Late arrival" and r["late_min"] else ""),
+                  "ci" if r["event"] == "Re-entry meeting" else "event"])
+        if r["note"]:
+            L.append([r["note"], "note"])
+    if r["status"] == "Absent":
+        L.append(["Absent", "absent"])
+        if r["note"] and not r["event"]:
+            L.append([r["note"], "note"])
+    elif r["times"]:
+        L.append([r["times"], "time"])
+    if r["event"] == "CI" and r["note"] and r["ci_description"]:
+        L.append([r["note"], "note"])
+    if r["quick_incidents"]:
+        L.append([f"{r['quick_incidents']} incident(s) logged", "muted"])
+    return L
+
+
+def _scrub_names(text, stu, initials):
+    out = str(text or "")
+    for nm in {str(stu.get("first_name") or ""), str(stu.get("last_name") or "")}:
+        nm = nm.strip()
+        if len(nm) > 1 and nm != "-" and nm.upper() != initials.upper():
+            out = re.sub(rf"(?<![A-Za-z]){re.escape(nm)}(?![A-Za-z])", initials, out, flags=re.I)
+    return out
+
+
+def bst_attendance_table(initials, start, end):
+    """[{week_label, days: [cell or None]*5}] for the report, plus counts. Returns (table, problem)."""
+    if _smartar_client() is None:
+        return None, "Can't reach the Behaviour Support Tool's database right now."
+    stu = bst_find_student(initials)
+    if not stu:
+        return None, f"No student filed as {initials} in the Behaviour Support Tool."
+    sid = str(stu["id"])
+    rows = _bst_rows("student_attendance", sid)
+    if not rows:
+        return None, f"No attendance has been recorded for {initials} in the Behaviour Support Tool."
+    state = _bst_att_state(rows[0])
+    end = min(end, date.today())
+    if not start or start > end:
+        return None, "Set the placement start and end dates in the sidebar first."
+    quick, crit = defaultdict(int), defaultdict(list)
+    for r in _bst_rows("incidents", sid):
+        d_ = _d(r.get("date"))
+        if d_:
+            quick[d_] += 1
+    for r in _bst_rows("critical_incidents", sid):
+        d_ = _d(r.get("date") or r.get("incident_date") or r.get("created_at"))
+        if d_:
+            desc = " / ".join(_flat(r.get("primary_behaviour"))) or "Critical incident"
+            crit[d_].append(re.sub(r"\s+", " ", desc).strip()[:110])
+    weeks, counts = {}, {"attended": 0, "school_days": 0, "absent": 0}
+    d_ = start - timedelta(days=start.weekday())
+    while d_ <= end:
+        in_term = (d_.year not in BST_TERM_STARTS) or _bst_term_week(d_) is not None     # skip school holidays
+        if d_.weekday() < 5 and d_ >= start and in_term:
+            day = _bst_att_day(state, d_)
+            exc = day["exc"] or {}
+            reason, note = exc.get("reason", "") or "", _scrub_names(exc.get("note", ""), stu, initials)
+            cis = crit.get(d_, [])
+            status = "No school" if day["no_school"] else ("Absent" if exc.get("type") == "Absent" else
+                     ("Attended" if day["actual"] else ""))
+            event = ""
+            if reason == BST_CI_REASON or cis:
+                event = "CI"
+            elif reason == "Re-entry meeting":
+                event = "Re-entry meeting"
+            elif reason in BST_DAYEND_REASONS:
+                event = reason
+            elif exc.get("type") == "Arrived late" or exc.get("late_min"):
+                event = "Late arrival"
+            rec = {"no_school": day["no_school"], "status": status, "event": event, "note": note,
+                   "times": "" if day["no_school"] else _bst_day_times(day, exc),
+                   "ci_description": _scrub_names("; ".join(c for c in cis if c), stu, initials),
+                   "late_min": int(_num(exc.get("late_min"))), "quick_incidents": quick.get(d_, 0)}
+            if not day["no_school"] and (day["planned"] or day["actual"] or status == "Absent"):
+                counts["school_days"] += 1
+                counts["attended"] += status == "Attended"
+                counts["absent"] += status == "Absent"
+            ws = d_ - timedelta(days=d_.weekday())
+            tw = _bst_term_week(ws)
+            wk = weeks.setdefault(ws.isoformat(), {"week_label": f"{tw[0]} Wk {tw[1]}" if tw else f"Wk of {ws.strftime('%-d %b')}",
+                                                   "days": [None] * 5})
+            wk["days"][d_.weekday()] = {"label": d_.strftime("%-d %B") if d_.day == 1 else str(d_.day),
+                                        "lines": _bst_cell_lines(rec)}
+        d_ += timedelta(days=1)
+    if not weeks:
+        return None, "No school days in the placement dates."
+    return {"weeks": [weeks[k] for k in sorted(weeks)], "from": start.isoformat(), "to": end.isoformat(),
+            "counts": counts}, None
+
+
+def pull_attendance_table(initials, start, end):
+    tbl, problem = bst_attendance_table(initials, start, end)
+    if problem:
+        st.session_state["tr_att_table_msg"] = problem
+        return
+    st.session_state["tr_att_table"] = tbl
+    st.session_state["tr_att_table_on"] = True
+    st.session_state["tr_att_table_msg"] = ""
+    if not st.session_state.get("tr_days_att") and tbl["counts"]["school_days"]:
+        st.session_state["tr_days_att"] = tbl["counts"]["attended"]
+        st.session_state["tr_days_tot"] = tbl["counts"]["school_days"]
+
+
+def att_table_html(tbl):
+    import html as _h
+    col = {k: "#" + v for k, v in ATT_TABLE_STYLE.items()}
+    out = ["<table style='width:100%;border-collapse:collapse;font-size:0.8rem'><tr>" +
+           "".join(f"<th style='background:#a9d18e;border:1px solid #444;padding:5px'>{h}</th>"
+                   for h in ["Week"] + BST_DAYS_FULL) + "</tr>"]
+    for wk in tbl["weeks"]:
+        row = (f"<tr><td style='background:#e2f0d9;border:1px solid #444;padding:5px;text-align:center;font-weight:600'>"
+               f"{_h.escape(wk['week_label'])}</td>")
+        for cell in wk["days"]:
+            if not cell:
+                row += "<td style='border:1px solid #444;background:#f3f4f6'></td>"
+                continue
+            body = "".join(f"<div style='color:{col.get(s, '#111')};{'font-weight:700;' if s in ('ci', 'absent', 'event') else ''}'>"
+                           f"{_h.escape(t)}</div>" for t, s in cell["lines"])
+            row += (f"<td style='border:1px solid #444;padding:4px;vertical-align:top'><div style='font-size:0.7rem;"
+                    f"color:#6b7280'>{cell['label']}</div>{body}</td>")
+        out.append(row + "</tr>")
+    return "".join(out) + "</table>"
+
+
+def pull_student_voice(initials):
+    """Append the student voice recorded in the Behaviour Support support plan / starting profile."""
+    stu = bst_find_student(initials) if _smartar_client() is not None else None
+    if not stu:
+        st.session_state["tr_voice_msg"] = f"No student filed as {initials} in the Behaviour Support Tool."
+        return
+    bits = []
+    plan = (_bst_rows("support_plans", str(stu["id"])) or [{}])[0]
+    if str(plan.get("student_voice") or "").strip():
+        bits.append(str(plan["student_voice"]).strip())
+    prof = ((_bst_rows("starting_profiles", str(stu["id"])) or [{}])[0].get("profile") or {})
+    for k in ("student_voice", "what_student_says"):
+        if str(prof.get(k) or "").strip():
+            bits.append(str(prof[k]).strip())
+    if not bits:
+        st.session_state["tr_voice_msg"] = f"No student voice is recorded in {initials}'s Behaviour Support plan."
+        return
+    _append("tr_voice_text", _scrub_names("\n\n".join(dict.fromkeys(bits)), stu, initials))
+    st.session_state["tr_voice_msg"] = ""
 
 # ══════════════════════════════════════════════════════════════════════════════
 # BEHAVIOUR SUPPORT TOOL DATA + AI DRAFTS
@@ -2597,7 +3048,7 @@ def personalise(rep_, initials, preferred, full_name, school):
     full name. Never saved anywhere — built only for the download."""
     rx = re.compile(r"(?<![A-Za-z])" + re.escape(initials) + r"(?![A-Za-z])")
     skip = {"initials", "type", "sections", "program", "pie", "id", "archived_at", "first", "last",
-            "tracking_period", "current", "updated_at"}
+            "tracking_period", "current", "updated_at", "pages", "style", "kind", "id"}
 
     def walk(v, key=None):
         if key in skip:
@@ -2607,6 +3058,8 @@ def personalise(rep_, initials, preferred, full_name, school):
         if isinstance(v, dict):
             return {k: walk(x, k) for k, x in v.items()}
         if isinstance(v, list):
+            if len(v) == 2 and all(isinstance(x, str) for x in v) and v[1] in ATT_TABLE_STYLE:
+                return [walk(v[0]), v[1]]
             return [walk(x) for x in v]
         if isinstance(v, tuple):
             return tuple(walk(x) for x in v)
@@ -2634,6 +3087,12 @@ def apply_record(rec, note=None):
         st.session_state[f"tr_{name}_base"] = rows
         st.session_state[f"tr_{name}_latest"] = rows
     st.session_state["tr_report_type"] = rec.get("report_type") or data.get("report_type") or "Review Report"
+    # reports saved before recommendations became an appendix / before Student Voice existed
+    valid = {k for k, _ in SECTIONS}
+    if isinstance(data.get("sections"), list):
+        st.session_state["tr_sections"] = [k for k in data["sections"] if k in valid]
+    if "app_recs" not in data and str(data.get("recs") or "").strip():
+        st.session_state["tr_app_recs"] = True
     st.session_state["tr_record_id"] = rec.get("id")
     st.session_state["tr_record_type"] = st.session_state["tr_report_type"]
     st.session_state["tr_record_saved"] = rec.get("updated_at")
@@ -3169,6 +3628,23 @@ with tab1:
              "trend": g_["stats"]["trend"], "observations": g_["stats"]["total"]} for g_ in pulled_goals]
         st.markdown("---")
 
+    # ── STUDENT VOICE (optional) ─────────────────────────────────────────────
+    if inc("voice"):
+        st.subheader("🗣️ Student Voice (optional)")
+        st.caption(VOICE_BLURB + " Type it in, pull it from the Behaviour Support plan, and/or upload a photo of the "
+                   "student's writing or a document. Leave it empty and it won't appear on the report.")
+        st.button("📥 Pull student voice from the Behaviour Support plan", key="tr_voice_pull",
+                  on_click=pull_student_voice, args=(INITIALS,))
+        if st.session_state.get("tr_voice_msg"):
+            st.warning(st.session_state["tr_voice_msg"])
+        st.text_area("In the student's words", key="tr_voice_text", height=120,
+                     placeholder="e.g. \"I'm proud that I can… What helps me is… I want my new teacher to know…\"")
+        with st.expander(f"📎 Uploads — photos of writing, drawings, documents ({len(S('voice_files') or [])})",
+                         expanded=bool(S("voice_files"))):
+            upload_panel("tr_voice_files", "voice", False, "Caption (optional)",
+                         "A photo of the student's writing or work, a PDF, a Word document or a text file.")
+        st.markdown("---")
+
     # ── ATTENDANCE & SUMMARY ─────────────────────────────────────────────────
     if inc("attendance"):
         st.subheader("📅 Attendance")
@@ -3180,16 +3656,45 @@ with tab1:
         ac2.metric("Attendance Rate", f"{(days_attended / total_days * 100 if total_days else 0):.1f}%")
         st.text_area("Attendance comments (optional)", key="tr_att_comment", height=80,
                      placeholder="e.g. attendance pattern, part-time timetable, early finishes…")
+        st.button("📋 Pull attendance table from the Behaviour Support Tool" if not S("att_table") else
+                  "🔄 Refresh attendance table from the Behaviour Support Tool", key="tr_att_pull",
+                  on_click=pull_attendance_table, args=(INITIALS, placement_start, placement_end),
+                  help="The week-by-week (Mon–Fri) table from the Behaviour Support Tool, for the placement dates in the sidebar.")
+        if S("att_table_msg"):
+            st.warning(S("att_table_msg"))
+        if S("att_table"):
+            tb_ = S("att_table")
+            st.checkbox(f"Include the attendance table in the report ({fmt_date(tb_['from'])} – {fmt_date(tb_['to'])})",
+                        key="tr_att_table_on")
+            with st.expander("👁️ Attendance table", expanded=False):
+                st.markdown(att_table_html(tb_), unsafe_allow_html=True)
     if inc("summary"):
         st.subheader("📝 Overall Progress Summary")
         ai_draft_box("summary", INITIALS, placement_start, placement_end)
         st.text_area("Overall Progress Summary", key="tr_summary", height=150, label_visibility="collapsed",
                      placeholder="Summarise key achievements, challenges, and demonstrated growth...")
-    if inc("recommendations"):
-        st.subheader("➡️ Transition Recommendations")
-        ai_draft_box("recommendations", INITIALS, placement_start, placement_end)
-        st.text_area("Transition Recommendations", key="tr_recs", height=150, label_visibility="collapsed",
-                     placeholder="Specific strategies, accommodations, or supports recommended for successful transition...")
+    # ── APPENDICES (optional, any report type) ───────────────────────────────
+    st.markdown("---")
+    st.subheader("📎 Appendices (optional)")
+    st.caption("Extras added at the end of the report, each under its own Appendix heading.")
+    st.checkbox("Include **Transition Recommendations** as an appendix", key="tr_app_recs")
+    if S("app_recs"):
+        with st.container(border=True):
+            st.markdown("**➡️ Transition Recommendations**")
+            ai_draft_box("recommendations", INITIALS, placement_start, placement_end)
+            st.text_area("Transition Recommendations", key="tr_recs", height=150, label_visibility="collapsed",
+                         placeholder="Specific strategies, accommodations, or supports recommended for successful transition...")
+    st.markdown("**Text appendices**")
+    for aid in list(S("apps") or []):
+        with st.container(border=True):
+            t1, t2 = st.columns([6, 1])
+            t1.text_input("Appendix title", key=f"tr_app_title_{aid}", placeholder="e.g. Speech Pathology summary")
+            t2.button("✕ Remove", key=f"tr_app_rm_{aid}", on_click=remove_text_appendix, args=(aid,))
+            st.text_area("Appendix text", key=f"tr_app_text_{aid}", height=120)
+    st.button("➕ Add a text appendix", key="tr_app_add", on_click=add_text_appendix)
+    st.markdown("**Uploads (visuals, work samples, documents)**")
+    upload_panel("tr_uploads", "app", True, "Appendix title (required)",
+                 "Photos or scans of work, visuals, a PDF, a Word document or a text file. Each becomes its own appendix.")
 attendance_pct = days_attended / total_days * 100 if total_days else 0
 
 
@@ -3251,7 +3756,25 @@ def collect_report(name_on_report):
         "goals": report_goals,
         "attendance": (days_attended, total_days, attendance_pct),
         "summary": S("summary", ""), "recs": S("recs", ""), "att_comment": S("att_comment", "") or "",
+        "att_table": S("att_table") if (inc("attendance") and S("att_table_on")) else None,
+        "voice_text": (S("voice_text") or "") if inc("voice") else "",
+        "voice_files": (S("voice_files") or []) if inc("voice") else [],
+        "appendices": collect_appendices(),
     }
+
+
+def collect_appendices():
+    out = []
+    if S("app_recs"):
+        out.append({"title": "Transition Recommendations", "text": S("recs", "") or "", "pages": [], "bullets": True})
+    for aid in S("apps") or []:
+        t_, x_ = (S(f"app_title_{aid}") or "").strip(), (S(f"app_text_{aid}") or "").strip()
+        if t_ or x_:
+            out.append({"title": t_ or "Additional information", "text": x_, "pages": []})
+    for it in S("uploads") or []:
+        out.append({"title": it.get("title") or it.get("name") or "Attachment", "text": it.get("text") or "",
+                    "pages": it.get("pages") or []})
+    return out
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -3377,6 +3900,57 @@ def build_docx(rep):
             if ln.startswith("•"):
                 p.paragraph_format.left_indent = Cm(0.5)
                 p.paragraph_format.first_line_indent = Cm(-0.4)
+
+    def picture(b64, max_w_cm=17.0, max_h_cm=21.5):
+        from PIL import Image as _Im
+        raw = base64.b64decode(b64)
+        try:
+            w_px, h_px = _Im.open(BytesIO(raw)).size
+        except Exception:
+            return
+        w_cm = max_w_cm
+        if h_px / max(w_px, 1) * w_cm > max_h_cm:
+            w_cm = max_h_cm * w_px / max(h_px, 1)
+        pp = doc.add_paragraph()
+        pp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        pp.add_run().add_picture(BytesIO(raw), width=Cm(w_cm))
+
+    def att_table(tbl_):
+        widths = [Cm(1.9)] + [Cm(3.1)] * 5
+        t_ = doc.add_table(rows=1, cols=6)
+        t_.style = "Table Grid"
+        t_.autofit = False
+        hdr_ = t_.rows[0]
+        trPr = hdr_._tr.get_or_add_trPr(); th = OxmlElement("w:tblHeader"); th.set(qn("w:val"), "true"); trPr.append(th)
+        for i_, h_ in enumerate(["Week"] + BST_DAYS_FULL):
+            c_ = hdr_.cells[i_]; c_.width = widths[i_]; shade(c_, "A9D18E")
+            c_.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            r_ = c_.paragraphs[0].add_run(h_); r_.bold = True; r_.font.size = Pt(8)
+        for wk in tbl_["weeks"]:
+            row_ = t_.add_row()
+            trPr = row_._tr.get_or_add_trPr(); cs = OxmlElement("w:cantSplit"); trPr.append(cs)
+            for i_ in range(6):
+                row_.cells[i_].width = widths[i_]
+            wc = row_.cells[0]; shade(wc, "E2F0D9")
+            wc.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            wr = wc.paragraphs[0].add_run(wk["week_label"]); wr.bold = True; wr.font.size = Pt(8)
+            for i_, cell in enumerate(wk["days"]):
+                c_ = row_.cells[i_ + 1]
+                if not cell:
+                    shade(c_, "F3F4F6"); continue
+                lb = c_.paragraphs[0].add_run(cell["label"]); lb.font.size = Pt(7)
+                lb.font.color.rgb = RGBColor(0x6B, 0x72, 0x80)
+                c_.paragraphs[0].paragraph_format.space_after = Pt(0)
+                for txt, sty in cell["lines"]:
+                    q = c_.add_paragraph(); q.paragraph_format.space_after = Pt(0)
+                    rr = q.add_run(txt); rr.font.size = Pt(7.5)
+                    rr.font.color.rgb = hex_rgb(ATT_TABLE_STYLE.get(sty, "111827"))
+                    rr.bold = sty in ("ci", "absent", "event")
+        k_ = doc.add_paragraph()
+        k_.paragraph_format.space_before = Pt(3)
+        kr = k_.add_run("From the Behaviour Support Tool. Times are shown where known; otherwise the sessions attended "
+                        "(AM, Mid, PM). CI = critical incident. Days with no entry follow the student's usual weekly pattern.")
+        kr.italic = True; kr.font.size = Pt(7.5); kr.font.color.rgb = RGBColor(0x77, 0x77, 0x77)
 
     def table(rows, header=True, widths=None, size=9.5):
         t = doc.add_table(rows=len(rows), cols=len(rows[0]))
@@ -3598,60 +4172,114 @@ def build_docx(rep):
         land.orientation = WD_ORIENT.LANDSCAPE
         land.page_width, land.page_height = Cm(29.7), Cm(21.0)
         land.left_margin = land.right_margin = Cm(1.5)
-        land.top_margin = land.bottom_margin = Cm(1.4)
+        land.top_margin = land.bottom_margin = Cm(1.2)
         heading("Regulation Profile (Window of Tolerance)")
         zones = rep["wot_zones"] or []
         if rep["wot"] and zones:
+            # Pick the largest text size at which the whole table (plus the note and comments) fits on this
+            # one landscape page. Rough line maths: Calibri averages ~0.0185 cm per character per point.
+            col_w = [4.6, 7.4, 7.4, 7.4]                       # cm — 26.8 of the 26.9 cm between the margins
+            avail = 21.0 - 1.2 - 1.2 - 2.2                     # page − margins − header bar & gaps
+            reg_txt = (rep["regulation"] or "").strip()
+
+            def lines_for(text, width_cm, pt):
+                cpl = max(8, int((width_cm - 0.25) / (WOT_CHAR_CM * pt)))
+                return sum(max(1, -(-len(part) // cpl)) for part in str(text).split("\n"))
+
+            def table_height(pt, with_desc, with_reg):
+                lh = pt * WOT_LINE_K * 0.0353
+                h = lh * 1.2 + 0.12                            # header row
+                for z in zones:
+                    left = lh * 1.15 + lh * 0.9 + (lines_for(WOT_ZONE_DESC.get(z["id"], ""), col_w[0], pt - 1.5)
+                                                   * (pt - 1.5) * WOT_LINE_K * 0.0353 if with_desc else 0)
+                    cols_ = [sum(lines_for("• " + it, w_, pt) for it in (rep["wot"]["data"][z["id"]][c_] or ["—"])) * lh
+                             for (c_, _), w_ in zip(WOT_COLS, col_w[1:])]
+                    h += max([left] + cols_) + 0.14
+                h += 0.55                                      # source note
+                if with_reg and reg_txt:
+                    rpt = pt + 0.5
+                    h += lines_for(reg_txt, sum(col_w) - 0.5, rpt) * rpt * WOT_LINE_K * 0.0353 + 0.3
+                return h
+            # 1st choice: table + comments on the page at a readable size; otherwise keep the TABLE on one page
+            # (comments then continue on the next page)
+            fit_pt, with_desc = 5.5, False
+            found = False
+            for with_desc, with_reg, min_pt in ((True, True, 7.0), (False, True, 7.0), (True, False, 6.5), (False, False, 5.5)):
+                for pt in (10.0, 9.5, 9.0, 8.5, 8.0, 7.5, 7.0, 6.5, 6.0, 5.5):
+                    if pt < min_pt:
+                        break
+                    if table_height(pt, with_desc, with_reg) <= avail:
+                        fit_pt, found = pt, True
+                        break
+                if found:
+                    break
+            fs = fit_pt
             t = doc.add_table(rows=1 + len(zones), cols=4)
+            t.autofit = False
+            tblPr = t._tbl.tblPr
+            mar = OxmlElement("w:tblCellMar")
+            for side, val in (("top", 30), ("bottom", 30), ("left", 70), ("right", 70)):
+                e_ = OxmlElement(f"w:{side}"); e_.set(qn("w:w"), str(val)); e_.set(qn("w:type"), "dxa"); mar.append(e_)
+            tblPr.append(mar)
             t.style = "Table Grid"
             hdr = ["Zone"] + [lbl for _, lbl in WOT_COLS]
             for j, h in enumerate(hdr):
                 c = t.cell(0, j)
                 run = c.paragraphs[0].add_run(h)
                 run.bold = True
-                run.font.size = Pt(9)
+                run.font.size = Pt(fs + 0.5)
                 shade(c, "EEF2EC")
             for i, z in enumerate(zones, start=1):
                 zc = t.cell(i, 0)
                 zr = zc.paragraphs[0].add_run(z["name"])
                 zr.bold = True
-                zr.font.size = Pt(9.5)
+                zr.font.size = Pt(fs + 1)
                 zr.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
                 tg = zc.add_paragraph().add_run(z["tag"])
                 tg.italic = True
-                tg.font.size = Pt(8)
+                tg.font.size = Pt(fs - 0.5)
                 tg.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
-                zd = zc.add_paragraph().add_run(WOT_ZONE_DESC.get(z["id"], ""))
-                zd.font.size = Pt(7.5)
-                zd.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+                if with_desc:
+                    zd = zc.add_paragraph().add_run(WOT_ZONE_DESC.get(z["id"], ""))
+                    zd.font.size = Pt(max(5.5, fs - 1.5))
+                    zd.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
                 shade(zc, z["color"])
                 for j, (col, _) in enumerate(WOT_COLS, start=1):
                     c = t.cell(i, j)
                     shade(c, z["tint"])
                     items = rep["wot"]["data"][z["id"]][col]
                     if not items:
-                        c.paragraphs[0].add_run("—").font.size = Pt(9)
+                        c.paragraphs[0].add_run("—").font.size = Pt(fs)
                     for k, it in enumerate(items):
                         p = c.paragraphs[0] if k == 0 else c.add_paragraph()
                         run = p.add_run("• " + it)
-                        run.font.size = Pt(8.5)
+                        run.font.size = Pt(fs)
             for row in t.rows:
-                for j_, w_ in enumerate([Cm(5.0), Cm(7.2), Cm(7.2), Cm(7.2)]):
-                    row.cells[j_].width = w_
-            keep_together(t, with_next_rows=False)
+                for j_, w_ in enumerate(col_w):
+                    row.cells[j_].width = Cm(w_)
+                for cell_ in row.cells:
+                    for par_ in cell_.paragraphs:
+                        par_.paragraph_format.space_before = Pt(0)
+                        par_.paragraph_format.space_after = Pt(0)
+                        par_.paragraph_format.line_spacing = 1.0
+            keep_together(t, with_next_rows=True)
             note = doc.add_paragraph()
+            note.paragraph_format.space_before = Pt(2)
+            note.paragraph_format.space_after = Pt(2)
             nr = note.add_run(f"From the Window of Tolerance Builder ({rep['initials']}), "
                               f"updated {fmt_date(rep['wot']['updated_at'])}.")
             nr.italic = True
-            nr.font.size = Pt(8)
+            nr.font.size = Pt(7.5)
             nr.font.color.rgb = RGBColor(0x77, 0x77, 0x77)
-            if rep["regulation"].strip():
-                para(rep["regulation"])
+            if reg_txt:
+                rp_ = para(reg_txt)
+                for r_ in rp_.runs:
+                    r_.font.size = Pt(fs + 0.5)
         else:
             para(rep["regulation"])
 
-    if "regulation" in rep["sections"] and any(k in rep["sections"] for k in
-                                                ("smartar", "attendance", "summary", "recommendations")):
+    if "regulation" in rep["sections"] and (any(k in rep["sections"] for k in ("smartar", "voice", "attendance", "summary"))
+                                            or rep["appendices"]):
         port = doc.add_section(WD_SECTION.NEW_PAGE)
         port.orientation = WD_ORIENT.PORTRAIT
         port.page_width, port.page_height = Cm(21.0), Cm(29.7)
@@ -3752,6 +4380,24 @@ def build_docx(rep):
             keep_together(card)
             doc.add_paragraph().paragraph_format.space_after = Pt(2)
 
+    # ── student voice (only if something was entered) ──
+    if "voice" in rep["sections"] and (rep["voice_text"].strip() or rep["voice_files"]):
+        heading("Student Voice")
+        blurb(VOICE_BLURB)
+        if rep["voice_text"].strip():
+            for ln in [x.strip() for x in rep["voice_text"].split("\n") if x.strip()]:
+                vp = para(ln)
+                vp.paragraph_format.left_indent = Cm(0.4)
+                for r_ in vp.runs:
+                    r_.italic = True
+        for it in rep["voice_files"]:
+            if it.get("title"):
+                sub(it["title"])
+            if it.get("text"):
+                paras(it["text"])
+            for pg in it.get("pages") or []:
+                picture(pg, max_h_cm=12.0)
+
     # ── attendance + summaries ──
     if "attendance" in rep["sections"]:
         heading("Attendance")
@@ -3759,12 +4405,23 @@ def build_docx(rep):
         para(f"{rep['name']} attended the Learning Program {a} of {t_} days ({pct:.1f}%).")
         if rep.get("att_comment", "").strip():
             para(rep["att_comment"])
+        if rep.get("att_table"):
+            sub("Attendance by week")
+            att_table(rep["att_table"])
     if "summary" in rep["sections"]:
         heading("Overall Progress Summary")
         paras(rep["summary"])
-    if "recommendations" in rep["sections"]:
-        heading("Transition Recommendations")
-        paras(rep["recs"])
+    # ── appendices: each on its own page ──
+    for n_, ap in enumerate(rep["appendices"]):
+        doc.add_page_break()
+        letter = chr(65 + n_) if n_ < 26 else str(n_ + 1)
+        heading(f"Appendix {letter}: {ap['title']}")
+        if ap.get("text", "").strip() or not ap.get("pages"):
+            paras(ap.get("text", ""))
+        for k_, pg in enumerate(ap.get("pages") or []):
+            if k_:
+                doc.add_page_break()
+            picture(pg, max_h_cm=22.5 if k_ or not ap.get("text") else 18.0)
 
     foot = sec.footer.paragraphs[0]
     foot.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -3881,18 +4538,38 @@ with tab2:
             st.write("**Current level:** " + LEVEL_EMOJI[g["current"]] + " " + g["current"]
                      + (f" — {g['gas'][g['current']]}" if g["gas"].get(g["current"]) else ""))
 
+    if "voice" in rep["sections"] and (rep["voice_text"].strip() or rep["voice_files"]):
+        st.markdown("#### Student Voice")
+        st.caption(VOICE_BLURB)
+        if rep["voice_text"].strip():
+            st.markdown("\n\n".join(f"> *{x.strip()}*" for x in rep["voice_text"].split("\n") if x.strip()))
+        for it in rep["voice_files"]:
+            if it.get("title"):
+                st.markdown(f"**{it['title']}**")
+            if it.get("text"):
+                st.write(it["text"])
+            for pg in it.get("pages") or []:
+                st.image(base64.b64decode(pg), width=420)
+
     if "attendance" in rep["sections"]:
         st.markdown("#### Attendance")
         a, t_, pct = rep["attendance"]
         st.write(f"{a} of {t_} days ({pct:.1f}%)")
         if rep.get("att_comment"):
             st.write(rep["att_comment"])
+        if rep.get("att_table"):
+            st.markdown(att_table_html(rep["att_table"]), unsafe_allow_html=True)
     if "summary" in rep["sections"]:
         st.markdown("#### Overall Progress Summary")
         st.write(rep["summary"] or "_Not entered._")
-    if "recommendations" in rep["sections"]:
-        st.markdown("#### Transition Recommendations")
-        st.write(rep["recs"] or "_Not entered._")
+    for n_, ap in enumerate(rep["appendices"]):
+        st.markdown(f"#### Appendix {chr(65 + n_) if n_ < 26 else n_ + 1}: {ap['title']}")
+        if ap.get("text"):
+            st.write(ap["text"])
+        for pg in ap.get("pages") or []:
+            st.image(base64.b64decode(pg), use_container_width=True)
+        if not ap.get("text") and not ap.get("pages"):
+            st.write("_Not entered._")
     if not rep["sections"]:
         st.info("Only the cover page is included so far — choose sections in the sidebar.")
 
@@ -3908,10 +4585,13 @@ with tab3:
         "numeracy": bool(rep["biin"] or rep["numeracy"]), "hits": bool(rep["hits"]),
         "restorative": bool(rep["rp"] or rep["rp_comments"]),
         "regulation": bool(rep["regulation"] or rep["wot_zones"]), "smartar": bool(rep["goals"]),
-        "attendance": rep["attendance"][0] > 0, "summary": bool(rep["summary"]), "recommendations": bool(rep["recs"]),
+        "attendance": rep["attendance"][0] > 0, "summary": bool(rep["summary"]),
+        "voice": bool(rep["voice_text"].strip() or rep["voice_files"]),
     }
     checks = [("Cover page — LC Teacher", bool(rep["teacher"])), ("Cover page — Enrolled School", bool(rep["school"]))]
-    checks += [(SECTION_LABEL[k], filled[k]) for k, _ in SECTIONS if k in rep["sections"]]
+    checks += [(SECTION_LABEL[k], filled[k]) for k, _ in SECTIONS if k in rep["sections"] and k != "voice"]
+    checks += [(f"Appendix {chr(65 + n_) if n_ < 26 else n_ + 1}: {ap['title']}", bool(ap.get("text") or ap.get("pages")))
+               for n_, ap in enumerate(rep["appendices"])]
     cc = st.columns(2)
     for i, (label, ok) in enumerate(checks):
         cc[i % 2].markdown(("✅ " if ok else "⬜ ") + label)
