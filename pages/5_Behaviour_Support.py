@@ -82,7 +82,48 @@ def _student_archive_initials(student) -> str:
     raw = (student.get("name") or "").strip()
     if raw and " " not in raw and raw.replace("-", "").isalpha() and 2 <= len(raw) <= 4:
         return raw.upper()
-    return initials_from_name(raw) or ""
+    base = initials_from_name(raw) or ""
+    # Students entered directly in this tool (full name, not a register code) can be filed in the Student
+    # Register under a longer code — a middle initial, or letters added to avoid a clash (e.g. LN → LNM).
+    # Use the Register's own code when it can be matched safely, so the Window of Tolerance Builder,
+    # Document Archive and Transition Report Builder all find the student.
+    return _register_code_for(raw, base, student) or base
+
+
+def _register_codes() -> set:
+    """Active codes in the Student Register (cached 5 minutes). Empty set if it can't be reached."""
+    ck, now = "_bst_register_codes", datetime.now().timestamp()
+    hit = st.session_state.get(ck)
+    if hit and now - hit[0] < 300:
+        return hit[1]
+    codes = set()
+    try:
+        from archive_utils import _get_client as _reg_client
+        rows = _reg_client().table("student_directory").select("initials,status").execute().data or []
+        codes = {str(r.get("initials") or "").strip().upper() for r in rows
+                 if r.get("initials") and str(r.get("status") or "").lower() != "archived"}
+    except Exception:
+        codes = set()
+    if codes:
+        st.session_state[ck] = (now, codes)
+    return codes
+
+
+def _register_code_for(raw: str, base: str, student=None) -> str:
+    codes = _register_codes()
+    if not codes or not base:
+        return ""
+    base = base.upper()
+    words = [w for w in re.split(r"[\s\-]+", raw) if w and w[0].isalpha()]
+    first_last = [(student or {}).get("first_name") or "", (student or {}).get("last_name") or ""]
+    words2 = [w for w in re.split(r"[\s\-]+", " ".join(first_last)) if w and w[0].isalpha()]
+    for cand in ("".join(w[0] for w in words).upper(), "".join(w[0] for w in words2).upper()):
+        if 2 <= len(cand) <= 4 and cand in codes:
+            return cand                      # every name part, e.g. "Lily Nora Martin" → LNM
+    if base in codes:
+        return base                          # the usual 2-letter code
+    longer = sorted(c for c in codes if c.startswith(base) and len(c) > len(base))
+    return longer[0] if len(longer) == 1 else ""   # one LN… code only (e.g. LNM) — never guess between two
 
 # ══════════════════════════════════════════════════════════════════════════
 # SHARED GROQ HELPER
