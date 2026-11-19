@@ -1983,9 +1983,11 @@ def _d(v):
 def _bst_attendance(att_row, start, end):
     """Same counting as the Behaviour Support Tool's attendance_summary(): weekly pattern + dated exceptions."""
     schedule = sorted(att_row.get("schedule") or [], key=lambda v: v.get("from", ""))
-    exceptions = {e.get("date"): e for e in (att_row.get("exceptions") or []) if e.get("date")}
+    exceptions = {str(e.get("date"))[:10]: e for e in (att_row.get("exceptions") or [])
+                  if isinstance(e, dict) and isinstance(e.get("date"), str)}
     for d_ in att_row.get("absent_dates") or []:
-        exceptions.setdefault(d_, {"date": d_, "type": "Absent", "sessions": []})
+        if isinstance(d_, str):
+            exceptions.setdefault(d_[:10], {"date": d_, "type": "Absent", "sessions": []})
 
     def planned(day):
         if day.weekday() > 4:
@@ -2025,6 +2027,43 @@ def _bst_attendance(att_row, start, end):
     return out
 
 
+def _flat(v):
+    """Field values as a list of plain strings — Behaviour Support fields can hold a single value,
+    a list (multi-select), a dict, or JSON text of either."""
+    if v is None or v == "":
+        return []
+    if isinstance(v, str):
+        t = v.strip()
+        if t[:1] in "[{":
+            try:
+                return _flat(json.loads(t))
+            except Exception:
+                pass
+        return [t] if t else []
+    if isinstance(v, dict):
+        for k in ("label", "name", "text", "value", "category"):
+            if v.get(k):
+                return _flat(v[k])
+        return [str(x) for x in v.values() if isinstance(x, (str, int, float)) and str(x).strip()][:1]
+    if isinstance(v, (list, tuple, set)):
+        out = []
+        for x in v:
+            out.extend(_flat(x))
+        return out
+    return [str(v)]
+
+
+def _num(v, default=0.0):
+    """Number from 3, "3", "3 - Moderate" or ["3"]; default if there isn't one."""
+    if isinstance(v, (list, tuple)):
+        v = v[0] if v else None
+    try:
+        return float(v)
+    except Exception:
+        m_ = re.search(r"\d+(\.\d+)?", str(v or ""))
+        return float(m_.group()) if m_ else default
+
+
 def _bst_incident_summary(incidents, criticals, start, end):
     recs = []
     for r in incidents:
@@ -2055,10 +2094,10 @@ def _bst_incident_summary(incidents, criticals, start, end):
     def top(key, rows, n=3):
         cnt = defaultdict(int)
         for r in rows:
-            if r[key]:
-                cnt[r[key]] += 1
+            for v in _flat(r.get(key)):
+                cnt[v] += 1
         return [k for k, _ in sorted(cnt.items(), key=lambda kv: -kv[1])[:n]]
-    avg = lambda rows: round(sum(float(r["severity"] or 0) for r in rows) / len(rows), 1) if rows else None
+    avg = lambda rows: round(sum(_num(r["severity"]) for r in rows) / len(rows), 1) if rows else None
     return {
         "total_incidents": len(recs), "critical_incidents": sum(r["critical"] for r in recs),
         "incidents_per_week_first_half_of_placement": round(len(first) / half_weeks, 1),
@@ -2070,10 +2109,10 @@ def _bst_incident_summary(incidents, criticals, start, end):
         "most_common_locations": top("location", recs), "most_common_days": top("day", recs, 2),
         "likely_functions_of_behaviour": top("function", recs),
         "staff_responses_used": top("response", [r for r in recs if not r["critical"]], 4),
-        "critical_incident_behaviours": [r["critical_behaviour"] for r in recs if r.get("critical_behaviour")][:5],
-        "average_incident_minutes": (round(sum(float(r["minutes"]) for r in recs if r.get("minutes")) /
-                                     max(1, sum(1 for r in recs if r.get("minutes"))), 1)
-                                     if any(r.get("minutes") for r in recs) else None),
+        "critical_incident_behaviours": [b_ for r in recs for b_ in _flat(r.get("critical_behaviour"))][:5],
+        "average_incident_minutes": (round(sum(_num(r["minutes"]) for r in recs if _num(r.get("minutes"))) /
+                                     max(1, sum(1 for r in recs if _num(r.get("minutes")))), 1)
+                                     if any(_num(r.get("minutes")) for r in recs) else None),
         "last_incident": recs[-1]["date"].isoformat(),
         "days_since_last_incident": (end - recs[-1]["date"]).days,
     }
@@ -2120,8 +2159,8 @@ def bst_context(initials, report_start=None, report_end=None):
                "restorative_strategies": list(st.session_state.get("tr_rp") or [])}}
     # never send a name: swap any first/last name held in the Behaviour Support record for the initials
     raw = json.dumps(ctx, default=str)
-    for nm in {stu.get("first_name"), stu.get("last_name")}:
-        nm = (nm or "").strip()
+    for nm in {str(stu.get("first_name") or ""), str(stu.get("last_name") or "")}:
+        nm = nm.strip()
         if len(nm) > 1 and nm != "-" and nm.upper() != initials.upper():
             raw = re.sub(rf"(?<![A-Za-z]){re.escape(nm)}(?![A-Za-z])", initials, raw)
     return json.loads(raw), None
@@ -2234,7 +2273,7 @@ def ai_draft(section, initials, ctx):
                 items.append({"name": nm, "text": str(it["text"]).strip()})
         return {"items": items}
     if section == "recommendations":
-        recs_ = [str(x).strip().lstrip("-•* ").strip() for x in (out.get("items") or []) if str(x).strip()]
+        recs_ = [x.lstrip("-•* ").strip() for x in _flat(out.get("items")) if x.lstrip("-•* ").strip()]
         return {"text": "\n".join(f"• {r_}" for r_ in recs_)} if recs_ else {"text": str(out.get("text") or "").strip()}
     res = {"text": str(out.get("text") or "").strip()}
     if section == "attendance" and ctx.get("attendance"):
