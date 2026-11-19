@@ -19,7 +19,8 @@ import re
 import json
 import statistics
 from io import BytesIO
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+from collections import defaultdict
 
 import streamlit as st
 import pandas as pd
@@ -1782,7 +1783,7 @@ alter table student_reports disable row level security;"""
 SAVED_KEY_RE = re.compile(
     r"^(report_type|sections|report_date|pstart|pend|teacher|school|vocab_(type|pre|post|summary)|numeracy|"
     r"biin_c_\d+|hits|hits_el_\d+|hits_c_\d+|rp|rp_comments|rp_c_\d+|wot|wotz_\w+|regulation|goal_sel|goal_known|"
-    r"g_current_.+|days_att|days_tot|summary|recs|sm_override)$")
+    r"g_current_.+|days_att|days_tot|att_comment|summary|recs|sm_override|finalised)$")
 DATE_KEYS = ("report_date", "pstart", "pend")
 EDITORS = ["sw", "biin0", "biin1", "biin2", "biin3"]
 
@@ -1918,6 +1919,414 @@ def draft_wot_summary(wot, zones_on, who):
         p.append(f"When shut down, {_join(get('hypo', 'interventions'))}.")
     return " ".join(p).replace("..", ".")
 
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BEHAVIOUR SUPPORT TOOL DATA + AI DRAFTS
+# Reads the Behaviour Support Tool's tables (same Supabase project as the
+# SMARTAR Goal Builder) for the student matched by register initials, and asks
+# Groq to draft text for four sections. Drafts are only suggestions: they're shown
+# in italics and nothing goes into the report until staff Add (or Edit, then Add).
+# Only initials and aggregated / staff-authored information are sent — no incident
+# free-text descriptions, no names.
+# ══════════════════════════════════════════════════════════════════════════════
+BST_ATT_SESSIONS = ["Morning", "Middle", "Afternoon"]
+BST_ATT_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+BST_DAYEND_REASONS = ("Day end: avoid potential escalation", "Day end: needs reset", "Day end: negotiated",
+                      "Day end to avoid escalation", "Day end: needs reset, negotiated time")
+BST_PLAN_FIELDS = ["strengths", "interests", "purpose", "early_warning_signs", "proactive_strategies_additional",
+                   "teaching_strategies", "response_early_signs", "response_escalation", "post_incident_repair",
+                   "reinforcement", "adjustments_supports", "short_term_goals", "student_voice", "recovery_time"]
+
+
+def _bst_code(row):
+    """Register code for a Behaviour Support student — same rule the tool uses for the Document Archive."""
+    raw = (row.get("name") or "").strip()
+    if raw and " " not in raw and raw.replace("-", "").isalpha() and 2 <= len(raw) <= 4:
+        return raw.upper()
+    first, last = (row.get("first_name") or "").strip(), (row.get("last_name") or "").strip()
+    parts = [p for p in (f"{first} {last}".split() if first else raw.split()) if p and p != "-"]
+    return "".join(p[0].upper() for p in parts[:2])
+
+
+def bst_find_student(initials):
+    c = _smartar_client()
+    if c is None:
+        return None
+    try:
+        rows = c.table("students").select("*").execute().data or []
+    except Exception:
+        return None
+    hits = [r for r in rows if _bst_code(r) == initials.upper()]
+    hits.sort(key=lambda r: bool(r.get("archived")))          # current placement first
+    return hits[0] if hits else None
+
+
+def _bst_rows(table, student_id, order=None):
+    c = _smartar_client()
+    try:
+        q = c.table(table).select("*").eq("student_id", str(student_id))
+        if order:
+            q = q.order(order)
+        return q.execute().data or []
+    except Exception:
+        return []
+
+
+def _d(v):
+    try:
+        return date.fromisoformat(str(v)[:10])
+    except Exception:
+        return None
+
+
+def _bst_attendance(att_row, start, end):
+    """Same counting as the Behaviour Support Tool's attendance_summary(): weekly pattern + dated exceptions."""
+    schedule = sorted(att_row.get("schedule") or [], key=lambda v: v.get("from", ""))
+    exceptions = {e.get("date"): e for e in (att_row.get("exceptions") or []) if e.get("date")}
+    for d_ in att_row.get("absent_dates") or []:
+        exceptions.setdefault(d_, {"date": d_, "type": "Absent", "sessions": []})
+
+    def planned(day):
+        if day.weekday() > 4:
+            return []
+        if not schedule:
+            return list(BST_ATT_SESSIONS)
+        chosen = schedule[0]
+        for v in schedule:
+            if v.get("from", "") <= day.isoformat():
+                chosen = v
+        return list((chosen.get("days") or {}).get(BST_ATT_DAYS[day.weekday()], []))
+
+    out = {"expected_days": 0, "days_attended": 0, "absent_days": 0, "early_finishes": 0,
+           "day_ends_to_avoid_escalation": 0, "late_arrivals": 0, "part_time_pattern": False}
+    day = start
+    while day <= end:
+        exc = exceptions.get(day.isoformat())
+        pl = planned(day)
+        if pl and set(pl) != set(BST_ATT_SESSIONS):
+            out["part_time_pattern"] = True
+        if not (exc and exc.get("type") == "No school") and pl:
+            out["expected_days"] += 1
+            actual = pl
+            if exc:
+                actual = [] if exc.get("type") == "Absent" else [x for x in BST_ATT_SESSIONS if x in (exc.get("sessions") or [])]
+                if exc.get("type") == "Absent":
+                    out["absent_days"] += 1
+                if exc.get("type") == "Arrived late" or exc.get("late_min"):
+                    out["late_arrivals"] += 1
+                if exc.get("type") == "Finished early":
+                    out["early_finishes"] += 1
+                    if exc.get("reason") in BST_DAYEND_REASONS:
+                        out["day_ends_to_avoid_escalation"] += 1
+            if actual:
+                out["days_attended"] += 1
+        day += timedelta(days=1)
+    return out
+
+
+def _bst_incident_summary(incidents, criticals, start, end):
+    recs = []
+    for r in incidents:
+        dt = _d(r.get("date"))
+        if dt and start <= dt <= end:
+            recs.append({"date": dt, "severity": r.get("severity") or 0, "behaviour": r.get("behaviour_type") or "",
+                         "trigger": r.get("antecedent") or "", "session": r.get("session") or "", "critical": False})
+    for r in criticals:
+        dt = _d(r.get("created_at"))
+        if dt and start <= dt <= end:
+            recs.append({"date": dt, "severity": r.get("severity") or 5, "behaviour": "Critical incident",
+                         "trigger": r.get("primary_context") or "", "session": "", "critical": True})
+    if not recs:
+        return {"total_incidents": 0}
+    recs.sort(key=lambda x: x["date"])
+    weeks = max(1, ((end - start).days + 1) / 7)
+    mid = start + (end - start) / 2
+    first = [r for r in recs if r["date"] <= mid]
+    second = [r for r in recs if r["date"] > mid]
+    half_weeks = max(1, weeks / 2)
+
+    def top(key, rows, n=3):
+        cnt = defaultdict(int)
+        for r in rows:
+            if r[key]:
+                cnt[r[key]] += 1
+        return [k for k, _ in sorted(cnt.items(), key=lambda kv: -kv[1])[:n]]
+    avg = lambda rows: round(sum(float(r["severity"] or 0) for r in rows) / len(rows), 1) if rows else None
+    return {
+        "total_incidents": len(recs), "critical_incidents": sum(r["critical"] for r in recs),
+        "incidents_per_week_first_half_of_placement": round(len(first) / half_weeks, 1),
+        "incidents_per_week_second_half_of_placement": round(len(second) / half_weeks, 1),
+        "critical_first_half": sum(r["critical"] for r in first), "critical_second_half": sum(r["critical"] for r in second),
+        "average_severity_first_half": avg(first), "average_severity_second_half": avg(second),
+        "most_common_behaviours": top("behaviour", [r for r in recs if not r["critical"]]),
+        "most_common_triggers": top("trigger", recs), "most_common_session": (top("session", recs, 1) or [""])[0],
+    }
+
+
+def bst_context(initials, report_start=None, report_end=None):
+    """Everything the AI drafts are allowed to use, for one student. Returns (context, problem)."""
+    if _smartar_client() is None:
+        return None, "Can't reach the Behaviour Support Tool's database right now."
+    stu = bst_find_student(initials)
+    if not stu:
+        return None, f"No student filed as {initials} in the Behaviour Support Tool."
+    sid = str(stu["id"])
+    start = _d(stu.get("placement_start")) or report_start
+    end = _d(stu.get("placement_end")) or report_end or date.today()
+    for ext in _bst_rows("placement_extensions", sid):
+        if _d(ext.get("to_date")) and _d(ext.get("to_date")) > end:
+            end = _d(ext.get("to_date"))
+    end = min(end, date.today())
+    if report_start and report_end and report_start < report_end:     # the report's own dates win if set
+        start, end = report_start, min(report_end, date.today())
+    if not start or start > end:
+        return None, f"{initials}'s placement start date isn't set in the Behaviour Support Tool (or in the sidebar)."
+    att_rows = _bst_rows("student_attendance", sid)
+    attendance = _bst_attendance(att_rows[0], start, end) if att_rows else None
+    incidents = _bst_incident_summary(_bst_rows("incidents", sid), _bst_rows("critical_incidents", sid), start, end)
+    plan_rows = _bst_rows("support_plans", sid)
+    plan = {k: v for k, v in (plan_rows[0] if plan_rows else {}).items() if k in BST_PLAN_FIELDS and v}
+    trials = []
+    for t in _bst_rows("strategy_trials", sid, order="start_date"):
+        obs = [o.get("text", "") for o in (t.get("observations") or []) if isinstance(o, dict)][-3:]
+        trials.append({k: v for k, v in {"title": t.get("title"), "strategy": t.get("strategy"),
+                                          "status": t.get("status"), "outcome": t.get("outcome"),
+                                          "what_was_learned": t.get("conclusion"), "staff_observations": obs}.items() if v})
+    prof_rows = _bst_rows("starting_profiles", sid)
+    prof = (prof_rows[0].get("profile") if prof_rows else None) or {}
+    profile = {k: prof.get(k) for k in ("what_helps", "what_doesnt_help") if prof.get(k)}
+    ctx = {"student": initials, "placement": f"{start.isoformat()} to {end.isoformat()}",
+           "attendance": attendance, "incidents": incidents, "support_plan": plan,
+           "strategy_trials": trials, "starting_profile": profile,
+           "smartar_goals": st.session_state.get("tr_goal_digest", [])}
+    # never send a name: swap any first/last name held in the Behaviour Support record for the initials
+    raw = json.dumps(ctx, default=str)
+    for nm in {stu.get("first_name"), stu.get("last_name")}:
+        nm = (nm or "").strip()
+        if len(nm) > 1 and nm != "-" and nm.upper() != initials.upper():
+            raw = re.sub(rf"(?<![A-Za-z]){re.escape(nm)}(?![A-Za-z])", initials, raw)
+    return json.loads(raw), None
+
+
+# ── Groq (portal-standard resilient call) ────────────────────────────────────
+_GROQ_MODEL_CHAIN = ["openai/gpt-oss-120b", "qwen/qwen3.6-27b", "llama-3.3-70b-versatile"]
+
+
+def groq_ai_call(prompt, max_tokens=1200, temperature=0.2, system=None):
+    api_key = _secret("GROQ_API_KEY", "groq.api_key")
+    if not api_key:
+        raise RuntimeError("AI isn't set up on this deployment (no GROQ_API_KEY).")
+    from groq import Groq
+    try:
+        client = Groq(api_key=api_key)
+    except TypeError:
+        import httpx
+        client = Groq(api_key=api_key, http_client=httpx.Client())
+    messages = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": prompt}]
+    last_err = None
+    for model in _GROQ_MODEL_CHAIN:
+        tokens = max_tokens
+        for _ in range(2):
+            try:
+                kw = dict(model=model, messages=messages, max_tokens=tokens, temperature=temperature)
+                if model == "qwen/qwen3.6-27b":
+                    kw["reasoning_effort"] = "none"
+                return client.chat.completions.create(**kw).choices[0].message.content.strip()
+            except Exception as e:
+                last_err = e
+                if "413" in str(e) or "too large" in str(e).lower():
+                    tokens = max(256, tokens // 2)
+                    continue
+                break
+    raise last_err
+
+
+def _parse_json(raw):
+    raw = (raw or "").replace("```json", "").replace("```", "").strip()
+    s_, e_ = raw.find("{"), raw.rfind("}")
+    return json.loads(raw[s_:e_ + 1]) if s_ != -1 and e_ > s_ else {}
+
+
+AI_SYSTEM = ("You write sections of student reports for Cowandilla Learning Centre, a trauma-informed alternative "
+             "education setting using the Berry Street Education Model (BSEM) and restorative practice. Write in "
+             "Australian English, third person, warm, professional and strengths-based. Refer to the student ONLY by "
+             "the initials given. Use ONLY facts in the data provided — never invent events, numbers, people or "
+             "strategies. If the data doesn't support something, leave it out. Return ONLY valid JSON.")
+
+
+def ai_draft(section, initials, ctx):
+    """Ask Groq for one section. Returns a dict shaped for that section (validated)."""
+    data = json.dumps(ctx, default=str)
+    if section == "hits":
+        menu = json.dumps(HITS_ELEMENTS)
+        prompt = (f"Data about student {initials}:\n{data}\n\nHigh Impact Teaching Strategies and their key elements:\n{menu}\n\n"
+                  "Choose the strategies (max 4) that the data clearly shows supported this student's engagement in learning "
+                  "(e.g. from support plan teaching strategies, successful strategy trials and staff observations). For each, "
+                  "pick only the key elements the data supports (exact wording from the list) and write 2-3 sentences on how "
+                  f"it supported {initials}. Return JSON: "
+                  '{"items": [{"name": "<strategy, exactly as listed>", "elements": ["<exact element>"], "text": "<2-3 sentences>"}]}')
+    elif section == "restorative":
+        prompt = (f"Data about student {initials}:\n{data}\n\nRestorative strategies: {json.dumps(RP_OPTIONS)}\n\n"
+                  "Choose the restorative strategies (max 4) that the data shows were used to build relational safety and "
+                  f"connection or to repair after incidents (e.g. post-incident repair, recovery, student voice, trials). For each, "
+                  f"write 2-3 sentences on how it supported {initials}. Return JSON: "
+                  '{"items": [{"name": "<strategy, exactly as listed>", "text": "<2-3 sentences>"}]}')
+    elif section == "attendance":
+        prompt = (f"Attendance data for {initials} over the placement ({ctx.get('placement')}):\n{json.dumps(ctx.get('attendance'))}\n"
+                  f"Other context:\n{json.dumps({k: ctx.get(k) for k in ('support_plan', 'strategy_trials')}, default=str)}\n\n"
+                  "Write 2-3 sentences describing the attendance pattern (e.g. part-time timetable, absences, early finishes "
+                  "or day ends used to avoid escalation, late arrivals), framed supportively. Do not restate the total days "
+                  'attended (it is shown separately). Return JSON: {"text": "<2-3 sentences>"}')
+    else:
+        prompt = (f"Data about student {initials}:\n{data}\n\nWrite the Overall Progress Summary (4-6 sentences): behaviour "
+                  "trends across the placement (compare first and second half), what helped (strategies, trials), SMARTAR goal "
+                  "progress if given, attendance, and a forward-looking closing sentence about readiness for transition. "
+                  'Return JSON: {"text": "<paragraph>"}')
+    out = _parse_json(groq_ai_call(prompt, system=AI_SYSTEM))
+    if section == "hits":
+        items = []
+        for it in out.get("items") or []:
+            nm = next((h for h in HITS_OPTIONS if h.lower() == str(it.get("name", "")).strip().lower()), None)
+            if nm and it.get("text"):
+                els = [e for e in HITS_ELEMENTS[nm] if e.lower() in {str(x).strip().lower() for x in it.get("elements") or []}]
+                items.append({"name": nm, "elements": els, "text": str(it["text"]).strip()})
+        return {"items": items}
+    if section == "restorative":
+        items = []
+        for it in out.get("items") or []:
+            nm = next((r for r in RP_OPTIONS if r.lower() == str(it.get("name", "")).strip().lower()), None)
+            if nm and it.get("text"):
+                items.append({"name": nm, "text": str(it["text"]).strip()})
+        return {"items": items}
+    res = {"text": str(out.get("text") or "").strip()}
+    if section == "attendance" and ctx.get("attendance"):
+        res["days_attended"] = ctx["attendance"]["days_attended"]
+        res["expected_days"] = ctx["attendance"]["expected_days"]
+    return res
+
+
+def run_ai_draft(section, initials, report_start, report_end):
+    """Button callback: build the context, ask the AI, keep the draft for review."""
+    st.session_state.pop(f"tr_aiedit_{section}", None)
+    try:
+        ctx, problem = bst_context(initials, report_start, report_end)
+        if problem:
+            st.session_state[f"tr_ai_{section}"] = {"error": problem}
+            return
+        if section == "attendance" and not ctx.get("attendance"):
+            st.session_state[f"tr_ai_{section}"] = {"error": f"No attendance has been recorded for {initials} in the Behaviour Support Tool."}
+            return
+        d_ = ai_draft(section, initials, ctx)
+        if not d_.get("items") and not d_.get("text"):
+            d_ = {"error": "The AI didn't find enough in the Behaviour Support data to draft this section."}
+        st.session_state[f"tr_ai_{section}"] = d_
+    except Exception as e:
+        st.session_state[f"tr_ai_{section}"] = {"error": f"Couldn't create a draft: {e}"}
+
+
+def _append(key, text):
+    cur = (st.session_state.get(key) or "").strip()
+    st.session_state[key] = (cur + "\n\n" + text).strip() if cur else text
+
+
+def accept_ai_draft(section):
+    """Add (or add the edited version of) a draft to the report fields."""
+    d_ = st.session_state.get(f"tr_ai_{section}") or {}
+    editing = st.session_state.get(f"tr_aiedit_{section}")
+    if section in ("hits", "restorative"):
+        list_key, opts = ("tr_hits", HITS_OPTIONS) if section == "hits" else ("tr_rp", RP_OPTIONS)
+        chosen = list(st.session_state.get(list_key) or [])
+        for n_, it in enumerate(d_.get("items") or []):
+            if editing and not st.session_state.get(f"tr_aikeep_{section}_{n_}", True):
+                continue
+            text = (st.session_state.get(f"tr_aitext_{section}_{n_}") if editing else it["text"]) or ""
+            if not text.strip():
+                continue
+            if it["name"] not in chosen:
+                chosen.append(it["name"])
+            i_ = opts.index(it["name"])
+            if section == "hits":
+                ek = f"tr_hits_el_{i_}"
+                st.session_state[ek] = list(dict.fromkeys(list(st.session_state.get(ek) or []) + it.get("elements", [])))
+                _append(f"tr_hits_c_{i_}", text.strip())
+            else:
+                _append(f"tr_rp_c_{i_}", text.strip())
+        st.session_state[list_key] = [o for o in opts if o in chosen]
+    else:
+        text = (st.session_state.get(f"tr_aitext_{section}_0") if editing else d_.get("text")) or ""
+        if section == "attendance":
+            if d_.get("expected_days"):
+                st.session_state["tr_days_att"] = int(d_.get("days_attended") or 0)
+                st.session_state["tr_days_tot"] = max(1, int(d_["expected_days"]))
+            if text.strip():
+                _append("tr_att_comment", text.strip())
+        elif text.strip():
+            _append("tr_summary", text.strip())
+    discard_ai_draft(section)
+    st.session_state["tr_ai_added_note"] = "Added to the report — check the wording below."
+
+
+def discard_ai_draft(section):
+    for k in list(st.session_state.keys()):
+        if k in (f"tr_ai_{section}", f"tr_aiedit_{section}") or k.startswith(f"tr_aitext_{section}_") \
+                or k.startswith(f"tr_aikeep_{section}_"):
+            del st.session_state[k]
+
+
+def edit_ai_draft(section):
+    d_ = st.session_state.get(f"tr_ai_{section}") or {}
+    st.session_state[f"tr_aiedit_{section}"] = True
+    if section in ("hits", "restorative"):
+        for n_, it in enumerate(d_.get("items") or []):
+            st.session_state[f"tr_aitext_{section}_{n_}"] = it["text"]
+            st.session_state[f"tr_aikeep_{section}_{n_}"] = True
+    else:
+        st.session_state[f"tr_aitext_{section}_0"] = d_.get("text", "")
+
+
+def ai_draft_box(section, initials, report_start, report_end):
+    """The '✨ Draft from Behaviour Support data' control + its italic suggestion with Add / Edit / Discard."""
+    d_ = st.session_state.get(f"tr_ai_{section}")
+    if not d_:
+        st.button("✨ Draft from Behaviour Support data", key=f"tr_aibtn_{section}",
+                  on_click=run_ai_draft, args=(section, initials, report_start, report_end),
+                  help="Uses AI to suggest wording from this student's Behaviour Support Tool records. "
+                       "Nothing is added until you choose Add.")
+        if st.session_state.get("tr_ai_added_note"):
+            st.caption("✅ " + st.session_state.pop("tr_ai_added_note"))
+        return
+    if d_.get("error"):
+        st.warning(d_["error"])
+        st.button("Close", key=f"tr_aiclose_{section}", on_click=discard_ai_draft, args=(section,))
+        return
+    with st.container(border=True):
+        st.markdown("**✨ AI draft from Behaviour Support data** — *a suggestion only; check it before adding.*")
+        editing = st.session_state.get(f"tr_aiedit_{section}")
+        if section in ("hits", "restorative"):
+            for n_, it in enumerate(d_.get("items") or []):
+                if editing:
+                    st.checkbox(f"Include **{it['name']}**", key=f"tr_aikeep_{section}_{n_}")
+                    st.text_area(it["name"], key=f"tr_aitext_{section}_{n_}", height=90, label_visibility="collapsed")
+                else:
+                    els = (" — key elements: " + "; ".join(it["elements"])) if it.get("elements") else ""
+                    st.markdown(f"**{it['name']}**{els}  \n*{it['text']}*")
+        else:
+            if section == "attendance" and d_.get("expected_days"):
+                st.markdown(f"**From attendance records:** {d_['days_attended']} of {d_['expected_days']} expected days attended "
+                            "(these numbers will fill the Days Attended / Total Days boxes).")
+            if editing:
+                st.text_area("Draft", key=f"tr_aitext_{section}_0", height=130, label_visibility="collapsed")
+            elif d_.get("text"):
+                st.markdown(f"*{d_['text']}*")
+        b1, b2, b3 = st.columns(3)
+        b1.button("✅ Add edited version" if editing else "✅ Add to report", key=f"tr_aiadd_{section}", type="primary",
+                  on_click=accept_ai_draft, args=(section,), use_container_width=True)
+        if not editing:
+            b2.button("✏️ Edit first", key=f"tr_aiedt_{section}", on_click=edit_ai_draft, args=(section,),
+                      use_container_width=True)
+        b3.button("🗑 Discard", key=f"tr_aidis_{section}", on_click=discard_ai_draft, args=(section,),
+                  use_container_width=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DATA — SMARTAR GOAL BUILDER
@@ -2105,6 +2514,31 @@ def snapshot():
     return json.loads(json.dumps(data, default=str))
 
 
+def personalise(rep_, initials, preferred, full_name, school):
+    """Finalised copy: every whole-word use of the student's initials (including pulled SMARTAR goals and
+    Window of Tolerance text, and "SD's") becomes the name chosen at finalising. Cover and footer use the
+    full name. Never saved anywhere — built only for the download."""
+    rx = re.compile(r"(?<![A-Za-z])" + re.escape(initials) + r"(?![A-Za-z])")
+    skip = {"initials", "type", "sections", "program", "pie", "id", "archived_at", "first", "last",
+            "tracking_period", "current", "updated_at"}
+
+    def walk(v, key=None):
+        if key in skip:
+            return v
+        if isinstance(v, str):
+            return rx.sub(preferred, v)
+        if isinstance(v, dict):
+            return {k: walk(x, k) for k, x in v.items()}
+        if isinstance(v, list):
+            return [walk(x) for x in v]
+        if isinstance(v, tuple):
+            return tuple(walk(x) for x in v)
+        return v
+    out = walk(rep_)
+    out["name"], out["cover_name"], out["footer_name"], out["school"] = preferred, full_name, full_name, school
+    return out
+
+
 def apply_record(rec, note=None):
     """Load a saved report into the page (used as a button callback and on student pick)."""
     reset_report_state()
@@ -2129,6 +2563,22 @@ def apply_record(rec, note=None):
     st.session_state["tr_loaded_note"] = note or (
         f"Opened the {st.session_state['tr_report_type']} saved {fmt_date(rec.get('updated_at'))}"
         + (f" by {rec['updated_by']}" if rec.get("updated_by") else "") + ".")
+
+
+def finalise_report(student, teacher):
+    full = (st.session_state.get("tr_fin_full") or "").strip()
+    pref = (st.session_state.get("tr_fin_pref") or "").strip()
+    school = (st.session_state.get("tr_fin_school") or "").strip()
+    if not full or not school:
+        st.session_state["tr_fin_error"] = "Enter the student's full name and enrolled school to finalise."
+        return
+    st.session_state["tr_fin_error"] = ""
+    st.session_state["tr_fin_pref"] = pref or full.split()[0]
+    st.session_state["tr_school"] = school                 # the school is part of the saved report
+    st.session_state["tr_finalised"] = {"at": datetime.utcnow().isoformat(), "by": teacher or "unknown"}
+    st.session_state["tr_fin_ready"] = True
+    ok, msg = save_report(student, teacher)
+    st.session_state["tr_fin_saved_msg"] = msg if ok else f"Finalised, but the saved report wasn't updated: {msg}"
 
 
 def start_transition_from_review():
@@ -2281,7 +2731,9 @@ with st.sidebar:
             for rec in records:
                 is_open = rec.get("id") == S("record_id")
                 rc1, rc2 = st.columns([3, 1])
-                rc1.markdown(f"{'**▶ ' if is_open else ''}{rec.get('report_type')}{'**' if is_open else ''}  \n"
+                _fin = (rec.get("data") or {}).get("finalised")
+                rc1.markdown(f"{'**▶ ' if is_open else ''}{rec.get('report_type')}{'**' if is_open else ''}"
+                             f"{' ✅ Finalised' if _fin else ''}  \n"
                              f"<span style='font-size:0.75rem;color:#777'>saved {fmt_date(rec.get('updated_at'))}"
                              f"{' · ' + rec['updated_by'] if rec.get('updated_by') else ''}</span>",
                              unsafe_allow_html=True)
@@ -2294,13 +2746,10 @@ with st.sidebar:
             st.caption(f"Saving will create a new {REPORT_TYPE} — the {S('record_type')} stays as it was.")
         SAVE_SLOT = st.container()
 
-    print_name = st.text_input(
-        "Name for this printout (optional)", key="tr_print_name",
-        placeholder="Shows on the downloaded report only",
-    )
-    st.caption("Never saved — the report and the Document Archive copy only use initials.")
-    DISPLAY_NAME = print_name.strip() or INITIALS
-    WHO = (print_name.strip().split()[0] if print_name.strip() else INITIALS)
+    st.caption("Reports are saved with initials only. The student's name is added when you finalise "
+               "(Generate tab) and is never saved.")
+    DISPLAY_NAME = INITIALS
+    WHO = INITIALS
 
     st.markdown("---")
     report_date = st.date_input("Report Date", key="tr_report_date")
@@ -2394,6 +2843,7 @@ with tab1:
         st.subheader("🎯 Pedagogical Strategies (HITS)")
         st.caption("Choose the High Impact Teaching Strategies that promoted positive engagement. For each one, "
                    "tick the key elements you used and say how it worked for this student.")
+        ai_draft_box("hits", INITIALS, placement_start, placement_end)
         st.multiselect("Strategies that promoted positive engagement", HITS_OPTIONS, key="tr_hits")
         for strat in (S("hits", []) or []):
             hi = HITS_OPTIONS.index(strat)
@@ -2416,6 +2866,7 @@ with tab1:
             fc2.markdown(RP_BLURB_INTRO + "  \n\n*The adult:*  \n" +
                          "  \n".join(f"*{n}. {t}*" for n, t in enumerate(RP_BLURB_STEPS, start=1)))
             fc2.caption(RP_CITATION)
+        ai_draft_box("restorative", INITIALS, placement_start, placement_end)
         st.multiselect("Restorative strategies used", RP_OPTIONS, key="tr_rp")
         for strat in (S("rp", []) or []):
             ri = RP_OPTIONS.index(strat)
@@ -2635,18 +3086,26 @@ with tab1:
             })
 
         report_goals = pulled_goals
+        st.session_state["tr_goal_digest"] = [
+            {"goal": g_["smartar"], "status": "active" if g_["active"] else "archived",
+             "current_level": g_["current"], "pct_at_expected_or_better": g_["stats"]["at_or_above"],
+             "trend": g_["stats"]["trend"], "observations": g_["stats"]["total"]} for g_ in pulled_goals]
         st.markdown("---")
 
     # ── ATTENDANCE & SUMMARY ─────────────────────────────────────────────────
     if inc("attendance"):
         st.subheader("📅 Attendance")
+        ai_draft_box("attendance", INITIALS, placement_start, placement_end)
         ac1, ac2 = st.columns(2)
         with ac1:
             days_attended = st.number_input("Days Attended", min_value=0, key="tr_days_att")
             total_days = st.number_input("Total Days", min_value=1, key="tr_days_tot")
         ac2.metric("Attendance Rate", f"{(days_attended / total_days * 100 if total_days else 0):.1f}%")
+        st.text_area("Attendance comments (optional)", key="tr_att_comment", height=80,
+                     placeholder="e.g. attendance pattern, part-time timetable, early finishes…")
     if inc("summary"):
         st.subheader("📝 Overall Progress Summary")
+        ai_draft_box("summary", INITIALS, placement_start, placement_end)
         st.text_area("Overall Progress Summary", key="tr_summary", height=150, label_visibility="collapsed",
                      placeholder="Summarise key achievements, challenges, and demonstrated growth...")
     if inc("recommendations"):
@@ -2713,7 +3172,7 @@ def collect_report(name_on_report):
         "wot": S("wot"), "wot_zones": wot_on, "regulation": S("regulation", ""),
         "goals": report_goals,
         "attendance": (days_attended, total_days, attendance_pct),
-        "summary": S("summary", ""), "recs": S("recs", ""),
+        "summary": S("summary", ""), "recs": S("recs", ""), "att_comment": S("att_comment", "") or "",
     }
 
 
@@ -2851,7 +3310,7 @@ def build_docx(rep):
     if rep["type"] == "Modified Report":
         note = "This modified report includes: " + (
             ", ".join(SECTION_LABEL[k] for k, _ in SECTIONS if k in rep["sections"]) or "cover page only")
-    cover_png = make_cover_png(rep["type"], rep["name"], rep["report_date"].strftime("%d/%m/%Y"),
+    cover_png = make_cover_png(rep["type"], rep.get("cover_name") or rep["name"], rep["report_date"].strftime("%d/%m/%Y"),
                                rep["school"] or "", note=note)
     cp = doc.paragraphs[0] if doc.paragraphs else doc.add_paragraph()
     cp.paragraph_format.space_before = cp.paragraph_format.space_after = Pt(0)
@@ -2871,7 +3330,7 @@ def build_docx(rep):
     fmt = lambda d: d.strftime("%d %B %Y").lstrip("0")
     strip = doc.add_table(rows=1, cols=4)
     strip.style = "Table Grid"
-    for j_, (k_, v_) in enumerate([("Student", rep["name"] + (f" ({rep['program']})" if rep["program"] else "")),
+    for j_, (k_, v_) in enumerate([("Student", (rep.get("cover_name") or rep["name"]) + (f" ({rep['program']})" if rep["program"] else "")),
                                    ("School", rep["school"] or "—"), ("LC teacher", rep["teacher"] or "—"),
                                    ("Placement", f"{fmt(rep['pstart'])} – {fmt(rep['pend'])}")]):
         c_ = strip.cell(0, j_)
@@ -3208,6 +3667,8 @@ def build_docx(rep):
         heading("Attendance")
         a, t_, pct = rep["attendance"]
         para(f"{rep['name']} attended the Learning Program {a} of {t_} days ({pct:.1f}%).")
+        if rep.get("att_comment", "").strip():
+            para(rep["att_comment"])
     if "summary" in rep["sections"]:
         heading("Overall Progress Summary")
         para(rep["summary"])
@@ -3217,7 +3678,7 @@ def build_docx(rep):
 
     foot = sec.footer.paragraphs[0]
     foot.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    fr = foot.add_run(f"{rep['type']} | Cowandilla Learning Centre LBU | {rep['initials']} | "
+    fr = foot.add_run(f"{rep['type']} | Cowandilla Learning Centre LBU | {rep.get('footer_name') or rep['initials']} | "
                       f"Generated {datetime.now().strftime('%d %b %Y')}")
     fr.font.size = Pt(8)
     fr.font.color.rgb = RGBColor(0x88, 0x88, 0x88)
@@ -3334,6 +3795,8 @@ with tab2:
         st.markdown("#### Attendance")
         a, t_, pct = rep["attendance"]
         st.write(f"{a} of {t_} days ({pct:.1f}%)")
+        if rep.get("att_comment"):
+            st.write(rep["att_comment"])
     if "summary" in rep["sections"]:
         st.markdown("#### Overall Progress Summary")
         st.write(rep["summary"] or "_Not entered._")
@@ -3363,34 +3826,75 @@ with tab3:
     for i, (label, ok) in enumerate(checks):
         cc[i % 2].markdown(("✅ " if ok else "⬜ ") + label)
 
-    if not rep["teacher"] or not rep["school"]:
-        st.error("Please enter LC Teacher name and Enrolled School in the sidebar.")
+    if not rep["teacher"]:
+        st.error("Please enter the LC Teacher name in the sidebar.")
     else:
         today_tag = datetime.now().strftime("%Y%m%d")
         type_tag = REPORT_TYPE.replace(" ", "_")
+
+        # ── 1. Draft — initials only ──
+        st.markdown("### 1 · Draft (initials only)")
+        st.caption(f"Use while the report is being built. Everything shows **{INITIALS}** — no names.")
         docx_bytes = build_docx(rep)
         st.download_button(
-            f"📄 Download {REPORT_TYPE} (Word)", data=docx_bytes, type="primary", use_container_width=True,
-            file_name=f"{INITIALS}_{type_tag}_{today_tag}.docx",
+            f"📄 Download draft {REPORT_TYPE} (Word)", data=docx_bytes, use_container_width=True,
+            file_name=f"{INITIALS}_{type_tag}_DRAFT_{today_tag}.docx", key="tr_dl_draft",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         )
-        if print_name.strip():
-            st.caption(f"This download shows the name “{print_name.strip()}”. The Document Archive copy uses initials only.")
 
+        # ── 2. Finalise — add the student's name ──
         st.markdown("---")
-        st.markdown("**🗄️ File to the Document Archive**")
+        st.markdown("### 2 · Finalise report")
+        if S("finalised"):
+            fin = S("finalised")
+            st.success(f"✅ This {REPORT_TYPE} was finalised on {fmt_date(fin.get('at'))} by {fin.get('by', '')}. "
+                       "If you change anything, finalise again to download an updated final copy.")
+        st.caption("Finalising adds the student's name for the copy that goes to the school. The name replaces "
+                   f"**{INITIALS}** everywhere in the report (cover page uses the full name). The name is **never "
+                   "saved** — the saved report and the Document Archive copy stay initials-only, so you'll re-enter "
+                   "the name if you finalise again later.")
+        st.session_state.setdefault("tr_fin_school", S("school", "") or "")
+        with st.form("tr_fin_form", border=True):
+            fc1, fc2 = st.columns(2)
+            fc1.text_input("Student's full name *", key="tr_fin_full", placeholder="e.g. Samuel Demo")
+            fc2.text_input("Name to use in the report", key="tr_fin_pref",
+                           placeholder="Leave blank to use their first name — or a preferred name, e.g. Sam")
+            st.text_input("Enrolled school *", key="tr_fin_school")
+            st.form_submit_button(f"✅ Finalise {REPORT_TYPE}", type="primary", use_container_width=True,
+                                  on_click=finalise_report, args=(student, (lc_teacher or "").strip()))
+        if S("fin_error"):
+            st.error(S("fin_error"))
+        if S("fin_saved_msg"):
+            st.caption(S("fin_saved_msg"))
+
+        if S("fin_ready") and (S("fin_full") or "").strip():
+            full_ = S("fin_full").strip()
+            pref_ = (S("fin_pref") or "").strip() or full_.split()[0]
+            final_rep = personalise(collect_report(INITIALS), INITIALS, pref_, full_, S("fin_school").strip())
+            final_bytes = build_docx(final_rep)
+            safe_ = re.sub(r"[^A-Za-z0-9]+", "_", full_).strip("_")
+            st.download_button(
+                f"📄 Download FINAL {REPORT_TYPE} for {pref_} (Word)", data=final_bytes, type="primary",
+                use_container_width=True, file_name=f"{safe_}_{type_tag}_{today_tag}.docx", key="tr_dl_final",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+            st.caption(f"“{INITIALS}” has been replaced with “{pref_}” throughout; the cover page shows “{full_}”.")
+
+        # ── 3. Document Archive — always initials-only ──
+        st.markdown("---")
+        st.markdown("### 3 · File to the Document Archive")
         if not ARCHIVE_AVAILABLE:
             st.caption("The Document Archive isn't available on this deployment.")
         else:
-            st.caption(f"Files an initials-only copy into {INITIALS}'s Document Archive folder.")
+            st.caption(f"Files an initials-only copy into {INITIALS}'s Document Archive folder"
+                       + (" (marked final)." if S("finalised") else "."))
             if st.button("Save to Document Archive", key="tr_archive_btn"):
-                archive_bytes = docx_bytes if not print_name.strip() else build_docx(collect_report(INITIALS))
                 saved = archive_document(
                     source_tool="Transition Report Builder",
                     doc_type=REPORT_TYPE,
-                    title=f"{REPORT_TYPE} — {INITIALS} — {datetime.now():%d %b %Y}",
-                    file_bytes=archive_bytes,
-                    filename=f"{INITIALS}_{type_tag}_{today_tag}.docx",
+                    title=f"{REPORT_TYPE} — {INITIALS} — {datetime.now():%d %b %Y}" + (" (Final)" if S("finalised") else " (Draft)"),
+                    file_bytes=docx_bytes,
+                    filename=f"{INITIALS}_{type_tag}_{'FINAL' if S('finalised') else 'DRAFT'}_{today_tag}.docx",
                     student_initials=INITIALS,
                     created_by=rep["teacher"] or "unknown",
                 )
