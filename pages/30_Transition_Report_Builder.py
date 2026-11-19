@@ -2483,6 +2483,9 @@ def _bst_code(row):
 
 
 def bst_find_student(initials):
+    """Behaviour Support student for a register code. Exact code first; then a student entered by full name whose
+    name parts give the code (e.g. Lily Nora Martin → LNM); then a 2-letter code that is the start of this code
+    (LN → LNM) when only one student fits — so longer, de-clashed register codes still match."""
     c = _smartar_client()
     if c is None:
         return None
@@ -2490,9 +2493,21 @@ def bst_find_student(initials):
         rows = c.table("students").select("*").execute().data or []
     except Exception:
         return None
-    hits = [r for r in rows if _bst_code(r) == initials.upper()]
-    hits.sort(key=lambda r: bool(r.get("archived")))          # current placement first
-    return hits[0] if hits else None
+    code = initials.upper()
+    rows.sort(key=lambda r: bool(r.get("archived")))          # current placement first
+
+    def all_parts(r):
+        name = " ".join(x for x in [r.get("first_name") or "", r.get("last_name") or ""] if x and x != "-") or (r.get("name") or "")
+        return "".join(w[0] for w in re.split(r"[\s\-]+", name) if w and w[0].isalpha()).upper()
+    for test in (lambda r: _bst_code(r) == code,
+                 lambda r: all_parts(r) == code or "".join(w[0] for w in re.split(r"[\s\-]+", r.get("name") or "")
+                                                          if w and w[0].isalpha()).upper() == code):
+        hits = [r for r in rows if test(r)]
+        if hits:
+            return hits[0]
+    pref = [r for r in rows if len(_bst_code(r)) == 2 and code.startswith(_bst_code(r)) and len(code) > 2]
+    current = [r for r in pref if not r.get("archived")] or pref
+    return current[0] if len(current) == 1 else None
 
 
 def _bst_rows(table, student_id, order=None):
