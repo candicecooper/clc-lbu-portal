@@ -2264,9 +2264,6 @@ def bst_attendance_table(initials, start, end):
     if not rows:
         return None, f"No attendance has been recorded for {initials} in the Behaviour Support Tool."
     state = _bst_att_state(rows[0])
-    end = min(end, date.today())
-    if not start or start > end:
-        return None, "Set the placement start and end dates in the sidebar first."
     quick, crit = defaultdict(int), defaultdict(list)
     for r in _bst_rows("incidents", sid):
         d_ = _d(r.get("date"))
@@ -2277,6 +2274,22 @@ def bst_attendance_table(initials, start, end):
         if d_:
             desc = " / ".join(_flat(r.get("primary_behaviour"))) or "Critical incident"
             crit[d_].append(re.sub(r"\s+", " ", desc).strip()[:110])
+    # The WHOLE placement: from the placement start recorded in the Behaviour Support Tool (or the first
+    # attendance/incident record), to today or the placement end (incl. extensions) if that has passed.
+    today = date.today()
+    rec_dates = [x for x in [_d(e.get("date")) for e in state["exceptions"]] + list(quick) + list(crit) if x]
+    starts = [x for x in (_d(stu.get("placement_start")),) if x] or ([min(rec_dates)] if rec_dates else [])
+    if start and start < today:                       # sidebar start counts if staff set one earlier
+        starts.append(start)
+    if not starts:
+        return None, (f"{initials}'s placement start date isn't recorded in the Behaviour Support Tool — set the "
+                      "Placement Start Date in the sidebar, then pull again.")
+    start = min(starts)
+    ends = [x for x in [_d(stu.get("placement_end"))] + [_d(e.get("to_date")) for e in _bst_rows("placement_extensions", sid)]
+            + ([end] if end and end > start and end != today else []) if x]
+    end = min(today, max(ends)) if ends and max(ends) < today else today
+    if start > end:
+        return None, "The placement hasn't started yet, so there's no attendance to show."
     weeks, counts = {}, {"attended": 0, "school_days": 0, "absent": 0}
     d_ = start - timedelta(days=start.weekday())
     while d_ <= end:
@@ -2990,6 +3003,17 @@ def fmt_date(iso_str, long=True):
 # STATE — everything this page stores lives under "tr_" keys, so switching
 # student can wipe it in one go (one student's details never carry over)
 # ══════════════════════════════════════════════════════════════════════════════
+def remove_goal(gid):
+    st.session_state["tr_goal_sel"] = [x for x in (st.session_state.get("tr_goal_sel") or []) if x != gid]
+
+
+def restore_goal(gid):
+    sel = list(st.session_state.get("tr_goal_sel") or [])
+    if gid not in sel:
+        sel.append(gid)
+    st.session_state["tr_goal_sel"] = sel
+
+
 def reset_report_state():
     for k in list(st.session_state.keys()):
         if k.startswith("tr_"):
@@ -3551,7 +3575,17 @@ with tab1:
                                "— included automatically.")
             st.session_state["tr_goal_known"] = ordered
             st.multiselect("Goals included in this report (active and archived)", ordered,
-                           key="tr_goal_sel", format_func=_goal_label)
+                           key="tr_goal_sel", format_func=_goal_label,
+                           help="Click ✕ on a goal (or use 🗑 Remove from report on its card) to leave it off this report. "
+                                "It stays in the SMARTAR Goal Builder.")
+            removed = [gid for gid in ordered if gid not in set(S("goal_sel") or [])]
+            if removed:
+                with st.expander(f"🗑 Removed from this report ({len(removed)}) — add back", expanded=False):
+                    for gid in removed:
+                        r1, r2 = st.columns([6, 1])
+                        r1.markdown(_goal_label(gid))
+                        r2.button("↩ Add back", key=f"tr_goal_back_{gid}", on_click=restore_goal, args=(gid,),
+                                  use_container_width=True)
         elif sm_student:
             st.info(f"No SMARTAR goals in the SMARTAR Goal Builder for {sm_student['student_name']} yet. "
                     "Add them in the SMARTAR Goal Builder, then reload this page.")
@@ -3610,6 +3644,9 @@ with tab1:
                              format_func=lambda l: f"{LEVEL_EMOJI[l]} {l}")
                 if stats["total"]:
                     st.caption(f"Suggested from the last 10 observations: {LEVEL_EMOJI[stats['suggested']]} {stats['suggested']}")
+                st.button("🗑 Remove this goal from the report", key=f"tr_goal_rm_{gid}", on_click=remove_goal, args=(gid,),
+                          help="Leaves it off this report only — the goal stays in the SMARTAR Goal Builder. "
+                               "You can add it back from 'Removed from this report'.")
 
             pulled_goals.append({
                 "source": "builder", "id": gid, "active": active,
@@ -3659,7 +3696,8 @@ with tab1:
         st.button("📋 Pull attendance table from the Behaviour Support Tool" if not S("att_table") else
                   "🔄 Refresh attendance table from the Behaviour Support Tool", key="tr_att_pull",
                   on_click=pull_attendance_table, args=(INITIALS, placement_start, placement_end),
-                  help="The week-by-week (Mon–Fri) table from the Behaviour Support Tool, for the placement dates in the sidebar.")
+                  help="The week-by-week (Mon–Fri) table from the Behaviour Support Tool for the whole placement — "
+                       "from the placement start to today (or the placement end, if it has passed).")
         if S("att_table_msg"):
             st.warning(S("att_table_msg"))
         if S("att_table"):
