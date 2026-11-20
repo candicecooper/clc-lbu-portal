@@ -129,6 +129,20 @@ st.markdown(f"""
   [data-testid="stMain"] [data-testid="stExpander"] details {{ background:#fff; }}
   [data-testid="stMain"] [data-testid="stMetricDelta"] {{ font-weight:600; }}
   [data-testid="stMain"] [data-testid="stWidgetLabel"] p {{ color:#2d4a4a; }}
+  /* Print / download pop-up: it renders outside the page body, so style it light here */
+  [data-testid="stPopoverBody"] {{ background:#ffffff !important; color:#1f2d2d !important;
+                                   border:1px solid #d6e4e4 !important; min-width:520px; }}
+  [data-testid="stPopoverBody"] p, [data-testid="stPopoverBody"] label,
+  [data-testid="stPopoverBody"] span, [data-testid="stPopoverBody"] div[data-testid="stMarkdownContainer"] {{ color:#1f2d2d !important; }}
+  [data-testid="stPopoverBody"] [data-testid="stCaptionContainer"] p {{ color:#5a6b6b !important; }}
+  [data-testid="stPopoverBody"] hr {{ border-color:#d6e4e4 !important; }}
+  [data-testid="stPopoverBody"] input {{ background:#fff !important; color:#1f2d2d !important;
+                                         border:1.5px solid #b8d8d8 !important; }}
+  [data-testid="stPopoverBody"] button[kind="secondary"] {{ background:#f4f8f8 !important; color:#1f2d2d !important;
+                                                           border:1px solid #b8d8d8 !important; }}
+  [data-testid="stPopoverBody"] button[kind="secondary"] p {{ color:#1f2d2d !important; }}
+  [data-testid="stPopoverBody"] button[kind="primary"] p {{ color:#ffffff !important; }}
+  @media (max-width: 640px) {{ [data-testid="stPopoverBody"] {{ min-width:0; }} }}
   [data-testid="stMain"] [data-testid="stAlert"] [data-testid="stMarkdownContainer"],
   [data-testid="stMain"] [data-testid="stAlert"] [data-testid="stMarkdownContainer"] * {{ color:#1f2d2d !important; }}
   .snap-head {{
@@ -1136,164 +1150,6 @@ def plot_layout(fig, height=300):
 # ──────────────────────────────────────────────────────────────────────────
 # Word summary (initials only)
 # ──────────────────────────────────────────────────────────────────────────
-def build_summary_docx(stu: dict, period_lbl: str, start: date, end: date,
-                       goals: list[tuple[dict, dict]], bs: dict, wot: dict | None,
-                       tt: dict | None, profile: dict | None = None) -> bytes:
-    from docx import Document
-    from docx.shared import Pt, RGBColor
-
-    profile = profile or {}
-    red = profile.get("redact") or (lambda s: str(s or ""))
-    doc = Document()
-    style = doc.styles["Normal"]
-    style.font.name = "Calibri"
-    style.font.size = Pt(10.5)
-
-    h = doc.add_heading(f"Student Snapshot — {stu['initials']}", level=1)
-    h.runs[0].font.color.rgb = RGBColor(0x1A, 0x7A, 0x7A)
-    doc.add_paragraph(
-        f"Program: {stu.get('program') or '—'}   ·   Year level: {stu.get('year_level') or '—'}   ·   "
-        f"Placement: {_fmt(_d(stu.get('start_date')), True)} → {_fmt(_d(stu.get('planned_exit_date')), True)}"
-    )
-    doc.add_paragraph(f"Data period: {period_lbl} ({_fmt(start, True)} – {_fmt(end, True)})   ·   "
-                      f"Prepared {_fmt(TODAY, True)}")
-
-    # ── Profile ──
-    doc.add_heading("Profile", level=2)
-    if profile.get("summary"):
-        doc.add_paragraph(red(profile["summary"]))
-    for lbl, key in (("Strengths", "strengths"), ("Interests", "interests"),
-                     ("What helps", "helps"), ("What doesn't help", "not_helps")):
-        items = profile.get(key) or []
-        if items:
-            p = doc.add_paragraph()
-            p.add_run(f"{lbl}: ").bold = True
-            p.add_run("; ".join(red(x) for x in items[:6]))
-    hyp_ = profile.get("hyp")
-    if hyp_:
-        p = doc.add_paragraph()
-        p.add_run("Functional hypothesis: ").bold = True
-        p.add_run(red(hyp_["summary"]))
-    plans = profile.get("plans") or []
-    if plans:
-        p = doc.add_paragraph()
-        p.add_run("Plans on file: ").bold = True
-        p.add_run(" · ".join(plans))
-    sp_ = profile.get("safety") or {}
-    if sp_.get("risks"):
-        p = doc.add_paragraph()
-        p.add_run("Safety & Risk Plan risks: ").bold = True
-        p.add_run("; ".join(f"{red(r['issue'])} ({r.get('level') or '—'})" for r in sp_["risks"]))
-    if sp_.get("priority_actions"):
-        p = doc.add_paragraph()
-        p.add_run("Priority actions: ").bold = True
-        p.add_run("; ".join(red(a) for a in sp_["priority_actions"][:6]))
-    ss = profile.get("sensory")
-    if ss:
-        hi = [f"{a} ({v.get('priority', '').split()[0].title()})" for a, v in ss["areas"]
-              if v.get("priority") in ("HIGH PRIORITY", "MEDIUM PRIORITY")]
-        p = doc.add_paragraph()
-        p.add_run("Sensory priority areas: ").bold = True
-        p.add_run(", ".join(hi) if hi else "None high or medium")
-        if ss.get("strategies"):
-            p = doc.add_paragraph()
-            p.add_run("Sensory strategies: ").bold = True
-            p.add_run("; ".join(ss["strategies"]))
-    trials_ = profile.get("trials") or []
-    if trials_:
-        p = doc.add_paragraph()
-        p.add_run("Strategy trials: ").bold = True
-        p.add_run("; ".join(
-            f"{red(t.get('title') or 'Trial')} — {'running' if t.get('status') == 'Running' else (t.get('outcome') or 'concluded')}"
-            for t in trials_[:6]))
-
-    doc.add_heading("SMARTAR goals", level=2)
-    if not goals:
-        doc.add_paragraph("No active SMARTAR goals.")
-    else:
-        t = doc.add_table(rows=1, cols=4)
-        t.style = "Light Grid Accent 1"
-        for c, txt in zip(t.rows[0].cells, ["Goal", "Expected or better", "Entries", "Trend"]):
-            c.text = txt
-        for g, s in goals:
-            r = t.add_row().cells
-            r[0].text = g.get("smartar_goal") or "—"
-            r[1].text = f"{s['pct_on']}%" if s["pct_on"] is not None else "—"
-            r[2].text = str(s["total"])
-            r[3].text = TREND_TXT[s["trend"]][0].split(" ", 1)[-1]
-
-    doc.add_heading("Behaviour", level=2)
-    n = len(bs["inc"])
-    doc.add_paragraph(
-        f"Incidents: {n} (previous equal period: {bs['prev_n']})   ·   Critical incidents: {bs['crit_n']}   ·   "
-        f"Average severity: {bs['avg_sev'] if bs['avg_sev'] is not None else '—'}   ·   "
-        f"Absences: {len(bs['absent'])}"
-    )
-    for title, counter in (("Most frequent behaviours", bs["behaviours"]),
-                           ("Locations", bs["locations"]),
-                           ("Sessions", bs["sessions"]),
-                           ("Hypothesised function", bs["functions"])):
-        items = top(counter, 3)
-        if items:
-            doc.add_paragraph(f"{title}: " + "; ".join(f"{k} ({v})" for k, v in items))
-
-    doc.add_heading("Window of Tolerance", level=2)
-    if not wot:
-        doc.add_paragraph("Not built yet.")
-    else:
-        doc.add_paragraph("From the Window of Tolerance Builder." if wot["source"] == "builder"
-                          else "Draft from incident data (not yet built in the WoT Builder).")
-        t = doc.add_table(rows=1, cols=4)
-        t.style = "Light Grid Accent 1"
-        for c, txt in zip(t.rows[0].cells, ["Zone", "When / where", "What it looks like", "What helps"]):
-            c.text = txt
-        for zid, label, *_ in WOT_ZONE_META:
-            z = wot["zones"].get(zid)
-            if not z:
-                continue
-            r = t.add_row().cells
-            r[0].text = label
-            for i, (key, _l) in enumerate(WOT_COLS, start=1):
-                r[i].text = "\n".join(f"• {red(x)}" for x in (z.get(key) or [])[:5]) or "—"
-
-    doc.add_heading("Transition", level=2)
-    if not tt:
-        doc.add_paragraph("No transition timetable on file.")
-    else:
-        view = tt_view(tt)
-        weeks = tt_weeks(view)
-        status = re.sub(r"^[^\w]+", "", tt_status(tt))
-        doc.add_paragraph(
-            f"Status: {status}   ·   Home school: {view.get('home_school') or '—'}   ·   "
-            f"Last CLC day: {_fmt(tu.last_clc_day(weeks), True) if (tu and weeks) else '—'}"
-        )
-        if weeks:
-            short = view.get("home_school_short") or (tu.school_short_name(view.get("home_school") or "") if tu else "")
-            t = doc.add_table(rows=1, cols=6)
-            t.style = "Light Grid Accent 1"
-            for c, txt in zip(t.rows[0].cells, ["", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]):
-                c.text = txt
-            for w in weeks:
-                try:
-                    mon = tu.week_monday(w["year"], w["term"], w["week"])
-                except Exception:
-                    mon = _d((w.get("days") or [{}])[0].get("date"))
-                r = t.add_row().cells
-                r[0].text = f"Term: {w['term']}\nWeek: {w['week']}"
-                for k in range(5):
-                    day = (w.get("days") or [])[k] if k < len(w.get("days") or []) else {}
-                    lines = [ln for ln in (tu.doc_day_text(day, stu["initials"], short) if (tu and day) else []) if ln]
-                    r[k + 1].text = "\n".join([f"Date: {mon + timedelta(days=k):%d/%m}"] + lines) if mon else "\n".join(lines)
-
-    doc.add_paragraph()
-    p = doc.add_paragraph("Initials only — no names, EDID or DOB. Generated from the CLC-LBU portal.")
-    p.runs[0].font.size = Pt(8)
-    p.runs[0].font.color.rgb = RGBColor(0x6B, 0x7C, 0x7C)
-    buf = io.BytesIO()
-    doc.save(buf)
-    return buf.getvalue()
-
-
 # ══════════════════════════════════════════════════════════════════════════
 # PAGE
 # ══════════════════════════════════════════════════════════════════════════
@@ -1448,31 +1304,7 @@ a3.link_button("📊 Behaviour Support",
                use_container_width=True)
 a4.link_button("🪟 WoT Builder", WOT_BUILDER_URL, use_container_width=True)
 a5.link_button("🗓️ Transition", f"{PORTAL}/Transition_Timetables", use_container_width=True)
-try:
-    _pf = prof["profile"] or {}
-    _plans = []
-    if plan:
-        _plans.append(f"Behaviour Support Plan ({_review_note(plan.get('review_date'))[0].lower()})")
-    if safe["doc"]:
-        _plans.append(f"Safety & Risk Plan ({_review_note((safe.get('parsed') or {}).get('review_date'))[0].lower()})")
-    if sens["latest"]:
-        _plans.append(f"Sensory Overview {_fmt(_d(sens['latest'].get('overview_date')), True)}")
-    summary = build_summary_docx(
-        stu, period_lbl, start, end, goal_rows, bs, wot_view, tt,
-        profile={
-            "redact": redact, "summary": _pf.get("summary"),
-            "strengths": _as_list(_pf.get("strengths")) or _as_list(plan.get("strengths")),
-            "interests": _as_list(_pf.get("interests")) or _as_list(plan.get("interests")),
-            "helps": _as_list(_pf.get("what_helps")), "not_helps": _as_list(_pf.get("what_doesnt_help")),
-            "hyp": hyp, "plans": _plans, "safety": safe.get("parsed") or {},
-            "sensory": sens_sum, "trials": running + done,
-        })
-    a6.download_button("⬇️ Meeting summary", summary,
-                       file_name=f"Student_Snapshot_{ini}_{TODAY:%Y%m%d}.docx",
-                       mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                       use_container_width=True, type="primary")
-except Exception as exc:  # noqa: BLE001
-    a6.caption(f"Summary unavailable: {exc}")
+print_slot = a6.container()   # filled at the end of the page (needs every section's data)
 
 st.write("")
 tab_p, tab_g, tab_b, tab_t, tab_d = st.tabs(
@@ -2437,3 +2269,387 @@ with tab_d:
 st.divider()
 st.caption("🧭 Student Snapshot · read-only view of SMARTAR, Behaviour Support, Window of Tolerance, "
            "Transition Timetables and the Document Archive · initials only.")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# PRINT / DOWNLOAD — pick sections, get a PDF (print) and Word (edit)
+# Content is described once here; snapshot_print.py draws both files.
+# ══════════════════════════════════════════════════════════════════════════
+import snapshot_print as sp_print  # noqa: E402
+
+PRINT_SECTIONS = [  # (key, label) in print order
+    ("summary", "Behaviour summary & graphs"),
+    ("hypothesis", "Functional hypothesis"),
+    ("critical", "Critical incidents (this period)"),
+    ("wot", "Window of Tolerance"),
+    ("goals", "SMARTAR goals"),
+    ("about", "About the student"),
+    ("plan", "Behaviour Support Plan"),
+    ("trials", "Strategy trials"),
+    ("sensory", "Sensory Overview"),
+    ("safety", "Safety & Risk Plan (summary)"),
+    ("transition", "Transition timetable"),
+    ("documents", "Documents on file"),
+]
+
+
+def _print_available() -> dict:
+    pf = prof["profile"] or {}
+    return {
+        "summary": bool(beh["incidents"] or beh["critical"]),
+        "hypothesis": bool(hyp),
+        "critical": bool(bs["crit"]),
+        "wot": bool(wot_view and wot_view.get("zones")),
+        "goals": bool(active_goals),
+        "about": bool(pf.get("summary") or _as_list(pf.get("strengths")) or _as_list(pf.get("interests"))
+                      or _as_list(pf.get("what_helps")) or _as_list(plan.get("strengths"))),
+        "plan": bool(plan),
+        "trials": bool(prof["trials"]),
+        "sensory": bool(sens["latest"] and sens_sum),
+        "safety": bool(safe["doc"] and safe.get("parsed")),
+        "transition": bool(tt and tt_weeks(tt_view(tt))),
+        "documents": bool(load_documents(ini)),
+    }
+
+
+def _sec_summary(graphs: bool) -> list:
+    blocks = [{"t": "p", "text": redact(period_summary_text())},
+              {"t": "table", "head": ["Incidents", "Critical", "Average severity", "Absences"],
+               "rows": [[str(len(bs["inc"])), str(bs["crit_n"]),
+                         f"{bs['avg_sev']}/5" if bs["avg_sev"] is not None else "—",
+                         f"{n_abs} of {school_days} school days"]],
+               "widths": [0.25, 0.25, 0.25, 0.25]}]
+    if graphs and bs["inc"]:
+        wk, wk_c = Counter(), Counter()
+        for i in bs["inc"]:
+            m = _monday(_d(i["date"]))
+            (wk_c if i.get("is_critical") else wk)[m] += 1
+        mondays, m = [], _monday(start)
+        while m <= end:
+            mondays.append(m)
+            m += timedelta(days=7)
+        blocks.append({"t": "img", "width": 1.0, "png": sp_print.chart_weekly_incidents(
+            mondays, [wk[x] for x in mondays], [wk_c[x] for x in mondays])})
+        pair = sp_print.pair_png(
+            sp_print.chart_hbar([(redact(k), v) for k, v in top(bs["behaviours"], 6)], "Most common behaviours"),
+            sp_print.chart_hbar(top(bs["locations"], 6), "Where incidents happen", AMBER))
+        if pair:
+            blocks.append({"t": "img", "width": 1.0, "png": pair})
+    if bs["inc"]:
+        rows = []
+        for sname in SESSIONS:
+            cnt = [sum(1 for i in bs["inc"] if i.get("session") == sname
+                       and (i.get("day_of_week") or _d(i["date"]).strftime("%A")) == d) for d in DAY_NAMES]
+            rows.append([sname] + [str(c) if c else "" for c in cnt])
+        shade = {}
+        mx = max((int(c) for r in rows for c in r[1:] if c), default=0)
+        for ri, r in enumerate(rows):
+            for ci, c in enumerate(r[1:], start=1):
+                if c and mx and int(c) >= max(2, mx * 0.6):
+                    shade[(ri, ci)] = "#f6d7b0"
+        blocks += [{"t": "sub", "text": "When incidents happen (session × day)"},
+                   {"t": "table", "head": [""] + DAY_NAMES, "rows": rows,
+                    "widths": [0.16] + [0.168] * 5, "shade": shade}]
+    return blocks
+
+
+def _sec_hypothesis() -> list:
+    det = hyp.get("detail", {})
+    blocks = [{"t": "p", "style": "callout", "text": redact(hyp["summary"])},
+              {"t": "kv", "cols": 2, "items": [(k, v) for k, v in det.items() if v]}]
+    logged = Counter()
+    for i in beh["incidents"]:
+        f, it = (i.get("hypothesis_function") or "").strip(), (i.get("hypothesis_item") or "").strip()
+        if f or it:
+            logged[f"{f} {it.lower()}".strip()] += 1
+    tot = sum(logged.values())
+    if tot:
+        blocks.append({"t": "p", "style": "muted", "text": "Functions staff recorded on incidents: " + " · ".join(
+            f"{k} {round(v / tot * 100)}%" for k, v in logged.most_common(4))})
+    blocks.append({"t": "p", "style": "muted",
+                   "text": f"Built from all {hyp['n']} incidents in this placement, the same way as "
+                           "Behaviour Support → Analysis."})
+    return blocks
+
+
+def _sec_critical() -> list:
+    crit = sorted(bs["crit"], key=lambda c: ci_date(c) or date.min, reverse=True)
+    rows = []
+    for c in crit:
+        fn = " ".join(x for x in (c.get("primary_hypothesis_function"),
+                                  (c.get("primary_hypothesis_item") or "").lower()) if x)
+        rows.append([_fmt(ci_date(c), True), str(c.get("severity") or "—"), c.get("primary_location") or "—",
+                     fn or "—", redact(_short(c.get("primary_behaviour"), 260))])
+    return [{"t": "table", "head": ["Date", "Severity", "Location", "Function", "What happened"],
+             "rows": rows, "widths": [0.13, 0.09, 0.14, 0.16, 0.48]}]
+
+
+def _sec_wot() -> list:
+    zones = wot_view["zones"]
+    rows, shade = [], {}
+    for zid, label, _sub, col, wash in WOT_ZONE_META:
+        z = zones.get(zid)
+        if not z:
+            continue
+        rows.append([label] + ["\n".join(f"• {redact(x)}" for x in (z.get(k) or [])) or "—" for k, _l in WOT_COLS])
+        shade[(len(rows) - 1, 0)] = wash
+    src = ("From the Window of Tolerance Builder" + (f", last saved {_fmt(wot_view['updated'], True)}"
+           if wot_view.get("updated") else "")) if wot_view["source"] == "builder" else \
+        "Draft from incident data — not yet built in the Window of Tolerance Builder."
+    return [{"t": "p", "style": "muted", "text": src},
+            {"t": "table", "head": ["Zone"] + [l for _k, l in WOT_COLS], "rows": rows,
+             "widths": [0.19, 0.27, 0.27, 0.27], "shade": shade}]
+
+
+def _sec_goals(graphs: bool) -> list:
+    blocks = []
+    if graphs:
+        series = [(f"Goal {i + 1}", list(s_["weekly"].keys()), list(s_["weekly"].values()),
+                   GOAL_COLOURS[i % len(GOAL_COLOURS)]) for i, (g, s_) in enumerate(goal_rows) if s_["weekly"]]
+        if series:
+            blocks.append({"t": "img", "width": 1.0, "png": sp_print.chart_goal_lines(series)})
+    for i, (g, s_) in enumerate(goal_rows):
+        trend = TREND_TXT[s_["trend"]][0].split(" ", 1)[-1]
+        blocks.append({"t": "sub", "text": f"Goal {i + 1}"})
+        blocks.append({"t": "p", "text": g.get("smartar_goal") or "—"})
+        facts = [("Expected or better", f"{s_['pct_on']}%" if s_["pct_on"] is not None else "—"),
+                 ("Entries", str(s_["total"])), ("Trend", trend),
+                 ("Tracking period", g.get("tracking_period") or "All Day"),
+                 ("Started", _fmt(_d(g.get("start_date") or g.get("created_at")), True)),
+                 ("Last tracked", _fmt(s_["last"], True) if s_["last"] else "—")]
+        if g.get("exclusion_goal"):
+            facts.append(("Exclusion goal", g["exclusion_goal"]))
+        blocks.append({"t": "kv", "cols": 3, "items": facts})
+        gas = [(l, g.get(f"gas_{l.lower().replace(' ', '_')}")) for l in LEVEL_ORDER]
+        gas = [(l, v) for l, v in gas if v]
+        if gas:
+            blocks.append({"t": "table", "head": ["GAS level", "Description"],
+                           "rows": [[l.title(), v] for l, v in gas], "widths": [0.18, 0.82]})
+    return blocks
+
+
+def _sec_about() -> list:
+    pf = prof["profile"] or {}
+    blocks = []
+    if pf.get("summary"):
+        blocks.append({"t": "p", "text": redact(pf["summary"])})
+    for lbl, items in (("Strengths", _as_list(pf.get("strengths")) or _as_list(plan.get("strengths"))),
+                       ("Interests", _as_list(pf.get("interests")) or _as_list(plan.get("interests"))),
+                       ("What helps", _as_list(pf.get("what_helps"))),
+                       ("What doesn't help", _as_list(pf.get("what_doesnt_help")))):
+        if items:
+            blocks += [{"t": "sub", "text": lbl}, {"t": "bullets", "items": [redact(x) for x in items]}]
+    return blocks
+
+
+def _sec_plan() -> list:
+    meta = [("Review date", _fmt(_any_date(plan.get("review_date")), True) if plan.get("review_date") else "Not set"),
+            ("Class teacher", plan.get("class_teacher") or ""), ("Support staff", plan.get("support_staff") or "")]
+    blocks = [{"t": "kv", "cols": 3, "items": meta}]
+    for k, lbl in PLAN_FIELDS:
+        items = _as_list(plan.get(k))
+        if items:
+            blocks += [{"t": "sub", "text": lbl}, {"t": "bullets", "items": [redact(x) for x in items]}]
+    return blocks
+
+
+def _sec_trials() -> list:
+    rows = []
+    for t in running + done:
+        is_run = t.get("status") == "Running"
+        rows.append([redact(t.get("title") or "Trial"),
+                     "Running" if is_run else (t.get("outcome") or "Concluded"),
+                     _fmt(_d(t.get("start_date")), True),
+                     redact(t.get("strategy") or ""),
+                     redact((t.get("measure") or "") if is_run else (t.get("conclusion") or ""))])
+    return [{"t": "table", "head": ["Trial", "Status", "Started", "Strategy", "Tracking / what we learned"],
+             "rows": rows, "widths": [0.2, 0.13, 0.11, 0.28, 0.28]}]
+
+
+def _sec_sensory() -> list:
+    rec = sens["latest"]
+    rows, shade = [], {}
+    for a_, v_ in sens_sum["areas"]:
+        pri = (v_.get("priority") or "").title()
+        rows.append([a_, pri, f"{v_.get('checked', '')} / {v_.get('total', '')} ({v_.get('pct', '')}%)"])
+        if v_.get("priority") == "HIGH PRIORITY":
+            shade[(len(rows) - 1, 1)] = "#fde8e8"
+        elif v_.get("priority") == "MEDIUM PRIORITY":
+            shade[(len(rows) - 1, 1)] = "#fff3e0"
+    blocks = [{"t": "p", "style": "muted", "text": f"Completed {_fmt(_d(rec.get('overview_date')), True)}"
+               + (f" by {rec['completed_by']}" if rec.get("completed_by") else "")
+               + f" · {_review_note(rec.get('review_date'))[0]}"},
+              {"t": "table", "head": ["Area", "Priority", "Items checked"], "rows": rows,
+               "widths": [0.5, 0.25, 0.25], "shade": shade}]
+    if sens_sum.get("text"):
+        blocks.append({"t": "p", "text": sens_sum["text"]})
+    if sens_sum.get("strategies"):
+        blocks += [{"t": "sub", "text": "Suggested sensory strategies"},
+                   {"t": "bullets", "items": [x[:1].upper() + x[1:] for x in sens_sum["strategies"]]}]
+    return blocks
+
+
+def _sec_safety() -> list:
+    spd = safe.get("parsed") or {}
+    order = {"EXTREME": 0, "HIGH": 1, "MODERATE": 2, "LOW": 3}
+    risks = sorted(spd.get("risks", []), key=lambda r: order.get(r.get("level"), 4))
+    fills = {"EXTREME": "#f2c4bf", "HIGH": "#f8d9bf", "MODERATE": "#f7ecc2", "LOW": "#d6efdc"}
+    rows, shade = [], {}
+    for r in risks:
+        rows.append([r.get("level") or "—", r.get("code") or "", redact(r["issue"]), redact(r.get("function") or "")])
+        if r.get("level") in fills:
+            shade[(len(rows) - 1, 0)] = fills[r["level"]]
+    blocks = [{"t": "p", "style": "muted",
+               "text": f"Plan dated {spd.get('plan_date') or _fmt(_d(safe['doc'].get('created_at')), True)} · "
+                       f"{_review_note(spd.get('review_date'))[0]}. Summary only — proactive strategies and "
+                       "procedures are in the full plan in the Document Archive."},
+              {"t": "table", "head": ["Risk level", "Rating", "Concerning issue", "Function"], "rows": rows,
+               "widths": [0.14, 0.1, 0.48, 0.28], "shade": shade}]
+    if spd.get("priority_actions"):
+        blocks += [{"t": "sub", "text": "Priority actions"},
+                   {"t": "bullets", "items": [redact(a) for a in spd["priority_actions"]]}]
+    return blocks
+
+
+def _sec_transition() -> list:
+    v = tt_view(tt)
+    wks = tt_weeks(v)
+    short = v.get("home_school_short") or (tu.school_short_name(v.get("home_school") or "") if tu else "")
+    rec = _d(v.get("recommencement_date"))
+    facts = [("Status", re.sub(r"^[^\w]+", "", tt_status(tt))), ("School", v.get("home_school") or ""),
+             ("Contact", v.get("home_school_contact") or ""), ("BSC", v.get("bsc") or ""),
+             ("Recommencement Date at Home School", tu.recommencement_text(rec) if (rec and tu) else "")]
+    rows, shade = [], {}
+    for w in wks:
+        try:
+            mon = tu.week_monday(w["year"], w["term"], w["week"])
+        except Exception:
+            mon = _d((w.get("days") or [{}])[0].get("date"))
+        row = [f"Term: {w.get('term')}\nWeek: {w.get('week')}"]
+        for k in range(5):
+            day = (w.get("days") or [])[k] if k < len(w.get("days") or []) else {}
+            lines = [ln for ln in (tu.doc_day_text(day, ini, short) if (tu and day) else []) if ln]
+            row.append("\n".join(([f"Date: {mon + timedelta(days=k):%d/%m}"] if mon else []) + lines))
+            if day.get("loc") in ("HOME", "OTHER"):   # same highlight as the printed timetable
+                shade[(len(rows), k + 1)] = "#fff2cc"
+        rows.append(row)
+    blocks = [{"t": "kv", "cols": 2, "items": facts},
+              {"t": "table", "head": [""] + DAY_NAMES, "rows": rows,
+               "widths": [0.12] + [0.176] * 5, "shade": shade}]
+    if (v.get("notes") or "").strip():
+        blocks.append({"t": "p", "text": redact(v["notes"])})
+    return blocks
+
+
+def _sec_documents() -> list:
+    docs = load_documents(ini)
+    return [{"t": "table", "head": ["Date", "Type", "Title", "From"],
+             "rows": [[_fmt(_d(d_.get("created_at")), True), d_.get("doc_type") or "",
+                       d_.get("title") or d_.get("file_name") or "", d_.get("source_tool") or ""] for d_ in docs],
+             "widths": [0.14, 0.2, 0.42, 0.24]}]
+
+
+def build_print_report(selected: list[str], graphs: bool, name: str) -> dict:
+    builders = {"summary": lambda: _sec_summary(graphs), "hypothesis": _sec_hypothesis,
+                "critical": _sec_critical, "wot": _sec_wot, "goals": lambda: _sec_goals(graphs),
+                "about": _sec_about, "plan": _sec_plan, "trials": _sec_trials, "sensory": _sec_sensory,
+                "safety": _sec_safety, "transition": _sec_transition, "documents": _sec_documents}
+    labels = dict(PRINT_SECTIONS)
+    titles = {"summary": "Behaviour summary", "critical": "Critical incidents",
+              "safety": "Safety & Risk Plan", "documents": "Documents on file"}
+    sections = []
+    for key, _l in PRINT_SECTIONS:
+        if key in selected:
+            title = titles.get(key, labels[key])
+            if key in ("summary", "critical"):
+                title += f" — {period_lbl}"
+            sections.append({"title": title, "blocks": builders[key]()})
+    who = name.strip() or ini
+    exit_d = _d(stu.get("planned_exit_date"))
+    report = {
+        "title": f"Student Snapshot — {who}",
+        "subtitle": f"Cowandilla Learning Centre · Learning & Behaviour Unit · printed {TODAY:%d/%m/%Y}",
+        "facts": [("Program", stu.get("program") or "—"),
+                  ("Year level", str(stu.get("year_level") or "—")),
+                  ("Data period", f"{period_lbl} ({_fmt(start, True)} – {_fmt(end, True)})"),
+                  ("Placement start", _fmt(p_start_d, True)),
+                  ("Planned exit", _fmt(exit_d, True) if exit_d else "—"),
+                  ("Weeks at CLC", str(days_in // 7) if days_in is not None and days_in >= 0 else "—")],
+        "footer": f"CLC-LBU Student Snapshot · {who} · printed {TODAY:%d/%m/%Y} · "
+                  "Confidential student information — store and share securely.",
+        "sections": sections,
+    }
+    if name.strip() and name.strip() != ini:
+        pat = re.compile(rf"\b{re.escape(ini)}\b")
+
+        def swap(x):
+            if isinstance(x, str):
+                return pat.sub(name.strip(), x)
+            if isinstance(x, list):
+                return [swap(y) for y in x]
+            if isinstance(x, tuple):
+                return tuple(swap(y) for y in x)
+            if isinstance(x, dict):
+                return {k: (swap(v) if k not in ("png", "shade", "t", "style", "widths") else v) for k, v in x.items()}
+            return x
+        report["sections"] = swap(report["sections"])
+    return report
+
+
+def render_print_panel():
+    avail = _print_available()
+    keys = [k for k, _ in PRINT_SECTIONS if avail[k]]
+    with st.popover("🖨️ Print / download", use_container_width=True):
+        st.markdown(f"**Print or download {ini}'s snapshot**")
+        if not keys:
+            st.info("Nothing has been recorded for this student yet.")
+            return
+        for k in keys:   # default: everything ticked (set before the widgets, no value= clash)
+            st.session_state.setdefault(f"pr_{ini}_{k}", True)
+        st.session_state.setdefault(f"pr_{ini}_graphs", True)
+        b1, b2 = st.columns(2)
+        if b1.button("Select all", key="pr_all", use_container_width=True):
+            for k in keys:
+                st.session_state[f"pr_{ini}_{k}"] = True
+        if b2.button("Clear", key="pr_none", use_container_width=True):
+            for k in keys:
+                st.session_state[f"pr_{ini}_{k}"] = False
+        labels = dict(PRINT_SECTIONS)
+        c1, c2 = st.columns(2)
+        for n_, k in enumerate(keys):
+            (c1 if n_ % 2 == 0 else c2).checkbox(labels[k], key=f"pr_{ini}_{k}")
+        missing = [labels[k] for k, _ in PRINT_SECTIONS if not avail[k]]
+        if missing:
+            st.caption("Nothing recorded yet, so not offered: " + ", ".join(missing) + ".")
+        st.divider()
+        graphs = st.checkbox("Include graphs", key=f"pr_{ini}_graphs")
+        name = st.text_input("Name to print (optional)", key=f"pr_{ini}_name",
+                             placeholder=f"Leave blank to print initials ({ini})",
+                             help="Used on this printout only — never saved. Replaces the initials "
+                                  "throughout, like the Transition Timetable download.")
+        chosen = [k for k in keys if st.session_state.get(f"pr_{ini}_{k}", True)]
+        st.caption(f"Data period: {period_lbl} ({_fmt(start, True)} – {_fmt(end, True)}) — "
+                   "change it with the Data period picker above.")
+        sig = (ini, tuple(chosen), graphs, name.strip(), period, str(start), str(end))
+        if st.button(f"Prepare files ({len(chosen)} section{'s' if len(chosen) != 1 else ''})",
+                     type="primary", use_container_width=True, disabled=not chosen, key="pr_go"):
+            with st.spinner("Building PDF and Word files…"):
+                rep = build_print_report(chosen, graphs, name)
+                st.session_state["pr_files"] = {"sig": sig, "pdf": sp_print.render_pdf(rep),
+                                                "docx": sp_print.render_docx(rep)}
+        files = st.session_state.get("pr_files")
+        if files and files.get("sig") == sig:
+            base = f"Student_Snapshot_{ini}_{TODAY:%Y%m%d}"
+            d1, d2 = st.columns(2)
+            d1.download_button("⬇️ PDF (to print)", files["pdf"], file_name=f"{base}.pdf",
+                               mime="application/pdf", use_container_width=True, key="pr_pdf")
+            d2.download_button("⬇️ Word (to edit)", files["docx"], file_name=f"{base}.docx",
+                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                               use_container_width=True, key="pr_docx")
+            st.caption("Open the PDF and print it, or edit the Word copy first.")
+        elif files:
+            st.caption("Selections changed — press Prepare files again.")
+
+
+with print_slot:
+    render_print_panel()
