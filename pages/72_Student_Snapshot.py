@@ -104,6 +104,12 @@ LEVEL_EMOJI = {"EXCEEDING": "🌟", "ABOVE": "✅", "EXPECTED": "🎯", "BELOW":
 LEVEL_SCORE = {"EXCEEDING": 5, "ABOVE": 4, "EXPECTED": 3, "BELOW": 2, "NOT YET": 1}
 ON_TRACK = {"EXCEEDING", "ABOVE", "EXPECTED"}
 GOAL_COLOURS = [TEAL, AMBER, "#5b6ee1", "#8e44ad", "#2c3e50", "#16a085"]
+# GAS levels chart: achieved levels = one blue ramp, light→dark as the level rises
+# (ordinal ramp checked with the dataviz validator); Not yet = the red pole, below the line.
+GAS_CHART = [  # (level, colour, above the line?)
+    ("EXPECTED", "#86b6ef", True), ("ABOVE", "#2a78d6", True), ("EXCEEDING", "#104281", True),
+    ("BELOW", "#f2a7a6", False), ("NOT YET", "#e34948", False),
+]
 
 DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 SESSIONS = ["Morning", "Middle", "Afternoon"]
@@ -990,8 +996,10 @@ def goal_stats(goal: dict, tracking: list[dict], start: date, end: date) -> dict
         b = sum(LEVEL_SCORE.get(r.get("performance_level"), 0) for r in rows[mid:]) / (len(rows) - mid)
         trend = "improving" if b - a > 0.5 else "declining" if b - a < -0.5 else "stable"
     weekly: dict[date, list[int]] = {}
+    weekly_levels: dict[date, Counter] = {}
     for r in rows:
         wk = _monday(_d(r["session_date"]))
+        weekly_levels.setdefault(wk, Counter())[r.get("performance_level")] += 1
         weekly.setdefault(wk, [0, 0])
         weekly[wk][1] += 1
         if r.get("performance_level") in ON_TRACK:
@@ -1002,6 +1010,7 @@ def goal_stats(goal: dict, tracking: list[dict], start: date, end: date) -> dict
         "trend": trend,
         "last": _d(rows[-1]["session_date"]) if rows else None,
         "weekly": {k: round(v[0] / v[1] * 100) for k, v in sorted(weekly.items())},
+        "weekly_levels": dict(sorted(weekly_levels.items())),
     }
 
 
@@ -1564,6 +1573,60 @@ def printed_timetable_html(wks: list[dict], short: str) -> str:
     return f'<table class="ov-tt"><tr class="ov-head"><th></th>{head}</tr>{rows}</table>'
 
 
+def goal_levels_figure(tracked_goals: list) -> "go.Figure":
+    """Small multiples, one row per goal, shared week axis and shared y scale."""
+    from plotly.subplots import make_subplots
+    weeks = sorted({w for _i, _g, s_ in tracked_goals for w in s_["weekly_levels"]})
+    up_max = max((sum(c[l] for l, _c, up in GAS_CHART if up) for _i, _g, s_ in tracked_goals
+                  for c in s_["weekly_levels"].values()), default=1)
+    dn_max = max((sum(c[l] for l, _c, up in GAS_CHART if not up) for _i, _g, s_ in tracked_goals
+                  for c in s_["weekly_levels"].values()), default=0)
+    titles = []
+    for i, g, s_ in tracked_goals:
+        trend = TREND_TXT[s_["trend"]][0].split(" ", 1)[-1].lower()
+        titles.append(f"<b>Goal {i + 1}</b> · {s_['pct_on']}% at Expected or better · "
+                      f"{s_['total']} session{'s' if s_['total'] != 1 else ''}"
+                      + (f" · {trend}" if s_["trend"] != "insufficient" else ""))
+    fig = make_subplots(rows=len(tracked_goals), cols=1, shared_xaxes=True,
+                        subplot_titles=titles, vertical_spacing=min(0.12, 0.35 / len(tracked_goals)))
+    seen = set()
+    for row, (i, g, s_) in enumerate(tracked_goals, start=1):
+        wl = s_["weekly_levels"]
+        totals = [sum(wl.get(w, Counter()).values()) for w in weeks]
+        for level, colour, up in GAS_CHART:
+            vals = [wl.get(w, Counter())[level] for w in weeks]
+            if not any(vals):
+                continue
+            fig.add_bar(
+                x=weeks, y=[v if up else -v for v in vals], name=level.capitalize(), legendgroup=level,
+                width=[4 * 86_400_000] * len(weeks),   # same bar width (4 days) however many weeks
+                showlegend=level not in seen, marker=dict(color=colour, line=dict(color="white", width=1.5)),
+                customdata=[[v, t] for v, t in zip(vals, totals)],
+                hovertemplate=(f"<b>Goal {i + 1}</b> · week of %{{x|%-d %b}}<br>{level.capitalize()}: "
+                               "%{customdata[0]} of %{customdata[1]} sessions<extra></extra>"),
+                row=row, col=1)
+            seen.add(level)
+        fig.update_yaxes(range=[-(dn_max + 0.8) if dn_max else -0.8, up_max + 1.2], row=row, col=1)
+    # y ticks show session counts both ways (no minus signs below the line)
+    step = max(1, round((up_max + dn_max) / 4))
+    ticks = list(range(-dn_max, up_max + 1))
+    ticks = [t for t in ticks if t % step == 0]
+    fig.update_yaxes(tickvals=ticks, ticktext=[str(abs(t)) for t in ticks], zeroline=True,
+                     zerolinecolor="#1f2d2d", zerolinewidth=1.5, gridcolor="#eef3f3", title_text="")
+    pad = timedelta(days=4)
+    fig.update_xaxes(tickformat="%-d %b", showgrid=False, tickvals=weeks,
+                     range=[weeks[0] - pad, weeks[-1] + pad] if weeks else None)
+    fig.update_layout(barmode="relative", bargap=0.35, height=90 + 165 * len(tracked_goals),
+                      legend=dict(orientation="h", yanchor="bottom", y=1.0 + 0.12 / len(tracked_goals),
+                                  xanchor="left", x=0, traceorder="normal",
+                                  title=dict(text="Sessions at:  ")),
+                      margin=dict(l=10, r=10, t=70, b=30), plot_bgcolor="white", paper_bgcolor="white",
+                      font_color="#1f2d2d", hoverlabel=dict(bgcolor="white", font_color="#1f2d2d"))
+    for ann in fig.layout.annotations:  # subplot titles: left-aligned, ink colour
+        ann.update(x=0, xanchor="left", font=dict(size=13, color="#1f2d2d"))
+    return fig
+
+
 def render_overview():
     tiles = []
 
@@ -1987,25 +2050,15 @@ with tab_g:
     elif not active_goals:
         st.info(f"{ini} has no active SMARTAR goals.")
     else:
-        # Weekly % Expected-or-better, one line per goal
-        fig = go.Figure()
-        any_points = False
-        for i, (g, s) in enumerate(goal_rows):
-            if not s["weekly"]:
-                continue
-            any_points = True
-            xs = list(s["weekly"].keys())
-            fig.add_trace(go.Scatter(
-                x=xs, y=list(s["weekly"].values()), mode="lines+markers",
-                name=f"Goal {i + 1}", line=dict(color=GOAL_COLOURS[i % len(GOAL_COLOURS)], width=2.5),
-                hovertemplate="Week of %{x|%-d %b}<br>%{y}% Expected or better<extra>Goal " + str(i + 1) + "</extra>",
-            ))
-        if any_points:
-            fig.add_hline(y=60, line_dash="dot", line_color=GREY,
-                          annotation_text="60%", annotation_position="right")
-            fig.update_yaxes(range=[0, 105], ticksuffix="%")
-            fig.update_layout(title=dict(text="Sessions at Expected or better, by week", font=dict(size=14)))
-            st.plotly_chart(theme=None, figure_or_data=plot_layout(fig, 300), use_container_width=True)
+        # One chart per goal: each week's sessions by GAS level. Expected / Above /
+        # Exceeding stack ABOVE the line, Not yet hangs BELOW it — so you see both
+        # how it went and how many sessions sit behind each week.
+        tracked_goals = [(i, g, s_) for i, (g, s_) in enumerate(goal_rows) if s_["weekly_levels"]]
+        if tracked_goals:
+            st.plotly_chart(theme=None, figure_or_data=goal_levels_figure(tracked_goals),
+                            use_container_width=True)
+            st.caption("Each bar is one week. Above the line: sessions at Expected, Above or Exceeding "
+                       "(darker = higher). Below the line: sessions at Not yet. Hover a bar for the numbers.")
         else:
             st.info("No goal tracking recorded in this period.")
 
@@ -2404,10 +2457,16 @@ def _sec_wot() -> list:
 def _sec_goals(graphs: bool) -> list:
     blocks = []
     if graphs:
-        series = [(f"Goal {i + 1}", list(s_["weekly"].keys()), list(s_["weekly"].values()),
-                   GOAL_COLOURS[i % len(GOAL_COLOURS)]) for i, (g, s_) in enumerate(goal_rows) if s_["weekly"]]
-        if series:
-            blocks.append({"t": "img", "width": 1.0, "png": sp_print.chart_goal_lines(series)})
+        tracked_ = [(i, s_) for i, (g, s_) in enumerate(goal_rows) if s_["weekly_levels"]]
+        if tracked_:
+            weeks_ = sorted({w for _i, s_ in tracked_ for w in s_["weekly_levels"]})
+            panels = [(f"Goal {i + 1} · {s_['pct_on']}% at Expected or better · {s_['total']} sessions",
+                       {w: dict(c) for w, c in s_["weekly_levels"].items()}) for i, s_ in tracked_]
+            blocks.append({"t": "img", "width": 1.0,
+                           "png": sp_print.chart_goal_levels(panels, GAS_CHART, weeks_)})
+            blocks.append({"t": "p", "style": "muted",
+                           "text": "Each bar is one week. Above the line: sessions at Expected, Above or "
+                                   "Exceeding (darker = higher). Below the line: sessions at Not yet."})
     for i, (g, s_) in enumerate(goal_rows):
         trend = TREND_TXT[s_["trend"]][0].split(" ", 1)[-1]
         blocks.append({"t": "sub", "text": f"Goal {i + 1}"})
