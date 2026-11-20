@@ -1756,7 +1756,7 @@ SECTIONS = [
     ("restorative", "Restorative Practice & Relational Safety"),
     ("regulation", "Regulation Profile (Window of Tolerance)"),
     ("smartar", "Behaviour Progress: SMARTAR Goals"),
-    ("voice", "Student Voice"),
+    ("voice", "Student Voice and Agency"),
     ("attendance", "Attendance"),
     ("summary", "Overall Progress Summary"),
 ]
@@ -1764,8 +1764,9 @@ SECTION_LABEL = dict(SECTIONS)
 SECTION_LABEL["recommendations"] = "Transition Recommendations (Appendix)"
 # Transition Recommendations are now an optional appendix (any report type), so Review = all sections
 REVIEW_SECTIONS = [k for k, _ in SECTIONS]
-VOICE_BLURB = ("Student voice records the student's own views about their learning and their time at the Learning Centre — "
-               "what they are proud of, what helps them, and what they would like their next school to know.")
+VOICE_BLURB = ("Student voice and agency records the student's own views about their learning and their time at the "
+               "Learning Centre — what they are proud of, what helps them, the choices they make about their learning, "
+               "and what they would like their next school to know.")
 
 # Saved reports live in the students/register project, next to wot_builder_reports
 REPORTS_TABLE = "student_reports"
@@ -3770,7 +3771,7 @@ with tab1:
 
     # ── STUDENT VOICE ─────────────────────────────────────────────
     if inc("voice"):
-        st.subheader("🗣️ Student Voice")
+        st.subheader("🗣️ Student Voice and Agency")
         st.caption(VOICE_BLURB + " Type it in, pull it from the Behaviour Support plan, and/or upload a photo of the "
                    "student's writing or a document.")
         st.button("📥 Pull student voice from the Behaviour Support plan", key="tr_voice_pull",
@@ -4534,7 +4535,7 @@ def build_docx(rep):
 
     # ── student voice (only if something was entered) ──
     if "voice" in rep["sections"] and (rep["voice_text"].strip() or rep["voice_files"]):
-        heading("Student Voice")
+        heading("Student Voice and Agency")
         blurb(VOICE_BLURB)
         if rep["voice_text"].strip():
             for ln in [x.strip() for x in rep["voice_text"].split("\n") if x.strip()]:
@@ -4691,7 +4692,7 @@ with tab2:
                      + (f" — {g['gas'][g['current']]}" if g["gas"].get(g["current"]) else ""))
 
     if "voice" in rep["sections"] and (rep["voice_text"].strip() or rep["voice_files"]):
-        st.markdown("#### Student Voice")
+        st.markdown("#### Student Voice and Agency")
         st.caption(VOICE_BLURB)
         if rep["voice_text"].strip():
             st.markdown("\n\n".join(f"> *{x.strip()}*" for x in rep["voice_text"].split("\n") if x.strip()))
