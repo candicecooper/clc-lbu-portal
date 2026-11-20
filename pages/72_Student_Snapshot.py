@@ -2549,7 +2549,12 @@ def _sec_documents() -> list:
              "widths": [0.14, 0.2, 0.42, 0.24]}]
 
 
-def build_print_report(selected: list[str], graphs: bool, name: str) -> dict:
+def build_print_report(selected: list[str], graphs: bool, full_name: str = "",
+                       nickname: str = "") -> dict:
+    """full_name  → heading, student details and page footer
+    nickname   → every place the initials appear in the text (falls back to
+                 the first word of the full name, like the Transition Timetable
+                 download). Neither is ever saved."""
     builders = {"summary": lambda: _sec_summary(graphs), "hypothesis": _sec_hypothesis,
                 "critical": _sec_critical, "wot": _sec_wot, "goals": lambda: _sec_goals(graphs),
                 "about": _sec_about, "plan": _sec_plan, "trials": _sec_trials, "sensory": _sec_sensory,
@@ -2564,12 +2569,20 @@ def build_print_report(selected: list[str], graphs: bool, name: str) -> dict:
             if key in ("summary", "critical"):
                 title += f" — {period_lbl}"
             sections.append({"title": title, "blocks": builders[key]()})
-    who = name.strip() or ini
+    full_name, nickname = (full_name or "").strip(), (nickname or "").strip()
+    in_text = nickname or (full_name.split()[0] if full_name else "") or ini   # name used in sentences
+    who = full_name or nickname or ini                                           # name used in headings
     exit_d = _d(stu.get("planned_exit_date"))
+    name_facts = []
+    if full_name:
+        name_facts.append(("Student", full_name))
+    if nickname and nickname != (full_name.split()[0] if full_name else ""):
+        name_facts.append(("Preferred name", nickname))
     report = {
         "title": f"Student Snapshot — {who}",
         "subtitle": f"Cowandilla Learning Centre · Learning & Behaviour Unit · printed {TODAY:%d/%m/%Y}",
-        "facts": [("Program", stu.get("program") or "—"),
+        "facts": name_facts + [
+                  ("Program", stu.get("program") or "—"),
                   ("Year level", str(stu.get("year_level") or "—")),
                   ("Data period", f"{period_lbl} ({_fmt(start, True)} – {_fmt(end, True)})"),
                   ("Placement start", _fmt(p_start_d, True)),
@@ -2579,12 +2592,12 @@ def build_print_report(selected: list[str], graphs: bool, name: str) -> dict:
                   "Confidential student information — store and share securely.",
         "sections": sections,
     }
-    if name.strip() and name.strip() != ini:
+    if in_text != ini:
         pat = re.compile(rf"\b{re.escape(ini)}\b")
 
         def swap(x):
             if isinstance(x, str):
-                return pat.sub(name.strip(), x)
+                return pat.sub(in_text, x)
             if isinstance(x, list):
                 return [swap(y) for y in x]
             if isinstance(x, tuple):
@@ -2623,18 +2636,31 @@ def render_print_panel():
             st.caption("Nothing recorded yet, so not offered: " + ", ".join(missing) + ".")
         st.divider()
         graphs = st.checkbox("Include graphs", key=f"pr_{ini}_graphs")
-        name = st.text_input("Name to print (optional)", key=f"pr_{ini}_name",
-                             placeholder=f"Leave blank to print initials ({ini})",
-                             help="Used on this printout only — never saved. Replaces the initials "
-                                  "throughout, like the Transition Timetable download.")
+        st.markdown("**Names on the printout** <span style='color:#5a6b6b;font-size:.85rem'>"
+                    "(optional — used for this download only, never saved)</span>", unsafe_allow_html=True)
+        n1, n2 = st.columns(2)
+        full_name = n1.text_input("Full name", key=f"pr_{ini}_full",
+                                  placeholder="e.g. Jackson Taylor",
+                                  help="Shown in the heading, the student details and the page footer.")
+        nickname = n2.text_input("Preferred name / nickname", key=f"pr_{ini}_nick",
+                                 placeholder="e.g. Jack",
+                                 help=f"Replaces '{ini}' everywhere in the text (e.g. '{ini} will attend CLC.' "
+                                      "→ 'Jack will attend CLC.'). If left blank, the first name from "
+                                      "Full name is used.")
+        _txt = nickname.strip() or (full_name.strip().split()[0] if full_name.strip() else "")
+        if _txt:
+            st.caption(f"Heading: **{full_name.strip() or nickname.strip()}** · in the text, "
+                       f"'{ini}' becomes **{_txt}**.")
+        else:
+            st.caption(f"Leave both blank to print initials ({ini}) throughout.")
         chosen = [k for k in keys if st.session_state.get(f"pr_{ini}_{k}", True)]
         st.caption(f"Data period: {period_lbl} ({_fmt(start, True)} – {_fmt(end, True)}) — "
                    "change it with the Data period picker above.")
-        sig = (ini, tuple(chosen), graphs, name.strip(), period, str(start), str(end))
+        sig = (ini, tuple(chosen), graphs, full_name.strip(), nickname.strip(), period, str(start), str(end))
         if st.button(f"Prepare files ({len(chosen)} section{'s' if len(chosen) != 1 else ''})",
                      type="primary", use_container_width=True, disabled=not chosen, key="pr_go"):
             with st.spinner("Building PDF and Word files…"):
-                rep = build_print_report(chosen, graphs, name)
+                rep = build_print_report(chosen, graphs, full_name, nickname)
                 st.session_state["pr_files"] = {"sig": sig, "pdf": sp_print.render_pdf(rep),
                                                 "docx": sp_print.render_docx(rep)}
         files = st.session_state.get("pr_files")
