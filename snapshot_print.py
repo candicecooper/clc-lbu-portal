@@ -94,21 +94,50 @@ def chart_hbar(items: list[tuple[str, int]], title: str, colour: str = TEAL) -> 
     return _fig_to_png(fig)
 
 
-def chart_goal_lines(series: list[tuple[str, list, list[int], str]]) -> bytes:
-    """series: (label, mondays, pct_values, colour)"""
+def chart_goal_levels(goals: list, levels: list, weeks: list) -> bytes:
+    """Small multiples, one panel per goal: each week's sessions by GAS level,
+    achieved levels stacked above the line, 'Not yet' below it.
+    goals:  [(title, {date: {level: count}}), ...]
+    levels: [(level, colour, above_line), ...] in stacking order"""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    fig, ax = plt.subplots(figsize=(7.2, 2.4))
-    for label, xs, ys, colour in series:
-        ax.plot(xs, ys, marker="o", markersize=4, linewidth=2, color=colour, label=label)
-    ax.axhline(60, color="#9fb3b3", linestyle=":", linewidth=1)
-    ax.set_ylim(0, 105)
-    ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter())
-    import matplotlib.dates as mdates
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%-d %b"))
-    _style_ax(ax, "Sessions at Expected or better, by week")
-    ax.legend(fontsize=8, frameon=False, loc="lower right", ncol=min(4, len(series)))
+    from matplotlib.patches import Patch
+    n = len(goals)
+    up_max = max((sum(c.get(l, 0) for l, _c, up in levels if up) for _t, wl in goals for c in wl.values()), default=1)
+    dn_max = max((sum(c.get(l, 0) for l, _c, up in levels if not up) for _t, wl in goals for c in wl.values()), default=0)
+    fig, axes = plt.subplots(n, 1, figsize=(7.2, 0.5 + 1.75 * n), sharex=True, squeeze=False)
+    x = list(range(len(weeks)))
+    for ax, (title, wl) in zip(axes[:, 0], goals):
+        pos = [0] * len(weeks)
+        neg = [0] * len(weeks)
+        for level, colour, up in levels:
+            vals = [wl.get(w, {}).get(level, 0) for w in weeks]
+            if not any(vals):
+                continue
+            if up:
+                ax.bar(x, vals, bottom=pos, color=colour, width=0.55, edgecolor="white", linewidth=1)
+                pos = [a + b for a, b in zip(pos, vals)]
+            else:
+                ax.bar(x, [-v for v in vals], bottom=[-v for v in neg], color=colour, width=0.55,
+                       edgecolor="white", linewidth=1)
+                neg = [a + b for a, b in zip(neg, vals)]
+        ax.axhline(0, color=INK, linewidth=1.2)
+        ax.set_ylim(-(dn_max + 0.8) if dn_max else -0.8, up_max + 1)
+        ticks = [t for t in ax.get_yticks() if float(t).is_integer() and -dn_max <= t <= up_max]
+        ax.set_yticks(ticks)
+        ax.set_yticklabels([str(abs(int(t))) for t in ticks])
+        _style_ax(ax, title)
+        ax.title.set_fontsize(9)
+    axes[-1, 0].set_xticks(x)
+    axes[-1, 0].set_xticklabels([w.strftime("%-d %b") for w in weeks], rotation=0 if len(weeks) <= 12 else 45,
+                                ha="center" if len(weeks) <= 12 else "right")
+    handles = [Patch(color=c, label=l.capitalize()) for l, c, _up in levels
+               if any(wl.get(w, {}).get(l, 0) for _t, wl in goals for w in weeks)]
+    fig.legend(handles=handles, loc="upper left", ncol=len(handles), frameon=False, fontsize=8,
+               bbox_to_anchor=(0.0, 1.0 + 0.02 / n), title="Sessions at:", title_fontsize=8,
+               alignment="left")
+    fig.tight_layout(rect=(0, 0, 1, 1 - 0.09 / max(1, n ** 0.5)))
     return _fig_to_png(fig)
 
 
