@@ -40,6 +40,27 @@ except Exception:  # pragma: no cover
 T_EXCURSIONS = "excursions"
 T_ACTIVITIES = "excursion_activities"
 T_STAFF = "excursion_staff"
+T_VEHICLES = "excursion_vehicles"
+# CLC site vehicles – used until the vehicles table has rows (edit in ⚙️ Settings → Vehicles)
+DEFAULT_VEHICLES = [
+    {"id": None, "name": "Kia (site car)", "rego": "S104BQL", "seats": None, "active": True},
+    {"id": None, "name": "Van", "rego": "S996BQL", "seats": None, "active": True},
+]
+
+VEHICLES_SQL = """-- Excursion Planner: site vehicles list (run once if you ran the earlier setup SQL)
+create table if not exists excursion_vehicles (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,                            -- e.g. Kia Carnival (site car)
+  rego text,                                     -- registration number
+  seats int,                                     -- seats incl. driver (optional – used for a seating check)
+  notes text,
+  active boolean default true
+);
+alter table excursion_vehicles disable row level security;
+insert into excursion_vehicles (name, rego)
+select v.name, v.rego from (values ('Kia (site car)', 'S104BQL'), ('Van', 'S996BQL')) as v(name, rego)
+where not exists (select 1 from excursion_vehicles e where upper(e.rego) = v.rego);
+"""
 
 SETUP_SQL = """-- CLC Excursion Planner — run once in the Supabase SQL editor
 -- (same Supabase project as the Hazard Report: SUPABASE_URL / SUPABASE_KEY)
@@ -81,9 +102,23 @@ create table if not exists excursion_staff (
   active boolean default true
 );
 
+create table if not exists excursion_vehicles (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,                            -- e.g. Kia Carnival (site car)
+  rego text,                                     -- registration number
+  seats int,                                     -- seats incl. driver (optional – used for a seating check)
+  notes text,
+  active boolean default true
+);
+
 alter table excursions           disable row level security;
 alter table excursion_activities disable row level security;
 alter table excursion_staff      disable row level security;
+alter table excursion_vehicles   disable row level security;
+
+insert into excursion_vehicles (name, rego)
+select v.name, v.rego from (values ('Kia (site car)', 'S104BQL'), ('Van', 'S996BQL')) as v(name, rego)
+where not exists (select 1 from excursion_vehicles e where upper(e.rego) = v.rego);
 """
 
 # =====================================================================
@@ -536,6 +571,7 @@ def blank_excursion() -> dict:
         "emergency_extra": "",
         "transport_mode": TRANSPORT_MODES[0],
         "vehicle_desc": "",
+        "vehicles": [],                  # site vehicles chosen: [{"name", "rego", "seats"}]
         "bus_company": "", "bus_phone": "", "bus_accreditation": "", "driver_accreditation": "",
         "driver_name": "", "driver_licence": "", "hvnl_aware": None, "last_heavy_vehicle": "",
         "freeway_aware": None,
@@ -726,8 +762,19 @@ def check_excursion(d: dict, staff_directory: list[dict] | None = None) -> list[
             add("block", "Private vehicle: owner, registration and insurance category are required for each vehicle.")
         add("warn", "Private vehicle: parental consent is needed for every passenger, and a staff member must "
                     "not transport a single student 1:1.")
-    if mode == "Site car / government vehicle" and not d.get("vehicle_desc"):
-        add("warn", "Say which vehicle is being used (e.g. Site car Kia).")
+    if mode == "Site car / government vehicle":
+        vs = d.get("vehicles") or []
+        if not vs and not d.get("vehicle_desc"):
+            add("warn", "Choose which site vehicle(s) are being used.")
+        for v in vs:
+            if not (v.get("rego") or "").strip():
+                add("warn", f"No rego recorded for {v.get('name')} – add it in ⚙️ Settings → Vehicles.")
+        seats = [int(v.get("seats") or 0) for v in vs]
+        if vs and all(seats):
+            people = student_total(d) + len([x for x in d.get("staff", []) if x.get("name")])
+            if people > sum(seats):
+                add("warn", f"{people} people (students + adults) but only {sum(seats)} seats in the vehicle(s) chosen – "
+                            "plan more than one trip or another vehicle.")
     if mode == "Public transport (bus / train / tram)":
         add("ok", "Public transport: a CLC staff member must travel in each vehicle with students.")
 
@@ -809,8 +856,13 @@ def fmt_time(v) -> str:
 
 def transport_text(d: dict) -> str:
     mode = d.get("transport_mode", "")
-    if mode == "Site car / government vehicle" and d.get("vehicle_desc"):
-        return f"{mode} – {d['vehicle_desc']}"
+    if mode == "Site car / government vehicle":
+        vs = d.get("vehicles") or []
+        if vs:
+            return f"{mode} – " + "; ".join(v.get("name", "") + (f" (rego {v['rego']})" if v.get("rego") else "")
+                                             for v in vs)
+        if d.get("vehicle_desc"):
+            return f"{mode} – {d['vehicle_desc']}"
     if mode == "Chartered bus" and d.get("bus_company"):
         return f"{mode} – {d['bus_company']}"
     return mode
