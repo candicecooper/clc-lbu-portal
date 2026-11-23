@@ -1316,10 +1316,11 @@ def doc_filename(row: dict, kind: str) -> str:
 # =====================================================================
 # ED169 — fill the official DfE form (data/excursions/ED169_template.docx)
 # =====================================================================
-ED169_TEMPLATE_PATHS = [
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "excursions", "ED169_template.docx"),
-    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "excursions", "ED169_template.docx"),
-]
+# Looked for in data/excursions/ first, then data/ (either upload location works)
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_DATA_DIRS = [os.path.join(base, *sub) for base in (_HERE, os.path.dirname(_HERE))
+              for sub in (("data", "excursions"), ("data",))]
+ED169_TEMPLATE_PATHS = [os.path.join(d, "ED169_template.docx") for d in _DATA_DIRS]
 
 # Cost + year-level grid: one tuple per row of the form → (ex GST, GST, charge, year, male, female, total)
 _COST_ROWS = [
@@ -1339,8 +1340,8 @@ _DRIVER_ROWS = [("Text106", "Text107", "Text108"), ("Text109", "Text110", "Text1
 
 
 def _data_file(name: str) -> str | None:
-    for base in (os.path.dirname(os.path.abspath(__file__)), os.path.dirname(os.path.dirname(os.path.abspath(__file__)))):
-        p = os.path.join(base, "data", "excursions", name)
+    for d in _DATA_DIRS:
+        p = os.path.join(d, name)
         if os.path.exists(p):
             return p
     return None
@@ -1413,7 +1414,7 @@ def _insert_site_logo(doc) -> None:
 
 
 def ed169_template_path() -> str | None:
-    return next((p for p in ED169_TEMPLATE_PATHS if os.path.exists(p)), None)
+    return _data_file("ED169_template.docx")
 
 
 class _FormFiller:
