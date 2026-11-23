@@ -5,6 +5,9 @@ Used by:  pages/74_Excursion_Planner.py
 
 Put this file at the ROOT of the repo (next to confidential_auth.py).
 
+Staff plan, save, find and download excursions here. The documents are printed and signed by hand
+(teacher-in-charge, then Leadership) – the tool does not send anything to Leadership.
+
 What lives here
   * DfE Camps and Excursions Procedure (March 2025) rules the tool checks against
     (ratios, exclusions, bushfire season, aquatic, buses, private vehicles …)
@@ -19,12 +22,9 @@ from __future__ import annotations
 
 import copy
 import io
-import json
 import math
 import os
-import urllib.request
 from datetime import date, datetime, time
-from html import escape
 
 import streamlit as st
 
@@ -48,18 +48,14 @@ create table if not exists excursions (
   id uuid primary key default gen_random_uuid(),
   created_at timestamptz default now(),
   updated_at timestamptz default now(),
-  status text not null default 'Draft',          -- Draft | Submitted | Returned | Approved | Cancelled
+  status text not null default 'Saved',          -- Saved | Archived
   name text,
   destination text,
   program text,
   excursion_date date,
   teacher_in_charge text,
   prepared_by text,
-  data jsonb not null default '{}'::jsonb,      -- every field of the form
-  submitted_at timestamptz,
-  leader_name text,
-  leader_comment text,
-  decided_at timestamptz
+  data jsonb not null default '{}'::jsonb       -- every field of the form
 );
 
 create table if not exists excursion_activities (
@@ -80,7 +76,7 @@ create table if not exists excursion_staff (
   gender text,                                   -- M / F / X
   status text default 'Teacher',                 -- Teacher / SSO / Leader / Specialist / Other
   email text,
-  is_leader boolean default false,               -- can approve excursions + gets submission emails
+  is_leader boolean default false,               -- Leadership (used as the default site contact)
   first_aid_expiry date,
   active boolean default true
 );
@@ -512,33 +508,6 @@ def get_supabase():
     return create_client(url, key)
 
 
-def send_email(recipients: list[str], subject: str, html_body: str) -> tuple[bool, str]:
-    """POST to the CLC Portal Mailer (Google Apps Script — EMAIL_WEBHOOK_URL / EMAIL_WEBHOOK_TOKEN)."""
-    recipients = sorted({r.strip() for r in recipients if r and "@" in r})
-    if not recipients:
-        return False, "No Leader email addresses are set up yet (Leadership → Staff list)."
-    url = _secret("EMAIL_WEBHOOK_URL", "email.webhook_url", "gmail.webhook_url")
-    token = _secret("EMAIL_WEBHOOK_TOKEN", "email.webhook_token", "gmail.webhook_token", default="")
-    if not url:
-        return False, "Email isn't set up on the portal (EMAIL_WEBHOOK_URL missing)."
-    try:
-        body = json.dumps({"token": token, "to": ",".join(recipients),
-                           "subject": subject, "html": html_body}).encode()
-        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            reply = resp.read().decode(errors="ignore").strip()
-    except Exception as e:
-        return False, f"Email failed: {e}"
-    if reply.startswith("OK"):
-        return True, f"Email sent to {len(recipients)} recipient(s)."
-    return False, f"Email failed: mailer replied '{reply[:150]}'"
-
-
-def portal_page_url() -> str:
-    base = _secret("PORTAL_URL", "portal.url", default="https://clc-lbu-portal.onrender.com")
-    return f"{base.rstrip('/')}/Excursion_Planner"
-
-
 def today_adl() -> date:
     return datetime.now(ADL_TZ).date() if ADL_TZ else date.today()
 
@@ -665,7 +634,7 @@ def all_activities(d: dict) -> list[dict]:
 
 def check_excursion(d: dict, staff_directory: list[dict] | None = None) -> list[tuple[str, str]]:
     """Return [(level, message)] where level is 'block', 'warn' or 'ok'.
-    'block' items must be fixed before the excursion can be submitted."""
+    'block' = missing or not allowed – fix before printing for signature."""
     res: list[tuple[str, str]] = []
     add = lambda lvl, msg: res.append((lvl, msg))  # noqa: E731
     staff_directory = staff_directory or []
@@ -788,7 +757,7 @@ def check_excursion(d: dict, staff_directory: list[dict] | None = None) -> list[
             if lvl == "Extreme":
                 add("block", f"{lbl} is rated EXTREME. Add controls to lower the likelihood, or change the plan.")
             elif lvl == "High":
-                add("warn", f"{lbl} is rated HIGH — Leadership will need to accept this risk before approving.")
+                add("warn", f"{lbl} is rated HIGH — talk this through with Leadership when the forms are signed.")
 
     if flags.get("aquatic"):
         add("warn", "Water is involved — plans must cover a student falling into the water, and the ratio must "
@@ -814,7 +783,7 @@ def check_excursion(d: dict, staff_directory: list[dict] | None = None) -> list[
     return res
 
 
-def can_submit(checks: list[tuple[str, str]]) -> bool:
+def is_complete(checks: list[tuple[str, str]]) -> bool:
     return not any(lvl == "block" for lvl, _ in checks)
 
 
@@ -862,49 +831,6 @@ def emergency_text(d: dict) -> list[str]:
         lines.append(d["emergency_extra"].strip())
     lines.append("All adults on the excursion have this information. See attached Risk Management Plan.")
     return lines
-
-
-# =====================================================================
-# Email bodies
-# =====================================================================
-def submission_email_html(row: dict) -> str:
-    d = row.get("data") or {}
-    def tr(k, v):
-        return (f"<tr><td style='padding:6px 10px;color:#555;vertical-align:top'><b>{escape(k)}</b></td>"
-                f"<td style='padding:6px 10px'>{escape(str(v or '—'))}</td></tr>")
-    lvl = highest_level(d)
-    return f"""
-    <div style='font-family:Segoe UI,Arial,sans-serif;font-size:14px'>
-      <h2 style='margin:0 0 8px;color:#1A7A7A'>Excursion submitted for approval</h2>
-      <table style='border-collapse:collapse;border:1px solid #ddd'>
-        {tr('Excursion', d.get('name'))}
-        {tr('Destination', d.get('destination'))}
-        {tr('Program', d.get('program'))}
-        {tr('Date', fmt_date(d.get('date_from')))}
-        {tr('Times', f"{fmt_time(d.get('depart_time'))} – {fmt_time(d.get('return_time'))}")}
-        {tr('Students', student_total(d))}
-        {tr('Staff', ', '.join(s.get('name', '') for s in d.get('staff', [])))}
-        {tr('Teacher in charge', d.get('teacher_in_charge'))}
-        {tr('Highest risk rating', lvl)}
-      </table>
-      <p style='margin-top:14px'>Review and approve (or return with comments) in the portal's
-      <b>Excursion Planner</b> → Leadership tab: <a href='{portal_page_url()}'>{portal_page_url()}</a></p>
-    </div>"""
-
-
-def decision_email_html(row: dict, approved: bool) -> str:
-    d = row.get("data") or {}
-    head = "approved ✅" if approved else "returned for changes ↩️"
-    comment = escape(row.get("leader_comment") or "")
-    return f"""
-    <div style='font-family:Segoe UI,Arial,sans-serif;font-size:14px'>
-      <h2 style='margin:0 0 8px;color:#1A7A7A'>Excursion {head}</h2>
-      <p><b>{escape(d.get('name', ''))}</b> – {escape(d.get('destination', ''))} on {fmt_date(d.get('date_from'))}</p>
-      <p>{'Approved' if approved else 'Reviewed'} by <b>{escape(row.get('leader_name') or '')}</b>.</p>
-      {f"<p><b>Comments:</b><br>{comment}</p>" if comment else ""}
-      <p>{'Download the signed-off ED169 and Risk Management Plan' if approved else 'Make the changes and resubmit'}
-      in the <b>Excursion Planner</b> → My Excursions: <a href='{portal_page_url()}'>{portal_page_url()}</a></p>
-    </div>"""
 
 
 # =====================================================================
@@ -960,7 +886,7 @@ def _cell(cell, text, bold=False, size=9.5, fill=None, colour=None, italic=False
     return cell
 
 
-def _base_doc(landscape=False, draft=False):
+def _base_doc(landscape=False, draft=False):  # draft kept for compatibility – no longer used
     Document, WD_ORIENT, _, WD_ALIGN_PARAGRAPH, _, _, Cm, Pt, RGBColor = _docx()
     doc = Document()
     st_ = doc.styles["Normal"]
@@ -1026,9 +952,8 @@ def _box(b: bool) -> str:
 def _build_ed169_recreated(row: dict) -> bytes:
     """Fallback only (template file missing): ED169 rebuilt with the DfE wording."""
     d = row.get("data") or {}
-    approved = row.get("status") == "Approved"
     Document, _, _, WD_ALIGN_PARAGRAPH, _, _, Cm, Pt, RGBColor = _docx()
-    doc = _base_doc(draft=not approved)
+    doc = _base_doc()
 
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -1170,22 +1095,14 @@ def _build_ed169_recreated(row: dict) -> bytes:
                "departmental employee.    N/A", size=8.5)
     _para(doc, "(c) Charter air travel – indicate why charter air travel is required.    N/A", size=8.5)
 
-    _kv_table(doc, [("Signature – Teacher-in-charge", f"{d.get('teacher_in_charge', '')}  (submitted electronically "
-                                                     f"via CLC Staff Portal)"),
-                    ("Date", fmt_date(row.get("submitted_at")) or fmt_date(today_adl()))])
+    _kv_table(doc, [("Signature – Teacher-in-charge", ""), ("Date", "")])
 
     # --- Approvals -----------------------------------------------------
     _heading(doc, "APPROVALS", size=11, colour="000000")
     _para(doc, "PRINCIPAL/DIRECTOR APPROVAL FOR CAMP/EXCURSION", bold=True, size=9.5)
-    edu = bool(d.get("predominantly_educational", True))
     _para(doc, "Based on the stated curriculum links/outcomes, I certify that this camp/excursion is predominantly "
-               f"educational     {_box(edu)} Yes   {_box(not edu)} No", size=9.5)
-    if approved:
-        _kv_table(doc, [("Signature – Principal/Director (site leader delegate)",
-                         f"Approved electronically in the CLC Staff Portal by {row.get('leader_name', '')}"),
-                        ("Date", fmt_date(row.get("decided_at")))])
-    else:
-        _kv_table(doc, [("Signature – Principal/Director", ""), ("Date", "")])
+               f"educational     {_box(False)} Yes   {_box(False)} No", size=9.5)
+    _kv_table(doc, [("Signature – Principal/Director", ""), ("Date", "")])
     _para(doc, "FOR INTERSTATE TRAVEL/USE OF DEPARTMENTAL VEHICLES/BUSES INTERSTATE", bold=True, size=9.5)
     _kv_table(doc, [("Approved/not approved – Education Director", "Not applicable – intrastate excursion")])
     _para(doc, "FOR OVERSEAS TRAVEL REFER TO OVERSEAS TRAVEL POLICY & PROCEDURES", bold=True, size=9)
@@ -1198,9 +1115,8 @@ def _build_ed169_recreated(row: dict) -> bytes:
 def build_risk_assessment(row: dict) -> bytes:
     """CLC Risk Management Plan and Approval to Transport (layout of the current CLC template)."""
     d = row.get("data") or {}
-    approved = row.get("status") == "Approved"
     Document, _, WD_TABLE_ALIGNMENT, WD_ALIGN_PARAGRAPH, _, _, Cm, Pt, RGBColor = _docx()
-    doc = _base_doc(landscape=True, draft=not approved)
+    doc = _base_doc(landscape=True)
 
     prog = d.get("program") or ""
     _heading(doc, f"Risk Management Plan and Approval to Transport – CLC {prog if prog in ('JP', 'PY', 'SY') else ''}".strip(),
@@ -1272,10 +1188,9 @@ def build_risk_assessment(row: dict) -> bytes:
     sign = [
         ("Venue and safety information reviewed and attached.", "Yes" if d.get("venue_reviewed") else "No"),
         ("Prepared By:", d.get("prepared_by") or d.get("teacher_in_charge", "")),
-        ("Consultation with Manager/ Line Manager (if relevant):",
-         f"Reviewed and approved by {row.get('leader_name', '')} on {fmt_date(row.get('decided_at'))}"
-         + (f" – {row['leader_comment']}" if row.get("leader_comment") else "") if approved else "Awaiting Leadership review"),
-        ("Developed / Reviewed:", fmt_date(row.get("submitted_at")) or fmt_date(today_adl())),
+        ("Consultation with Manager/ Line Manager (if relevant):", ""),
+        ("Manager / Line Manager signature and date:", ""),
+        ("Developed / Reviewed:", fmt_date(row.get("updated_at")) or fmt_date(today_adl())),
     ]
     _kv_table(doc, sign, widths=(9, 17.7))
 
@@ -1321,8 +1236,7 @@ def doc_filename(row: dict, kind: str) -> str:
     stamp = dd.strftime("%d-%m-%y") if dd else "undated"
     dest = "".join(ch for ch in (d.get("destination") or d.get("name") or "Excursion") if ch.isalnum() or ch in " -")
     dest = "_".join(dest.split())[:40]
-    tag = "" if row.get("status") == "Approved" else "_DRAFT"
-    return f"{stamp}_{dest}_{kind}{tag}.docx"
+    return f"{stamp}_{dest}_{kind}.docx"
 
 
 # =====================================================================
@@ -1572,7 +1486,6 @@ def build_ed169(row: dict) -> bytes:
     from docx.shared import Pt, RGBColor
 
     d = row.get("data") or {}
-    approved = row.get("status") == "Approved"
     doc = Document(path)
     try:
         _insert_site_logo(doc)
@@ -1670,31 +1583,7 @@ def build_ed169(row: dict) -> bytes:
     except Exception:
         pass
 
-    # ---- signatures + approval ---------------------------------------------
-    sub = _parse_date(row.get("submitted_at")) or today_adl()
-    try:
-        _write_cell(doc.tables[9].rows[0].cells[1], f"{d.get('teacher_in_charge', '')} – submitted via CLC Staff Portal",
-                    size=8.5, italic=True)
-    except Exception:
-        pass
-    f.text("Text32", f"{sub:%d}"); f.text("Text33", f"{sub:%m}"); f.text("Text34", f"{sub:%y}")
-    if approved:
-        dec = _parse_date(row.get("decided_at")) or today_adl()
-        edu = bool(d.get("predominantly_educational", True))
-        f.check("Check1", edu); f.check("Check2", not edu)
-        try:
-            _write_cell(doc.tables[10].rows[0].cells[1],
-                        f"Approved by {row.get('leader_name', '')} – CLC Staff Portal", size=8.5, italic=True)
-        except Exception:
-            pass
-        f.text("Text115", f"{dec:%d}"); f.text("Text116", f"{dec:%m}"); f.text("Text117", f"{dec:%y}")
-    else:
-        hp = doc.sections[0].header.add_paragraph()
-        hp.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        r = hp.add_run("DRAFT – NOT YET APPROVED BY LEADERSHIP")
-        r.bold = True
-        r.font.size = Pt(10)
-        r.font.color.rgb = RGBColor(0xC6, 0x28, 0x28)
+    # ---- signatures + approval: left blank – the form is printed and signed by hand ----
 
     # ---- attachment sheet if more staff / year levels than the form has rows -------
     if extra_staff or extra_students:
