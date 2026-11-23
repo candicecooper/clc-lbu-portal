@@ -7,10 +7,6 @@ from datetime import datetime, date, time, timedelta
 import uuid
 import random
 import json
-import re
-import difflib
-import requests
-import urllib.parse
 from io import BytesIO
 import base64
 import bcrypt
@@ -39,204 +35,6 @@ def init_supabase() -> Client:
         return None
 
 supabase: Client = init_supabase()
-
-try:
-    from archive_utils import archive_once, archive_document, initials_from_name
-    _ARCHIVE_AVAILABLE = True
-except Exception:
-    _ARCHIVE_AVAILABLE = False
-
-# Window of Tolerance Builder link (pushes this tool's WoT data into the Builder's report)
-try:
-    import wot_builder_sync as wbs
-    _WBS_AVAILABLE = True
-except Exception:
-    wbs = None
-    _WBS_AVAILABLE = False
-
-# Micro behaviours (early-warning signs) — shared with the Safety & Risk Plan Builder
-try:
-    import micro_behaviour_utils as mbu
-    _MICRO_AVAILABLE = True
-except Exception as _mbu_err:
-    mbu = None
-    _MICRO_AVAILABLE = False
-    _MICRO_IMPORT_ERROR = str(_mbu_err)
-
-
-def _student_archive_initials(student) -> str:
-    """The Document Archive / Student Register code for this student.
-
-    Students synced from the Student Register already carry their
-    register code verbatim in `name` (see archive_utils.sync_behaviour_create,
-    which sets name=first_name=the register code) — and that code can be
-    3-4 letters when a 2-letter clash was disambiguated (e.g. "LAB" so it
-    doesn't collide with an existing "LA"). Running an already-a-code name
-    like "LAB" back through initials_from_name() truncates it to the first
-    two characters ("LA"), silently filing documents under the WRONG/
-    colliding folder. Mirrors the same already-a-code vs. full-name check
-    archive_utils.import_from_smartar() uses: a short (2-4 char), single-
-    token, letters-only name is treated as a code and kept as-is; anything
-    else (a real "Firstname L." name, for legacy students entered directly
-    in this tool) still goes through initials_from_name() as before."""
-    raw = (student.get("name") or "").strip()
-    if raw and " " not in raw and raw.replace("-", "").isalpha() and 2 <= len(raw) <= 4:
-        return raw.upper()
-    base = initials_from_name(raw) or ""
-    # Students entered directly in this tool (full name, not a register code) can be filed in the Student
-    # Register under a longer code — a middle initial, or letters added to avoid a clash (e.g. LN → LNM).
-    # Use the Register's own code when it can be matched safely, so the Window of Tolerance Builder,
-    # Document Archive and Transition Report Builder all find the student.
-    return _register_code_for(raw, base, student) or base
-
-
-def _register_codes() -> set:
-    """Active codes in the Student Register (cached 5 minutes). Empty set if it can't be reached."""
-    ck, now = "_bst_register_codes", datetime.now().timestamp()
-    hit = st.session_state.get(ck)
-    if hit and now - hit[0] < 300:
-        return hit[1]
-    codes = set()
-    try:
-        from archive_utils import _get_client as _reg_client
-        rows = _reg_client().table("student_directory").select("initials,status").execute().data or []
-        codes = {str(r.get("initials") or "").strip().upper() for r in rows
-                 if r.get("initials") and str(r.get("status") or "").lower() != "archived"}
-    except Exception:
-        codes = set()
-    if codes:
-        st.session_state[ck] = (now, codes)
-    return codes
-
-
-def _register_code_for(raw: str, base: str, student=None) -> str:
-    codes = _register_codes()
-    if not codes or not base:
-        return ""
-    base = base.upper()
-    words = [w for w in re.split(r"[\s\-]+", raw) if w and w[0].isalpha()]
-    first_last = [(student or {}).get("first_name") or "", (student or {}).get("last_name") or ""]
-    words2 = [w for w in re.split(r"[\s\-]+", " ".join(first_last)) if w and w[0].isalpha()]
-    for cand in ("".join(w[0] for w in words).upper(), "".join(w[0] for w in words2).upper()):
-        if 2 <= len(cand) <= 4 and cand in codes:
-            return cand                      # every name part, e.g. "Lily Nora Martin" → LNM
-    if base in codes:
-        return base                          # the usual 2-letter code
-    longer = sorted(c for c in codes if c.startswith(base) and len(c) > len(base))
-    return longer[0] if len(longer) == 1 else ""   # one LN… code only (e.g. LNM) — never guess between two
-
-# ══════════════════════════════════════════════════════════════════════════
-# SHARED GROQ HELPER
-# Model fallback chain (openai/gpt-oss-120b -> qwen/qwen3.6-27b ->
-# llama-3.3-70b-versatile), self-healing on 413 "request too large" by
-# halving max_tokens, and a fallback client construction for the
-# httpx "proxies" TypeError seen on some cached wheel combinations.
-# Consolidates the three separate hardcoded llama-3.3-70b-versatile call
-# sites in this file (that model was deprecated for free/dev-tier Groq
-# accounts on 16 Aug 2026).
-# ══════════════════════════════════════════════════════════════════════════
-_GROQ_MODEL_CHAIN = ["openai/gpt-oss-120b", "qwen/qwen3.6-27b", "llama-3.3-70b-versatile"]
-
-def _make_groq_client(api_key: str):
-    from groq import Groq as _GroqClient
-    try:
-        return _GroqClient(api_key=api_key)
-    except TypeError:
-        # Cached groq wheel + newer httpx: Client.__init__() got an
-        # unexpected keyword argument 'proxies' — build httpx.Client()
-        # explicitly and pass it through.
-        import httpx
-        return _GroqClient(api_key=api_key, http_client=httpx.Client())
-
-def groq_ai_call(prompt: str, max_tokens: int = 1500, temperature: float = 0.1) -> str:
-    """Call Groq's chat completions with model fallback and self-healing
-    on oversized requests. Returns the raw text content, or raises the
-    last exception if every model in the chain fails."""
-    GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
-    if not GROQ_KEY:
-        raise RuntimeError("Groq API key not configured.")
-    client = _make_groq_client(GROQ_KEY)
-    last_err = None
-    for model in _GROQ_MODEL_CHAIN:
-        _tokens = max_tokens
-        for _attempt in range(3):
-            try:
-                kwargs = dict(
-                    model=model,
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=_tokens,
-                    temperature=temperature,
-                )
-                if model.startswith("qwen/"):
-                    # Disable hybrid-thinking chain-of-thought output so
-                    # Qwen returns the requested content directly instead
-                    # of a <think>...</think> block.
-                    kwargs["reasoning_effort"] = "none"
-                response = client.chat.completions.create(**kwargs)
-                return response.choices[0].message.content.strip()
-            except Exception as e:
-                last_err = e
-                if "413" in str(e) or "too large" in str(e).lower():
-                    _tokens = max(500, _tokens // 2)
-                    continue
-                break  # non-413 error: try the next model in the chain
-    raise last_err if last_err else RuntimeError("Groq call failed for an unknown reason.")
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# VIEW-ONLY BRIDGE FROM OTHER PORTAL TOOLS (e.g. Student Snapshot)
-# Other general-staff tools (Student Snapshot, etc.) sit behind the single
-# shared staff password from staff_auth.py (session flag "clc_staff_ok").
-# This tool has its own, separate, NAMED login (real staff email+password)
-# because incidents are attributed to a specific, verified staff member.
-# Those two logins used to be completely unaware of each other, so a staff
-# member already unlocked elsewhere in the portal still hit this tool's own
-# password wall when a link sent them straight to a student.
-#
-# The fix: if the shared staff flag is already set AND the URL is asking
-# for one specific student's dashboard/analysis (?p=...&sid=...), let them
-# straight in to VIEW that page — but never to write. Every save/delete
-# path in this file calls _viewer_write_blocked() first and refuses to run
-# for a bridged session, so every incident/record is still only ever saved
-# under a real, password-verified staff account. (Aug 2026)
-# ══════════════════════════════════════════════════════════════════════════
-_VIEWER_SAFE_PAGES = {"student_dashboard", "student_analysis"}
-_VIEWER_USER = {"id": "_viewer", "name": "Staff (viewing via Student Snapshot)",
-                "email": "", "role": "VIEWER"}
-
-
-def _viewer_write_blocked(what: str = "do this") -> bool:
-    """Call at the very top of any function that saves or deletes data.
-    Returns True (and shows a message) if the current session is a
-    view-only bridge session, in which case the caller must not write."""
-    if st.session_state.get("_viewer_session"):
-        st.error(f"🔒 You're viewing this student via a quick link from Student Snapshot. "
-                 f"Please log in here with your own email and password to {what}.")
-        return True
-    return False
-
-
-def _try_viewer_bridge() -> bool:
-    """Called only when the tool's own login hasn't succeeded yet. Grants a
-    view-only session if the shared staff password is already unlocked
-    (set by staff_auth.py elsewhere in this same browser session) and the
-    URL names a safe page + a real student id. Never sets write access."""
-    ss = st.session_state
-    if not ss.get("clc_staff_ok"):
-        return False
-    p = _qp_get("p")
-    sid = _qp_get("sid")
-    if p not in _VIEWER_SAFE_PAGES or not sid:
-        return False
-    if not any(str(s.get("id")) == sid for s in ss.get("students", [])):
-        return False
-    ss.logged_in = True
-    ss["_viewer_session"] = True
-    ss.current_user = dict(_VIEWER_USER)
-    ss.current_page = p
-    ss.selected_student_id = sid
-    return True
-
 
 st.set_page_config(page_title="CLC Behaviour Support", page_icon="📊", layout="wide", initial_sidebar_state="collapsed")
 
@@ -352,1200 +150,17 @@ ANTECEDENTS = [
     "Other - unstructured time",
     "Other - access denied"
 ]
-
-# ══════════════════════════════════════════════════════════════════════════
-# ANTECEDENT CATEGORISATION (shared)
-# Groups a raw antecedent string into one of the six categories used
-# throughout the dashboard/analysis charts and by the BSEM recommendation
-# engine below. Matches the "Category - description" structure of
-# ANTECEDENTS first; falls back to keyword matching for free-text
-# antecedents (e.g. AI-extracted historical incidents).
-# ══════════════════════════════════════════════════════════════════════════
-def categorize_antecedent(ant) -> str | None:
-    a = str(ant).strip()
-    if not a or a.startswith("---"):
-        return None
-    _KNOWN = {"peer": "Peer", "transition": "Transition", "instructions": "Instructions",
-              "engagement": "Engagement", "sensory": "Sensory", "other": "Other"}
-    prefix = a.split(" - ")[0].strip().lower()
-    if prefix in _KNOWN:
-        return _KNOWN[prefix]
-    a_low = a.lower()
-    if "peer" in a_low: return "Peer"
-    if "transition" in a_low: return "Transition"
-    if "instruction" in a_low or "demand" in a_low or "following" in a_low: return "Instructions"
-    if any(w in a_low for w in ["engagement", "task", "wait", "routine", "interrupt", "finish",
-                                 "literacy", "maths", "learning", "work independently", "difficult"]):
-        return "Engagement"
-    if any(w in a_low for w in ["sensory", "noise", "loud", "bright", "crowded", "medication",
-                                 "hungry", "thirsty", "movement break"]):
-        return "Sensory"
-    return "Other"
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# BSEM STRATEGY LIBRARY
-# Curated, trauma-informed strategies organised by antecedent category and
-# BSEM domain (Body / Relationship / Stamina / Engagement / Character —
-# the Berry Street Education Model's five real domains).
-# This is the fixed, reviewable source of truth for "what could be
-# trialled" — the AI layer (build_bsem_recommendations, below) only ever
-# selects and explains items from this list; it never invents strategies.
-# ══════════════════════════════════════════════════════════════════════════
-BSEM_STRATEGY_LIBRARY = {
-    "Peer": [
-        {"domain": "Body", "strategy": "A consistent seating position / work partner away from known peer-conflict pairings, reducing the physical stress response of tracking a threat."},
-        {"domain": "Relationship", "strategy": "A pre-taught, low-key 'I need space' cue (card, gesture, or phrase) agreed with the student in advance, so the relationship can hold the need for distance before dysregulation, not during."},
-        {"domain": "Character", "strategy": "Once regulated, a brief comic-strip-conversation or social-story debrief of the incident, building the student's own account of what happened, their values, and a better next step."},
-        {"domain": "Stamina", "strategy": "Notice and name small wins in staying engaged after a peer conflict, building resilience for next time."},
-    ],
-    "Transition": [
-        {"domain": "Body", "strategy": "A visual first-then schedule with a consistent early warning (5-minute, then 2-minute) before the transition, reducing the stress response to surprise."},
-        {"domain": "Relationship", "strategy": "A brief regulation check-in with a trusted adult immediately before the transition begins, not only offered after dysregulation appears."},
-        {"domain": "Engagement", "strategy": "Involve the student in choosing part of their own transition routine (order of steps, which door, which adult walks with them) to build willingness to engage with the routine."},
-        {"domain": "Stamina", "strategy": "A visible 'transition streak' tracker, celebrating consecutive successful transitions to build persistence through a known hard moment."},
-    ],
-    "Instructions": [
-        {"domain": "Body", "strategy": "Offer instructions as a choice of order rather than a single directive ('finish the maths or start it — you choose') to reduce the perceived threat of direct demand."},
-        {"domain": "Relationship", "strategy": "PACE-aligned delivery (Playful, Accepting, Curious, Empathic tone) rather than a directive tone, particularly for the first instruction attempt."},
-        {"domain": "Engagement", "strategy": "Build in visible processing/wait time before expecting compliance, using 'when-then' framing so the student can see the endpoint and stays willing to engage."},
-        {"domain": "Character", "strategy": "Frame following instructions as a values-based choice the student is making ('this is what taking responsibility looks like'), building their own self-knowledge of capability."},
-    ],
-    "Engagement": [
-        {"domain": "Body", "strategy": "Chunk tasks into short, visibly-bounded segments with a built-in movement break before fatigue sets in, rather than after."},
-        {"domain": "Relationship", "strategy": "Lead with specific, genuine connection/praise before task difficulty increases, so engagement is scaffolded by relationship rather than demand alone."},
-        {"domain": "Engagement", "strategy": "Offer choice in task order or format, and link the task to a known interest area where possible, to build willingness to learn."},
-        {"domain": "Stamina", "strategy": "A visible progress tracker or goal-setting approach so the student can see persistence paying off across the task."},
-    ],
-    "Sensory": [
-        {"domain": "Body", "strategy": "A quiet, low-stimulation space to enter before joining the group; trial reducing ambient volume on entry, and noise-cancelling headphones/earphones if auditory input seems to be the driver."},
-        {"domain": "Body", "strategy": "Reduce ambient unpredictability where identifiable (flickering lights, sudden bells/alarms, echoing spaces)."},
-        {"domain": "Relationship", "strategy": "Offer the sensory strategy discreetly rather than in front of peers, protecting the relationship and the student's dignity."},
-        {"domain": "Character", "strategy": "Once regulated, collaboratively ask the student which specific inputs feel hardest — building their own self-knowledge and language for it over time."},
-    ],
-    "Other": [
-        {"domain": "Body", "strategy": "Check whether an unidentified sensory or physiological factor (hunger, tiredness, medication timing) coincides with these incidents."},
-        {"domain": "Relationship", "strategy": "Prioritise co-regulation and connection with a trusted adult before any expectation of cognitive engagement or compliance."},
-        {"domain": "Stamina", "strategy": "Look for a predictability gap around this trigger (change of adult, change of routine, time of day) and consider what advance notice could be built in, building resilience to change over time."},
-        {"domain": "Character", "strategy": "Because this antecedent doesn't fit a clear category yet, a closer look at the incident narratives — including what they say about the student's needs and values — may surface a more specific pattern to target."},
-    ],
-}
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# BEHAVIOUR REFRAME — trauma-informed / neurodivergent-affirming lens
-# Reframes a canonical behaviour label away from "the student is choosing
-# to be difficult" toward what's more likely actually happening
-# neurologically/developmentally. Draws on SMART (Strategies for Managing
-# Abuse-Related Trauma), Australian Childhood Foundation, and general
-# well-established neurodiversity-affirming concepts — not a diagnosis
-# for any individual student, a starting lens for staff to be read
-# alongside clinical judgement, not instead of it.
-# ══════════════════════════════════════════════════════════════════════════
-BEHAVIOUR_REFRAME = {
-    "Verbal refusal of instruction": "Often reflects a felt loss of control, or a demand that feels unsafe or overwhelming in the moment — not a wish to be defiant.",
-    "Task refusal / passive non-compliance": "May reflect executive-function load, perceived risk of failure, or sensory overwhelm rather than unwillingness to comply.",
-    "Physical aggression toward peer": "A fight response from a nervous system that has moved into survival mode — the priority is safety and de-escalation, not the 'why' in the moment.",
-    "Physical aggression toward adult": "Same as above — a fight-stage survival response, not a considered choice made with full access to reasoning.",
-    "Threatening behaviour": "Often a warning sign the nervous system is close to its threshold, an attempt to create distance or safety — though it must still be taken seriously and responded to safely.",
-    "Property destruction": "A release of overwhelming internal arousal directed at an object rather than a person — often safer than it looks.",
-    "Throwing objects": "A physical release of energy the body can't otherwise discharge in the moment.",
-    "Unsanctioned departure (elopement)": "A flight response — moving away from an overwhelming environment, often the only escape route available to a dysregulated nervous system.",
-    "Absconding from school grounds": "An extension of the same flight response, at higher intensity.",
-    "Self-injurious behaviour": "Can be a way of regulating overwhelming internal sensation, or a communication of distress when other channels feel unavailable.",
-    "Shutdown / complete withdrawal": "A freeze response — the nervous system going into shutdown as a protective strategy, not disengagement by choice.",
-    "Selective mutism / non-responsiveness": "Consistent with a freeze response, or for some neurodivergent students a genuine, situational loss of verbal access under stress.",
-    "Hiding or avoiding adult proximity": "May reflect a freeze/avoid response, or sensory and social avoidance common in autism.",
-    "Verbal aggression toward peer": "Often a release of built-up frustration or dysregulation rather than a considered social choice.",
-    "Verbal aggression toward adult": "Usually reflects dysregulation in the moment, not a stable judgement about the adult.",
-    "Property misuse or interference": "Can reflect sensory-seeking or a need for control/predictability rather than deliberate disruption.",
-    "Disruptive verbal commentary": "Can reflect impulsivity (common in ADHD) or an attempt to self-regulate out loud, rather than intentional disruption.",
-    "Interrupting / calling out": "Often impulsivity-driven — reduced inhibitory control rather than rudeness, common in ADHD presentations.",
-    "Inappropriate vocalisation / noises": "May be a self-regulatory or stimming behaviour common in neurodivergence rather than attention-seeking.",
-    "Dysregulated emotional expression": "A visible sign the student's regulatory capacity has been exceeded in that moment.",
-}
-
-# ══════════════════════════════════════════════════════════════════════════
-# CPI VERBAL ESCALATION CONTINUUM
-# CPI's continuum tracks rising verbal defiance through five stages. It
-# describes verbal/behavioural escalation specifically — physical
-# aggression, elopement, and shutdown/freeze presentations sit outside
-# it (physical aggression belongs to CPI's broader Crisis Development
-# Model rather than the verbal continuum; shutdown/freeze is the opposite
-# pole entirely). Mapped here in general terms — always apply CPI training
-# and in-the-moment clinical judgement over an automatic label.
-# ══════════════════════════════════════════════════════════════════════════
-CPI_STAGE_MAP = {
-    "Verbal refusal of instruction": "Refusal",
-    "Task refusal / passive non-compliance": "Refusal",
-    "Disruptive verbal commentary": "Release",
-    "Interrupting / calling out": "Release",
-    "Inappropriate vocalisation / noises": "Release",
-    "Verbal aggression toward peer": "Release",
-    "Verbal aggression toward adult": "Release",
-    "Property misuse or interference": "Release",
-    "Dysregulated emotional expression": "Release",
-    "Property destruction": "Release",
-    "Throwing objects": "Release",
-    "Threatening behaviour": "Intimidation",
-}
-
-CPI_STAGES = {
-    "Questioning": {
-        "desc": "Asking questions that challenge authority or purpose — sometimes a genuine information request, sometimes a challenge disguised as one.",
-        "response": "Answer a genuine information question directly and matter-of-factly. If it's a challenging question aimed at your authority rather than real information, redirect calmly back to the original request rather than getting drawn into a debate.",
-        "smart_stage": "Relate — the student is still verbally reachable here, but a defensive/testing question is often an early sign the nervous system is starting to feel unsafe. Stay connected before pushing for compliance.",
-    },
-    "Refusal": {
-        "desc": "Non-compliance — saying no, or passively refusing to follow an instruction.",
-        "response": "Set a clear, simple limit and offer a genuine choice within it. Avoid repeating the same instruction on a loop, and avoid a power struggle — state it once, calmly, and allow processing time.",
-        "smart_stage": "Relate — offering choice and a calm, connected tone keeps the relationship (not the demand) in charge. Reasoning or negotiating the 'why' of the rule can wait.",
-    },
-    "Release": {
-        "desc": "Releasing built-up energy through venting — raised voice, swearing, crying, or object-directed release not aimed at hurting anyone.",
-        "response": "Allow the release to happen safely and remove the audience if possible. Don't try to reason, problem-solve, or debrief while they're venting — wait for the energy to visibly drop first.",
-        "smart_stage": "Regulate — the brainstem/survival part of the brain is driving this, not the thinking part. Words and logic can't reach it yet; the only job right now is safety and letting the energy discharge.",
-    },
-    "Intimidation": {
-        "desc": "Verbal or nonverbal threats aimed at a specific person, or general intimidation.",
-        "response": "Take the threat seriously and seek additional staff support. Stay calm and neutral — don't respond in kind, argue, or make counter-threats.",
-        "smart_stage": "Regulate — the student's threat response has taken over. Your own calm, regulated nervous system is the intervention here, not an argument or a consequence delivered in the moment.",
-    },
-    "Tension Reduction": {
-        "desc": "The point after the peak where energy visibly starts dropping.",
-        "response": "This is the window for reconnection and repair — not before. Debrief once the student is genuinely calm, not immediately after the peak.",
-        "smart_stage": "Relate, then Reason — this is the only point in the sequence where a debrief or a consequence conversation will actually land. Reconnect first (Relate); once that's solid, then reflect together (Reason).",
-    },
-}
-
-
-# ── Demand-avoidant presentations (ODD / PDA-type profiles, diagnosed or not) ──
-# Framed around the presentation, never a label: the strategies are the same
-# whether or not a diagnosis exists. Core idea: the *perceived* loss of control
-# is what triggers the threat response, so demands are lowered, shared and
-# reframed (declarative language, perceived choice) rather than pushed harder.
-DEMAND_AVOIDANCE_STRATEGIES = [
-    {"domain": "Relationship", "strategy": "Lead with connection and a calm, low-arousal tone. Treat refusal as anxiety-driven avoidance of a perceived loss of control, not defiance — so avoid power struggles, ultimatums and public correction."},
-    {"domain": "Body", "strategy": "Lower the overall demand load, especially during dysregulation or the known peak session. Drop non-essential demands, prioritise 2–3 'must-do' expectations, and let everything else flow from choice."},
-    {"domain": "Engagement", "strategy": "Use declarative, indirect language ('I wonder if...', 'I notice the pencils are out') and invitations rather than direct commands. Present tasks as problems to solve together or as roles ('Can you be the timekeeper?')."},
-    {"domain": "Engagement", "strategy": "Build in perceived choice: offer two acceptable options where both meet your goal, with the student choosing 'what', 'where', 'with whom' or 'in what order' — never whether."},
-    {"domain": "Stamina", "strategy": "Hand control back in small, safe ways: let the student set the timer, pick the starting point, or negotiate a 'my turn / your turn' split of the task, and acknowledge the effort made rather than the compliance."},
-    {"domain": "Character", "strategy": "Use shared-expert and interest-led framing (a favourite topic, a role of responsibility) so the student can say yes on their own terms. Build their own language for 'I'm feeling pressured' with a pre-agreed, no-questions-asked pause signal."},
-    {"domain": "Relationship", "strategy": "Keep adults consistent and predictable about what stays non-negotiable (safety) while staying flexible about everything else. Plan the repair conversation for when the student is regulated and keep it brief, non-blaming and forward-looking."},
-]
-
-PERCEIVED_CHOICE_PHRASES = [
-    ("Get your book out now.",
-     "Would you like to start with the reading or the writing? / Do you want your book on the desk or the floor?"),
-    ("It's time to line up.",
-     "I wonder who is going to lead us to the door today — you or your buddy?"),
-    ("You need to finish this before break.",
-     "We have 10 minutes before break. Do you want to do the first half now, or the part you like best first?"),
-    ("Stop doing that.",
-     "I'm noticing it's getting loud in here. Would a walk to the water bottle or a quiet corner help?"),
-    ("Sit down and start.",
-     "Where would be the best spot for you to work today — the beanbag or the back table?"),
-    ("You must say sorry.",
-     "When you're ready, how would you like to fix it — a note, a chat, or help tidy up?"),
-    ("Do the worksheet.",
-     "I've got a worksheet and a hands-on version of the same task. Which would you like to take on?"),
-]
-
-
-def demand_avoidance_signal(full_df) -> dict:
-    """How strongly does this student's data point to a demand-avoidant
-    presentation? Looks at the share of incidents triggered by instructions,
-    engagement/task demands or transitions, or presenting as refusal. A
-    prompt for staff judgement only, never a label or diagnosis."""
-    if full_df is None or full_df.empty:
-        return {"n": 0, "total": 0, "pct": 0.0, "flag": False}
-    total = len(full_df)
-    _cats = full_df["antecedent"].apply(categorize_antecedent) if "antecedent" in full_df.columns else pd.Series([None] * total, index=full_df.index)
-    _demand_cat = _cats.isin(["Instructions", "Engagement", "Transition"])
-    _refusal = pd.Series(False, index=full_df.index)
-    if "behaviour_type" in full_df.columns:
-        _refusal = full_df["behaviour_type"].astype(str).str.contains("refus|non-compl|noncompl|elope|depart|abscond|shutdown|withdraw", case=False, regex=True)
-    _flagged = _demand_cat | _refusal
-    n = int(_flagged.sum())
-    pct = n / total if total else 0.0
-    return {"n": n, "total": total, "pct": pct, "flag": (n >= 3 and pct >= 0.4)}
-
-
-def _top_categories(full_df, n: int = 2) -> list[str]:
-    """Return the n most frequent antecedent categories present in
-    full_df, computing the category column if it isn't already there."""
-    if full_df is None or full_df.empty or "antecedent" not in full_df.columns:
-        return []
-    if "_ant_cat" in full_df.columns:
-        cats = full_df["_ant_cat"].dropna()
-    else:
-        cats = full_df["antecedent"].apply(categorize_antecedent).dropna()
-    if cats.empty:
-        return []
-    return list(cats.value_counts().head(n).index)
-
-
-def build_bsem_recommendations(
-    full_df, top_beh, top_ant, top_loc, top_session, student_name: str,
-    context: str = "dashboard",
-) -> list[dict]:
-    """Curated-library + AI-framing recommendations, returned as structured
-    items so the UI can render them as clickable cards with a short "why
-    this fits" and "how to implement" — rather than one static paragraph.
-
-    The curated BSEM_STRATEGY_LIBRARY supplies the domain + strategy
-    (fixed, never AI-invented); the AI layer only writes the "why" and
-    "how" for each, grounded in the student's actual pattern.
-
-    context="dashboard": short, practical, "things to trial this week"
-      framing for CLC-LBU's small, highly structured setting.
-    context="analysis": framing oriented toward what should travel with
-      the student into a mainstream school placement — what a receiving
-      school would need to know and put in place.
-
-    Returns a list of dicts: {"category","domain","strategy","why","how"}.
-    """
-    cats = _top_categories(full_df, n=2)
-    if not cats:
-        return []
-
-    picked = []
-    for cat in cats:
-        for item in BSEM_STRATEGY_LIBRARY.get(cat, []):
-            picked.append({"category": cat, **item})
-
-    _library_json = "\n".join(
-        f'{i}. [{p["domain"]}] {p["strategy"]}' for i, p in enumerate(picked)
-    )
-
-    if context == "analysis":
-        _framing = (
-            "Write for a transition/handover audience: staff preparing to support this "
-            "student's move into a mainstream school setting. Frame 'how' in terms of what "
-            "the receiving school would need to know and put in place, since a mainstream "
-            "classroom won't have CLC-LBU's small, highly structured environment by default."
-        )
-    else:
-        _framing = (
-            "Write for CLC-LBU staff to use directly, day to day, in our small, highly "
-            "structured setting. Frame 'how' as something concrete to trial this week."
-        )
-
-    prompt = (
-        "You are a trauma-informed behaviour support specialist, using the Berry Street Education "
-        "Model (BSEM), whose five domains are Body, Relationship, Stamina, Engagement, and Character.\n"
-        f"Student pattern — primary behaviour: {top_beh}; primary trigger: {top_ant}; "
-        f"location hotspot: {top_loc}; peak time: {top_session}.\n\n"
-        "Here is a numbered, fixed, pre-approved list of strategies. Do NOT invent new "
-        "strategies or add anything not in this list:\n"
-        f"{_library_json}\n\n"
-        f"{_framing}\n"
-        "Select the 4-6 most relevant items given the student's pattern. For each, write:\n"
-        '"why" — one short sentence connecting it to this student\'s specific hotspot/time '
-        "pattern (not generic).\n"
-        '"how" — 2-3 concrete, practical implementation steps a staff member could follow.\n\n'
-        "Return ONLY a JSON array, no markdown fences, no preamble, in this exact form: "
-        '[{"id": <number from the list above>, "why": "...", "how": "..."}]'
-    )
-
-    try:
-        raw = groq_ai_call(prompt, max_tokens=2200, temperature=0.3)
-        raw = raw.strip()
-        raw = re.sub(r'^```(?:json)?\s*|\s*```\s*$', '', raw, flags=re.IGNORECASE).strip()
-        try:
-            ai_items = json.loads(raw)
-        except json.JSONDecodeError:
-            # Response likely got truncated by the token limit before the
-            # JSON could close properly — salvage whatever complete
-            # {"id":...,"why":...,"how":...} objects we can from the
-            # partial array instead of discarding the whole response.
-            ai_items = []
-            for _om in re.findall(r'\{[^{}]*\}', raw):
-                try:
-                    ai_items.append(json.loads(_om))
-                except json.JSONDecodeError:
-                    continue
-            if not ai_items:
-                raise
-        if isinstance(ai_items, dict):
-            # Model may have wrapped the array in an object, e.g. {"recommendations": [...]}
-            for _v in ai_items.values():
-                if isinstance(_v, list):
-                    ai_items = _v
-                    break
-        result = []
-        for a in ai_items:
-            if not isinstance(a, dict):
-                continue
-            try:
-                idx = int(a.get("id"))
-            except (TypeError, ValueError):
-                continue
-            if not (0 <= idx < len(picked)):
-                continue
-            result.append({**picked[idx], "why": a.get("why", ""), "how": a.get("how", "")})
-        if result:
-            return result
-        # TEMP DIAGNOSTIC: the call succeeded and returned valid JSON, but no
-        # item matched a known strategy id — surface why instead of a silent
-        # generic fallback, so the actual cause is visible in the app.
-        _debug = (f"[DEBUG] AI returned {len(ai_items) if isinstance(ai_items, list) else 'non-list'} "
-                  f"item(s), none matched. Raw response (first 400 chars): {raw[:400]}")
-        return [{**p, "why": "", "how": _debug if i == 0 else ""} for i, p in enumerate(picked[:6])]
-    except Exception as _e:
-        # TEMP DIAGNOSTIC: surface the actual exception instead of swallowing it.
-        _debug = f"[DEBUG] AI call/parsing failed: {type(_e).__name__}: {_e}"
-        return [{**p, "why": "", "how": _debug if i == 0 else ""} for i, p in enumerate(picked[:6])]
-
-
-def plotly_chart_with_selection(fig, key: str, **kwargs):
-    """st.plotly_chart with click-to-select (a clicked bar/point is
-    returned so the caller can drill into it), falling back to a plain,
-    non-interactive chart if the installed Streamlit version doesn't
-    support on_select yet — so this can never silently break the chart
-    itself, only the click feature."""
-    try:
-        event = st.plotly_chart(fig, key=key, on_select="rerun", selection_mode="points", **kwargs)
-        return (event.get("selection", {}) or {}).get("points", []) if isinstance(event, dict) else []
-    except TypeError:
-        st.plotly_chart(fig, **kwargs)
-        return []
-
-
-def _render_bsem_recommendations_ui(items: list[dict], key_prefix: str):
-    """Render structured BSEM recommendations as clickable, colour-coded
-    cards — click a strategy to reveal why it fits and how to trial it.
-    Uses only button + session_state toggling (not st.expander's `key=`
-    argument, which isn't supported on all Streamlit versions) so the
-    click-to-expand behaviour is guaranteed to work regardless of the
-    exact Streamlit version deployed."""
-    if not items:
-        return
-    _domain_style = {
-        "Body":         {"icon": "🧘", "color": "#10b981", "bg": "#f0fdf4"},
-        "Relationship": {"icon": "🤝", "color": "#3b82f6", "bg": "#eff6ff"},
-        "Stamina":      {"icon": "💪", "color": "#f97316", "bg": "#fff7ed"},
-        "Engagement":   {"icon": "🎯", "color": "#8b5cf6", "bg": "#faf5ff"},
-        "Character":    {"icon": "⭐", "color": "#eab308", "bg": "#fefce8"},
-    }
-    for i, item in enumerate(items):
-        style = _domain_style.get(item["domain"], {"icon": "•", "color": "#64748b", "bg": "#f8fafc"})
-        _open_key = f"{key_prefix}_open_{i}"
-        if _open_key not in st.session_state:
-            st.session_state[_open_key] = False
-        with st.container(border=True):
-            st.markdown(
-                f"<span style='background:{style['bg']};color:{style['color']};"
-                f"padding:0.2rem 0.75rem;border-radius:999px;font-size:0.72rem;font-weight:700;"
-                f"text-transform:uppercase;letter-spacing:.03em;'>{style['icon']} {item['domain']}</span>",
-                unsafe_allow_html=True,
-            )
-            _arrow = "🔽" if st.session_state[_open_key] else "▶️"
-            if st.button(f"{_arrow}  {item['strategy']}", key=f"{key_prefix}_btn_{i}", use_container_width=True):
-                st.session_state[_open_key] = not st.session_state[_open_key]
-                # No explicit st.rerun() — Streamlit already reruns the script
-                # automatically after any button click, and the state check
-                # below runs immediately in that same pass. A manual rerun()
-                # here was redundant and could interrupt the click before the
-                # updated state was rendered.
-            if st.session_state[_open_key]:
-                if item.get("why"):
-                    st.markdown(f"**Why this fits:** {item['why']}")
-                if item.get("how"):
-                    st.markdown(f"**How to trial it:** {item['how']}")
-                if not item.get("why") and not item.get("how"):
-                    st.caption("Implementation detail unavailable right now — the strategy above is still valid to trial.")
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# WINDOW OF TOLERANCE — DRAFT TABLE FROM INCIDENT DATA
-# Maps this tool's incident records into the same 5-zone structure used by
-# the standalone Window of Tolerance Creator, so staff get a data-informed
-# starting draft to review and copy across, rather than starting blank.
-# ══════════════════════════════════════════════════════════════════════════
-WOT_ZONES = [
-    {"id": "hyper",      "label": "Mobilisation — Hyperarousal",                    "color": "#AF3A2C"},
-    {"id": "copingup",   "label": "Coping Mechanisms — moving toward Hyperarousal", "color": "#B9761A"},
-    {"id": "copingdown", "label": "Coping Mechanisms — moving toward Hypoarousal",  "color": "#2A6693"},
-    {"id": "hypo",       "label": "Immobilisation — Hypoarousal",                   "color": "#3C4C6B"},
-]
-
-# Behaviour type -> arousal direction ("up" toward hyperarousal/fight-flight,
-# "down" toward hypoarousal/shutdown-freeze). Severity then decides which of
-# the two bands on that side a given incident sits in. Types not listed here
-# (e.g. "Other") are left unclassified and excluded from the draft table —
-# this is a starting point for staff judgement, not a final answer.
-WOT_DIRECTION_MAP = {
-    "Physical aggression toward peer": "up", "Physical aggression toward adult": "up",
-    "Threatening behaviour": "up", "Property destruction": "up", "Throwing objects": "up",
-    "Unsanctioned departure (elopement)": "up", "Absconding from school grounds": "up",
-    "Self-injurious behaviour": "up", "Verbal aggression toward peer": "up",
-    "Verbal aggression toward adult": "up", "Property misuse or interference": "up",
-    "Disruptive verbal commentary": "up", "Interrupting / calling out": "up",
-    "Inappropriate vocalisation / noises": "up", "Verbal refusal of instruction": "up",
-    "Dysregulated emotional expression": "up",
-    "Task refusal / passive non-compliance": "down", "Shutdown / complete withdrawal": "down",
-    "Selective mutism / non-responsiveness": "down", "Hiding or avoiding adult proximity": "down",
-}
-
-
-def deidentify_context(text: str, subject_student_id=None) -> str:
-    """Replace known staff/peer first names in free text with a generic
-    role label, so the Context column reads as a general situation
-    rather than naming specific people. Uses the app's own known staff
-    and student names — matches whole words only, case-insensitive."""
-    if not text or not isinstance(text, str):
-        return text
-    result = text
-    for s in st.session_state.get("staff", []):
-        _first = (s.get("name") or "").split()[0] if s.get("name") else ""
-        if _first and len(_first) > 2:
-            result = re.sub(rf'\b{re.escape(_first)}\b', "a staff member", result, flags=re.IGNORECASE)
-    for stu in st.session_state.get("students", []):
-        if stu.get("id") == subject_student_id:
-            continue  # don't scrub the subject student's own name from their own record
-        _first = (stu.get("name") or "").split()[0] if stu.get("name") else ""
-        if _first and len(_first) > 2:
-            result = re.sub(rf'\b{re.escape(_first)}\b', "a peer", result, flags=re.IGNORECASE)
-    return result
-
-
-def generate_single_incident_docx(print_data: dict, incident_type: str, student_name: str):
-    """Simple one-page printable/downloadable summary of a single incident
-    — for staff who need to print one record's details or hand it to
-    someone outside the portal."""
-    from docx import Document
-    from docx.shared import Pt, Cm
-    doc = Document()
-    sec = doc.sections[0]
-    sec.page_width, sec.page_height = Cm(21), Cm(29.7)
-    sec.left_margin = sec.right_margin = sec.top_margin = sec.bottom_margin = Cm(2)
-    doc.add_heading(f"Incident Summary — {student_name}", level=1)
-    _type_label = "Critical Incident (ABCH)" if incident_type == "critical" else "Regular Incident"
-    p = doc.add_paragraph()
-    p.add_run("Record type: ").bold = True
-    p.add_run(_type_label)
-    doc.add_paragraph("")
-    for label, value in print_data.items():
-        p = doc.add_paragraph()
-        p.add_run(f"{label}: ").bold = True
-        p.add_run(str(value) if value not in (None, "") else "—")
-    p_footer = doc.add_paragraph()
-    p_footer.add_run(f"\nPrinted from CLC-LBU Behaviour Support Tool — {datetime.now().strftime('%d/%m/%Y %H:%M')}").italic = True
-    buf = BytesIO()
-    doc.save(buf)
-    buf.seek(0)
-    return buf
-
-
-def _strip_category_prefix(text: str) -> str:
-    """Antecedents in this tool are stored as 'Category - description'
-    (e.g. 'Engagement - having to work with a peer'). The Window of
-    Tolerance Creator's own context entries read as plain situational
-    phrases with no category prefix — strip it and capitalise, so
-    drafted lines match that register."""
-    if not text or not isinstance(text, str):
-        return text
-    _parts = text.split(" - ", 1)
-    _clean = (_parts[1] if len(_parts) == 2 else text).strip()
-    return (_clean[:1].upper() + _clean[1:]) if _clean else _clean
-
-
-# INTERVENTIONS (the fixed multi-select list staff choose from when logging
-# an incident) expanded into a fuller standard description of what each
-# technique actually means/looks like in practice. These describe the
-# technique itself, not any specific incident — so expanding a known,
-# fixed strategy name this way doesn't invent per-incident detail nobody
-# wrote; it's the same kind of description a policy or training document
-# would already give that strategy.
-INTERVENTION_DETAIL = {
-    "CPI Supportive stance":  "Used a supportive, non-threatening body stance (CPI) — angled rather than square-on, at a safe distance",
-    "Offered break":          "Offered a short break before returning to the task",
-    "Reduced demand":         "Reduced the task demand — fewer steps or a lower-effort version of the task",
-    "Provided choices":       "Offered a choice between two options rather than a single imposed demand",
-    "Removed audience":       "Removed the audience — moved nearby peers/onlookers away as a de-escalation measure",
-    "Visual supports":        "Used a visual support (schedule, cue card, or written prompt) to reduce reliance on verbal instruction",
-    "Co-regulation":          "Stayed alongside the student and modelled calm breathing/tone to support co-regulation",
-    "Prompted coping skill":  "Prompted use of a previously taught coping strategy (e.g. breathing, movement, quiet space)",
-    "Redirection":            "Redirected attention to a different activity or focus to interrupt the escalation",
-}
-
-
-def _polish_intervention_list(text: str) -> str:
-    """Intervention is a multi-select of short strategy names (e.g.
-    'CPI Supportive stance, Removed audience'). Where an item matches
-    one of the fixed, known strategies, expand it to its full standard
-    description (INTERVENTION_DETAIL) to match the Creator's fuller
-    register. Anything that doesn't match a known strategy (free text,
-    a renamed option) is just capitalised rather than guessed at."""
-    if not text or not isinstance(text, str):
-        return text
-    _items = [s.strip() for s in text.split(",") if s.strip()]
-    _items = [INTERVENTION_DETAIL.get(s, s[:1].upper() + s[1:]) for s in _items]
-    return "; ".join(_items)
-
-
-def build_window_of_tolerance_table(full_df, student_id=None, top_n=5, for_builder=False) -> dict:
-    """Group this student's incident data into the WoT Creator's 4
-    dysregulation zones (the 'Window of Tolerance' zone itself is by
-    definition regulated behaviour, which incident logs don't capture,
-    so it's intentionally left for staff to complete directly in the
-    Creator). Returns {zone_id: {"n", "context", "behaviour",
-    "interventions"}} — each a short list of this student's most
-    frequent entries for that zone, styled to match the Creator's own
-    short, concrete, observable-phrase entries as closely as the
-    underlying data allows.
-
-    Context is de-identified (named peers/staff replaced with a generic
-    role) since it describes the surrounding situation, not this
-    student's own presentation. Behaviour keeps — and where a free-text
-    description exists, adds — the specific detail, since that's exactly
-    what should stay sharp and individual to this student."""
-    if full_df is None or full_df.empty or "behaviour_type" not in full_df.columns:
-        return {}
-    _df = full_df.copy()
-    _df["severity"] = pd.to_numeric(_df.get("severity", 3), errors="coerce").fillna(3)
-
-    def _flatten(v):
-        # "intervention" is a multi-select field stored as a Postgres array —
-        # supabase-py returns it as a Python list, not a plain string, which
-        # breaks a straight "\n".join() downstream. Flatten to one string.
-        if isinstance(v, list):
-            return ", ".join(str(x) for x in v if x)
-        return v
-
-    for _col in ("antecedent", "behaviour_type", "intervention", "description"):
-        if _col in _df.columns:
-            _df[_col] = _df[_col].apply(_flatten)
-
-    if "antecedent" in _df.columns:
-        _df["antecedent"] = _df["antecedent"].apply(_strip_category_prefix)
-        _df["antecedent"] = _df["antecedent"].apply(lambda t: deidentify_context(t, student_id))
-
-    if "intervention" in _df.columns:
-        _df["intervention"] = _df["intervention"].apply(_polish_intervention_list)
-
-    # Combine the canonical behaviour label with any free-text description
-    # for specificity — the label alone is a category, the description is
-    # what this student's presentation actually looks like. Capped to a
-    # short phrase, matching the Creator's concrete, observable style
-    # rather than a full narrative sentence.
-    if for_builder:
-        # Transfer to the WoT Builder: every behaviour as its clean category label
-        # (one line per behaviour type, not one per incident description).
-        _df["_behaviour_detail"] = _df["behaviour_type"]
-    elif "description" in _df.columns:
-        def _combine_behaviour(row):
-            _lbl = row.get("behaviour_type") or ""
-            _desc_raw = row.get("description")
-            # pd.isna() correctly catches NaN/None; a plain "or ''" check
-            # doesn't, because NaN is truthy in Python — that produced the
-            # literal text "nan" appearing whenever description was blank.
-            _desc = "" if pd.isna(_desc_raw) else str(_desc_raw).strip()
-            if len(_desc) > 70:
-                _desc = _desc[:67].rstrip() + "…"
-            if _desc:
-                return f"{_lbl} — {_desc}" if _lbl else _desc
-            return _lbl
-        _df["_behaviour_detail"] = _df.apply(_combine_behaviour, axis=1)
-    else:
-        _df["_behaviour_detail"] = _df["behaviour_type"]
-
-    def _zone(row):
-        direction = WOT_DIRECTION_MAP.get(row.get("behaviour_type"))
-        if direction is None:
-            return None
-        if direction == "up":
-            return "hyper" if row["severity"] >= 4 else "copingup"
-        return "hypo" if row["severity"] >= 4 else "copingdown"
-
-    _df["_wot_zone"] = _df.apply(_zone, axis=1)
-    _df = _df.dropna(subset=["_wot_zone"])
-    if _df.empty:
-        return {}
-    result = {}
-    for z in WOT_ZONES:
-        _zdf = _df[_df["_wot_zone"] == z["id"]]
-        if _zdf.empty:
-            continue
-        _contexts = (_zdf["antecedent"].dropna().value_counts().head(top_n or 100000).index.tolist()
-                     if "antecedent" in _zdf.columns else [])
-        _behaviours = _zdf["_behaviour_detail"].dropna().value_counts().head(top_n or 100000).index.tolist()
-        _interventions = []
-        if "intervention" in _zdf.columns:
-            _iv = _zdf["intervention"].dropna()
-            _iv = _iv[_iv.astype(str).str.strip() != ""]
-            if for_builder:
-                # one line per individual intervention, every one used
-                _iv = _iv.astype(str).str.split(";").explode().str.strip()
-                _iv = _iv[_iv != ""]
-            _interventions = _iv.value_counts().head(top_n or 100000).index.tolist()
-        result[z["id"]] = {"n": len(_zdf), "context": _contexts,
-                            "behaviour": _behaviours, "interventions": _interventions}
-    return result
-
-
-def get_micro_wot(student_id, full: bool = False) -> dict:
-    """Every micro behaviour logged for this student, grouped into the two
-    Coping zones (just outside the window). Context is de-identified the same
-    way as the incident data. {} if none / micro module unavailable."""
-    if not (_MICRO_AVAILABLE and supabase and student_id):
-        return {}
-    try:
-        _codes, _ = mbu.load_codes(supabase, include_inactive=True)
-        _mw = mbu.wot_coping_from_micro(mbu.load_micro(supabase, student_id), _codes,
-                                        limit=None if full else 6)
-    except Exception:
-        return {}
-    for _zd in _mw.values():
-        _zd["context"] = [deidentify_context(c, student_id) for c in _zd["context"]]
-        _zd["interventions"] = [deidentify_context(c, student_id) for c in _zd["interventions"]]
-    return _mw
-
-
-def build_wot_with_micro(full_df, student_id=None) -> dict:
-    """Incident-based WoT draft plus every micro behaviour in the Coping zones
-    (as zd["micro"]). Used by the Analysis page, its print-ready copy and the
-    Full Analysis Word pack — NOT the Behaviour Summary report (micro data stays
-    off that report, per the Nov 2026 decision)."""
-    wot = build_window_of_tolerance_table(full_df, student_id=student_id) if (
-        full_df is not None and not full_df.empty) else {}
-    for _zid, _mzd in get_micro_wot(student_id).items():
-        if _zid not in wot:
-            wot[_zid] = {"n": 0, "context": [], "behaviour": [], "interventions": []}
-        wot[_zid]["micro"] = _mzd
-    return wot
-
-
-def _wot_zone_heading(zd) -> str:
-    _parts = [f"{zd['n']} incident(s)"]
-    if zd.get("micro"):
-        _parts.append(f"{zd['micro']['n']} micro behaviour entr{'y' if zd['micro']['n'] == 1 else 'ies'}")
-    return " · ".join(_parts)
-
-
-MICRO_WOT_COLS = (("Context (setting — just before)", "context"),
-                  ("Micro behaviours (times logged)", "behaviour"),
-                  ("What helped them settle", "interventions"))
-
-
-def _render_window_of_tolerance_table_ui(full_df, student_id=None, wot_data=None):
-    """Streamlit UI for build_window_of_tolerance_table — one block per
-    zone, each field in its own st.code() box so staff can use
-    Streamlit's built-in copy-icon to paste straight into the Creator."""
-    if wot_data is None:
-        wot_data = build_window_of_tolerance_table(full_df, student_id=student_id)
-    if not wot_data:
-        st.info("Not enough classifiable incidents or micro behaviours yet to draft a Window of Tolerance "
-                "table. This needs behaviour types that clearly indicate arousal direction (e.g. aggression, "
-                "elopement, shutdown, withdrawal) — 'Other' or ambiguous entries are left out on purpose — "
-                "or micro behaviours logged with 🌡️ Micro.")
-        return
-    if any(zd.get("micro") for zd in wot_data.values()):
-        st.caption("🌡️ The two Coping zones (just outside the window) also list **every micro behaviour** "
-                   "logged for this student, with how many times each was seen, the settings it came up "
-                   "in, and what helped them settle. Entries with only 'either way' signs are counted in "
-                   "both Coping zones.")
-    st.caption("Draft only — built from this student's logged behaviour types and severity. "
-               "Context is de-identified (peers/staff shown by role, not name); Behaviour and "
-               "Interventions stay specific to this student. The Window of Tolerance concept itself "
-               "is part of SMART's brain-based framework — regulation must be restored before any "
-               "reasoning or correction can land. Review before use; copy any line across into the "
-               "Window of Tolerance Creator.")
-    for z in WOT_ZONES:
-        if z["id"] not in wot_data:
-            continue
-        zd = wot_data[z["id"]]
-        st.markdown(
-            f"<div style='border-left:5px solid {z['color']};padding:0.3rem 0.9rem;margin:0.6rem 0 0.2rem;'>"
-            f"<b style='color:{z['color']};'>{z['label']}</b> — {_wot_zone_heading(zd)}</div>",
-            unsafe_allow_html=True,
-        )
-
-        def _safe_join(items):
-            # Defensive: coerce anything unexpected (e.g. a stray list) to a
-            # plain string rather than letting "\n".join() crash the page.
-            return "\n".join(x if isinstance(x, str) else str(x) for x in items)
-
-        if zd["n"]:
-            _wcol1, _wcol2, _wcol3 = st.columns(3)
-            with _wcol1:
-                st.caption("Context")
-                st.code(_safe_join(zd["context"]) or "—", language=None)
-            with _wcol2:
-                st.caption("Behaviour")
-                st.code(_safe_join(zd["behaviour"]) or "—", language=None)
-            with _wcol3:
-                st.caption("Interventions")
-                st.code(_safe_join(zd["interventions"]) or "— none logged for this zone —", language=None)
-        _mz = zd.get("micro")
-        if _mz:
-            _bw = (f" · {_mz['both_ways']} could be heading either way" if _mz.get("both_ways") else "")
-            st.markdown(f"<div style='font-size:.85rem;color:{z['color']};font-weight:600;margin:.3rem 0 .1rem;'>"
-                        f"🌡️ Micro behaviours — coping signs ({_mz['n']} entr{'y' if _mz['n'] == 1 else 'ies'}{_bw})</div>",
-                        unsafe_allow_html=True)
-            _mc = st.columns(3)
-            for _col, (_lbl, _key) in zip(_mc, MICRO_WOT_COLS):
-                with _col:
-                    st.caption(_lbl)
-                    st.code(_safe_join(_mz[_key]) or "—", language=None)
-
-
-
-def render_bsem_recommendations(items: list[dict], key_prefix: str):
-    """Draws the clickable cards; the print capture records every strategy
-    with its why/how in full (not just the cards that happen to be open)."""
-    if items:
-        _scr_add("bsem", items)
-    _prev = _SCREEN["paused"]; _SCREEN["paused"] = True
-    try:
-        _render_bsem_recommendations_ui(items, key_prefix)
-    finally:
-        _SCREEN["paused"] = _prev
-
-
-def render_wot_builder_sync(student, full_df, key: str = "wbs"):
-    """Automatically send this student's WoT data (every incident behaviour,
-    intervention and context + every micro behaviour) into their report in the
-    Window of Tolerance Builder. Runs when the Analysis page opens and the data
-    has changed since the last send this session; staff can also press Sync now.
-    Staff additions in the Builder are never touched (see wot_builder_sync.py)."""
-    if not _WBS_AVAILABLE:
-        return
-    _prev = _SCREEN.get("paused", False)
-    _SCREEN["paused"] = True
-    try:
-        sid = student.get("id")
-        ini = _student_archive_initials(student)
-        st.markdown("#### 🔗 Window of Tolerance Builder")
-        if st.session_state.get("_viewer_session"):
-            st.caption("Log in with your own account to send this data to the Window of Tolerance Builder.")
-            return
-        wot_all = build_window_of_tolerance_table(full_df, student_id=sid, top_n=None, for_builder=True) \
-            if (full_df is not None and not full_df.empty) else {}
-        for _zid, _mzd in get_micro_wot(sid, full=True).items():
-            wot_all.setdefault(_zid, {"n": 0, "context": [], "behaviour": [], "interventions": []})["micro"] = _mzd
-        desired = wbs.desired_lines(wot_all)
-        n_lines = sum(len(v) for z in desired.values() for v in z.values())
-        if not n_lines:
-            st.caption("Nothing to send yet. Once incidents or micro behaviours are logged, they're added to "
-                       "this student's report in the Window of Tolerance Builder automatically.")
-            return
-        sig = str(sorted((z, c, tuple(v)) for z, cols in desired.items() for c, v in cols.items()))
-        state_key = f"_wbs_{sid}"
-        last = st.session_state.get(state_key) or {}
-        force = st.button("🔄 Sync now", key=f"{key}_now_{sid}",
-                          help="Send the latest data to the Builder again (it also happens automatically)")
-        if force or last.get("sig") != sig:
-            try:
-                with st.spinner("Updating the Window of Tolerance Builder..."):
-                    res = wbs.sync_student(ini, wot_all)
-                last = {"sig": sig if res.get("ok") else None, "res": res,
-                        "at": datetime.now().strftime("%I:%M %p").lstrip("0")}
-            except wbs.SyncTableMissing:
-                last = {"sig": None, "res": {"ok": False, "missing_table": True}}
-            except Exception as _e:
-                last = {"sig": None, "res": {"ok": False, "reason": f"Couldn't reach the Builder: {_e}"}}
-            st.session_state[state_key] = last
-        res = last.get("res") or {}
-        if res.get("missing_table"):
-            st.warning("The link to the Window of Tolerance Builder needs a one-off setup. Run this in the "
-                       "Supabase SQL editor of the Builder's project (the operational project), then reload.")
-            st.code(wbs.SYNC_SQL, language="sql")
-        elif not res.get("ok"):
-            st.warning(f"Not sent to the Window of Tolerance Builder: {res.get('reason', 'unknown problem')}")
-        else:
-            bits = []
-            if res.get("created"):
-                bits.append("started a new report")
-            if res.get("added"):
-                bits.append(f"added {res['added']} new line{'s' if res['added'] != 1 else ''}")
-            if res.get("removed"):
-                bits.append(f"removed {res['removed']} line{'s' if res['removed'] != 1 else ''} the data no longer supports")
-            what = ", ".join(bits) if bits else "already up to date"
-            st.success(f"✅ Window of Tolerance Builder: {what} (synced {last.get('at', '')}). "
-                       f"{res.get('total_synced', 0)} lines in {res.get('register_name', ini)}'s report come from "
-                       f"this tool.")
-            st.caption("Every incident behaviour, intervention and context, and every micro behaviour, is sent to "
-                       "the matching zone. Staff can still add their own lines in the Builder. Lines they remove or "
-                       "reword there stay that way, and the Window of Tolerance zone itself is left for staff.")
-        st.link_button("🪟 Open the Window of Tolerance Builder", wbs.BUILDER_URL)
-    finally:
-        _SCREEN["paused"] = _prev
-
-
-def render_window_of_tolerance_table(full_df, student_id=None):
-    _wd = build_wot_with_micro(full_df, student_id=student_id)
-    if _wd:
-        _scr_add("caption", "Draft only, built from this student's logged behaviour types and severity. Context is de-identified; "
-                            "Behaviour and Interventions stay specific to this student. Review before use.")
-        _scr_add("wot", _wd)
-    _prev = _SCREEN["paused"]; _SCREEN["paused"] = True
-    try:
-        _render_window_of_tolerance_table_ui(full_df, student_id=student_id, wot_data=_wd)
-    finally:
-        _SCREEN["paused"] = _prev
-
-
-def build_considerations(full_df, top_ant, top_loc, top_session) -> list[str]:
-    """Deterministic 'things to consider' prompts — alternative or
-    structural explanations to weigh before treating a data pattern as
-    purely behavioural (e.g. a morning cluster that's actually a modified
-    timetable, or a yard cluster that's actually where the student goes
-    to self-regulate). Rule-based rather than AI-generated, since this is
-    a fixed checklist of things worth ruling out, not a personalised
-    narrative."""
-    considerations = []
-    if full_df is None or full_df.empty:
-        return considerations
-    total = len(full_df)
-
-    if total < 6:
-        considerations.append(
-            f"Only {total} incident(s) recorded so far — the pattern below is an early "
-            "signal, not yet a robust trend. Treat any hypothesis as provisional."
-        )
-
-    if "session" in full_df.columns and total > 0:
-        _sess_counts = full_df["session"].value_counts()
-        if not _sess_counts.empty:
-            _pct = _sess_counts.iloc[0] / total
-            if _pct >= 0.5:
-                considerations.append(
-                    f"Incidents cluster heavily in the {_sess_counts.index[0]} session "
-                    f"({int(_pct*100)}%). Before treating this as purely behavioural, check for a "
-                    "structural explanation — a modified timetable, a specific specialist/NIT "
-                    "session, medication timing, or an arrival/transport routine that only "
-                    "happens at that time."
-                )
-
-    if "location" in full_df.columns and total > 0:
-        _loc_counts = full_df["location"].value_counts()
-        if not _loc_counts.empty:
-            _pct = _loc_counts.iloc[0] / total
-            if _pct >= 0.5:
-                considerations.append(
-                    f"Incidents cluster heavily in {_loc_counts.index[0]} ({int(_pct*100)}%). This "
-                    "may be what's triggering there — or it may be where the student moves to when "
-                    "seeking regulation (a destination, not a trigger), or simply the space they "
-                    "spend the most time in. Check where the student was immediately beforehand, "
-                    "not only where the incident occurred."
-                )
-
-    if "date_parsed" in full_df.columns and total >= 4:
-        _dow = full_df["date_parsed"].dt.day_name().value_counts()
-        if not _dow.empty:
-            _pct = _dow.iloc[0] / total
-            if _pct >= 0.4:
-                considerations.append(
-                    f"A notable share of incidents fall on {_dow.index[0]}s ({int(_pct*100)}%). "
-                    "Check the roster and timetable for that day — a TRT, a changed specialist, a "
-                    "different transport arrangement, or a weekend-transition effect (e.g. Mondays) "
-                    "can produce a day-of-week pattern that looks behavioural but is structural."
-                )
-
-    if "behaviour_type" in full_df.columns and total > 0:
-        _beh = full_df["behaviour_type"].dropna()
-        _beh = _beh[_beh.str.strip() != ""].value_counts()
-        if not _beh.empty:
-            _pct = _beh.iloc[0] / total
-            if _pct >= 0.6:
-                considerations.append(
-                    f"One behaviour ('{_beh.index[0]}') accounts for {int(_pct*100)}% of records. "
-                    "Consider whether this is genuinely the dominant presentation, or whether it's "
-                    "simply the most visible behaviour for staff to notice and log — quieter "
-                    "presentations (withdrawal, shutdown) can be under-recorded by comparison."
-                )
-
-    if not considerations:
-        considerations.append(
-            "No single pattern in the data is dominant enough to flag a specific structural "
-            "explanation — the hypothesis is reasonably well-supported by the spread of "
-            "recorded incidents."
-        )
-    return considerations
-
-
-def find_combined_patterns(full_df, min_count: int = 3, min_pct: float = 0.2) -> list[dict]:
-    """Find where antecedent category, location, and session genuinely
-    intersect — a combination that concentrates a disproportionate share
-    of incidents is a far stronger, more actionable signal than any single
-    axis viewed alone (e.g. 'Peer-triggered incidents in the Yard during
-    Middle session' vs three separate top-3 lists that happen to share a
-    student in common).
-
-    Returns up to 2 combinations, each accounting for at least min_count
-    incidents and at least min_pct of the total, sorted by count desc.
-    """
-    if full_df is None or full_df.empty:
-        return []
-    required = {"location", "session"}
-    if not required.issubset(full_df.columns):
-        return []
-    _df = full_df.copy()
-    if "_ant_cat" not in _df.columns:
-        if "antecedent" not in _df.columns:
-            return []
-        _df["_ant_cat"] = _df["antecedent"].apply(categorize_antecedent)
-    _df = _df.dropna(subset=["_ant_cat"])
-    if _df.empty:
-        return []
-    total = len(full_df)
-    _grp = _df.groupby(["_ant_cat", "location", "session"]).size().sort_values(ascending=False)
-    combos = []
-    for (cat, loc, sess), count in _grp.items():
-        pct = count / total
-        if count >= min_count and pct >= min_pct:
-            combos.append({"category": cat, "location": loc, "session": sess,
-                            "count": int(count), "pct": pct})
-        if len(combos) >= 2:
-            break
-    return combos
-
-
-def render_analysis_snapshot(student, full_df, student_id):
-    """A condensed, one-screen view of the key findings for this student —
-    an alternative to the full detailed Analysis page for anyone who just
-    wants the headline picture without the full set of charts. Reuses
-    the same underlying logic as the full page (hypothesis, combined
-    patterns, BSEM strategies) so the two views can never disagree with
-    each other."""
-    st.markdown(
-        "<div style='background:linear-gradient(135deg,#1A7A7A 0%,#134e4e 100%);"
-        "border-radius:14px;padding:1.1rem 1.4rem;margin-bottom:0.9rem;"
-        "box-shadow:0 4px 14px rgba(19,78,78,0.25);'>"
-        f"<span style='color:white;font-size:1.3rem;font-weight:700;'>🔎 Snapshot — {student['name']}</span><br>"
-        "<span style='color:#d1fae5;font-size:0.85rem;'>The headline findings only — switch to Full "
-        "Analysis for every chart and detail behind these.</span></div>",
-        unsafe_allow_html=True,
-    )
-
-    if full_df.empty:
-        st.info("No incidents logged yet for this student.")
-        return
-
-    top_beh     = full_df["behaviour_type"].mode()[0] if len(full_df) else "Unknown"
-    top_ant     = full_df["antecedent"].mode()[0] if len(full_df) else "Unknown"
-    top_loc     = full_df["location"].mode()[0] if len(full_df) else "Unknown"
-    top_session = full_df["session"].mode()[0] if len(full_df) else "Unknown"
-
-    def _snap_card(color_hex, bg_hex, icon, heading, body_lines, footnote=None):
-        _body = "".join(f"<div style='margin:.25rem 0;'>{line}</div>" for line in body_lines)
-        _foot = f"<div style='margin-top:.5rem;font-size:.75rem;color:#64748b;font-style:italic;'>{footnote}</div>" if footnote else ""
-        st.markdown(
-            f"<div style='background:{bg_hex};border-left:5px solid {color_hex};border-radius:10px;"
-            f"padding:.9rem 1.2rem;margin-bottom:.8rem;'>"
-            f"<div style='font-weight:700;color:{color_hex};font-size:1.05rem;margin-bottom:.4rem;'>"
-            f"{icon}  {heading}</div>"
-            f"<div style='font-size:.92rem;color:#1e293b;line-height:1.6;'>{_body}</div>{_foot}</div>",
-            unsafe_allow_html=True,
-        )
-
-    m1, m2, m3, m4 = st.columns(4)
-    with m1: st.metric("Total Incidents", len(full_df))
-    with m2: st.metric("Critical", len(full_df[full_df.get("incident_type", "Quick") == "Critical"]))
-    with m3: st.metric("Avg Severity", f"{full_df['severity'].mean():.1f}" if "severity" in full_df.columns else "—")
-    with m4:
-        _direction = "—"
-        if len(full_df) >= 5:
-            _r_avg = full_df.tail(5)["severity"].mean()
-            _e_avg = full_df.head(5)["severity"].mean()
-            _direction = "🟢 Reducing" if _r_avg < _e_avg else "🔴 Increasing" if _r_avg > _e_avg else "🟡 Stable"
-        st.metric("Severity Trend", _direction)
-    st.markdown("<div style='height:.4rem'></div>", unsafe_allow_html=True)
-
-    _patterns = [
-        f"<b>Most frequent behaviour:</b> {top_beh}",
-        f"<b>Most frequent trigger:</b> {top_ant}",
-        f"<b>Location hotspot:</b> {normalise_location(top_loc)}",
-        f"<b>Peak time:</b> {top_session}",
-    ]
-    _combos = find_combined_patterns(full_df)
-    if _combos:
-        c = _combos[0]
-        _patterns.append(
-            f"<b>Combined pattern:</b> {int(c['pct']*100)}% of incidents are "
-            f"{c['category']}-triggered, in {normalise_location(c['location'])}, during {c['session']}"
-        )
-    _snap_card("#3B82F6", "#EFF6FF", "📌", "Top Patterns", _patterns)
-
-    _reframe_body = []
-    _reframe = BEHAVIOUR_REFRAME.get(top_beh)
-    if _reframe:
-        _reframe_body.append(f"<b>{top_beh}:</b> {_reframe}")
-    else:
-        _reframe_body.append(f"No reframe on file yet for '{top_beh}'.")
-    _cpi_stage = CPI_STAGE_MAP.get(top_beh)
-    if _cpi_stage:
-        _stage_info = CPI_STAGES[_cpi_stage]
-        _reframe_body.append(f"<b>CPI stage:</b> {_cpi_stage} — {_stage_info['desc']}")
-        _reframe_body.append(f"<b>Appropriate response:</b> {_stage_info['response']}")
-        _reframe_body.append(f"<b>Regulate → Relate → Reason:</b> {_stage_info['smart_stage']}")
-    else:
-        _reframe_body.append(
-            f"<b>CPI Verbal Escalation Continuum:</b> '{top_beh}' sits outside the verbal continuum — "
-            "it tracks rising verbal defiance; physical aggression, flight, and freeze/shutdown "
-            "presentations belong elsewhere in CPI's broader crisis framework."
-        )
-    _cats_for_reframe = _top_categories(full_df, n=1)
-    if _cats_for_reframe:
-        _mgmt = BSEM_STRATEGY_LIBRARY.get(_cats_for_reframe[0], [])[:2]
-        if _mgmt:
-            _reframe_body.append("<b>Suggested classroom management:</b> " +
-                                  "; ".join(f"[{s['domain']}] {s['strategy']}" for s in _mgmt))
-    _snap_card("#8B5CF6", "#FAF5FF", "🧠", "Behaviour Reframe", _reframe_body,
-               footnote="A starting lens, not a diagnosis — read alongside clinical judgement and what's known about this individual student. Trauma reframing draws on SMART (Strategies for Managing Abuse-Related Trauma), Australian Childhood Foundation; escalation staging draws on CPI's Verbal Escalation Continuum.")
-
-    try:
-        _hyp = generate_strong_clinical_hypothesis(full_df, top_ant, top_beh, top_loc, top_session, student["name"])
-        _hyp_text = _hyp.get("summary", "Not enough data yet.")
-    except Exception:
-        _hyp_text = "Not enough data yet."
-    _snap_card("#1A7A7A", "#F0FDFA", "🔬", "Hypothesis", [_hyp_text])
-
-    _cats = _top_categories(full_df, n=1)
-    _strat_body = []
-    if _cats:
-        for s in BSEM_STRATEGY_LIBRARY.get(_cats[0], [])[:3]:
-            _strat_body.append(f"<b>[{s['domain']}]</b> {s['strategy']}")
-    if not _strat_body:
-        _strat_body = ["Not enough data yet."]
-    _snap_card("#D97706", "#FFFBEB", "💡", "Top Strategies to Trial", _strat_body,
-               footnote="Based on the Berry Street Education Model (BSEM) — domains: Body, Relationship, Stamina, Engagement, Character.")
-
-    sc1, sc2 = st.columns(2)
-    with sc1:
-        if st.button("📄 Switch to Full Analysis", type="primary", use_container_width=True, key="snap_to_full"):
-            st.session_state[f"analysis_view_mode_{student_id}"] = "📄 Full Analysis"
-            st.rerun()
-    with sc2:
-        if st.button("📋 Support Plan", use_container_width=True, key="snap_to_plan"):
-            go_to("support_plan", selected_student_id=student_id)
-
-
-def render_combined_patterns(full_df):
-    """Streamlit UI for find_combined_patterns — a callout box on the
-    Analysis page."""
-    combos = find_combined_patterns(full_df)
-    if not combos:
-        return
-    st.markdown(
-        "<div style='background:#f0f9ff;border-left:4px solid #0284c7;border-radius:8px;"
-        "padding:.75rem 1.1rem;margin:.5rem 0;'>",
-        unsafe_allow_html=True,
-    )
-    st.markdown("**🔗 Combined Pattern** — stronger than any single chart above on its own:")
-    for c in combos:
-        st.markdown(
-            f"- **{int(c['pct']*100)}% of all incidents** ({c['count']} of {len(full_df)}) share "
-            f"all three conditions: **{c['category']}**-triggered, in **{normalise_location(c['location'])}**, "
-            f"during the **{c['session']}** session."
-        )
-    st.caption("This is the intersection of trigger, location, and time — worth checking as a single, "
-               "specific scenario rather than three separate factors.")
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-def compute_before_after(full_df, trial_date) -> dict | None:
-    """Compare incident rate and severity before vs after a given date —
-    when a support/strategy was noted as trialled — to check whether it
-    actually appears to have made a difference, rather than just
-    recording that it was tried. Returns None if trial_date isn't set;
-    returns {"insufficient": True} if there isn't enough data on both
-    sides to compare yet."""
-    if full_df is None or full_df.empty or trial_date is None or "date_parsed" not in full_df.columns:
-        return None
-    _df = full_df.dropna(subset=["date_parsed"])
-    if _df.empty:
-        return None
-    _trial_ts = pd.Timestamp(trial_date)
-    before = _df[_df["date_parsed"] < _trial_ts]
-    after  = _df[_df["date_parsed"] >= _trial_ts]
-    if len(before) == 0 or len(after) == 0:
-        return {"insufficient": True}
-    _min_date, _max_date = _df["date_parsed"].min(), _df["date_parsed"].max()
-    weeks_before = max((_trial_ts - _min_date).days / 7, 0.1)
-    weeks_after  = max((_max_date - _trial_ts).days / 7, 0.1)
-    rate_before, rate_after = len(before) / weeks_before, len(after) / weeks_after
-    sev_before = float(before["severity"].mean()) if "severity" in before.columns else None
-    sev_after  = float(after["severity"].mean())  if "severity" in after.columns  else None
-    pct_rate_change = ((rate_after - rate_before) / rate_before * 100) if rate_before > 0 else None
-    return {
-        "insufficient": False,
-        "n_before": len(before), "n_after": len(after),
-        "weeks_before": round(weeks_before, 1), "weeks_after": round(weeks_after, 1),
-        "rate_before": rate_before, "rate_after": rate_after,
-        "sev_before": sev_before, "sev_after": sev_after,
-        "pct_rate_change": pct_rate_change,
-    }
-
-
-def render_before_after(ba: dict):
-    """Streamlit UI for compute_before_after."""
-    if not ba:
-        return
-    if ba.get("insufficient"):
-        st.info("Not enough incidents logged on both sides of the trial date yet to compare — "
-                "check back once more data has been recorded.")
-        return
-    _rate_dir = "fewer" if ba["pct_rate_change"] is not None and ba["pct_rate_change"] < 0 else "more"
-    st.markdown(
-        f"**Before ({ba['weeks_before']:.1f} wks, {ba['n_before']} incidents):** "
-        f"{ba['rate_before']:.1f}/week"
-        + (f", avg severity {ba['sev_before']:.1f}" if ba['sev_before'] is not None else "")
-    )
-    st.markdown(
-        f"**After ({ba['weeks_after']:.1f} wks, {ba['n_after']} incidents):** "
-        f"{ba['rate_after']:.1f}/week"
-        + (f", avg severity {ba['sev_after']:.1f}" if ba['sev_after'] is not None else "")
-    )
-    if ba["pct_rate_change"] is not None:
-        _icon = "🟢" if ba["pct_rate_change"] < -10 else "🔴" if ba["pct_rate_change"] > 10 else "🟡"
-        st.markdown(f"{_icon} **{abs(ba['pct_rate_change']):.0f}% {_rate_dir} incidents per week** since the trial date.")
-    st.caption("A short 'after' window is a preliminary read, not a conclusion — treat it as an early signal.")
-
-
 # ── Location normalisation ────────────────────────────────────────────────────
 LOCATION_ALIASES = {
     "JP Classroom": "JP Room", "JP classroom": "JP Room", "Junior Primary": "JP Room",
-    "JP class room": "JP Room", "JP Class Room": "JP Room", "Jnr Primary": "JP Room",
-    "Jnr Primary Room": "JP Room", "Jnr Primary Classroom": "JP Room",
     "PY Classroom": "PY Room", "PY classroom": "PY Room", "Primary Years": "PY Room",
-    "PY class room": "PY Room", "PY Class Room": "PY Room", "PY class": "PY Room",
     "SY Classroom": "SY Room", "SY classroom": "SY Room", "Senior Years": "SY Room",
-    "SY class room": "SY Room", "SY Class Room": "SY Room",
     "Playground": "Yard", "playground": "Yard",
-    "Front Office": "Office", "front office": "Office", "Reception": "Office",
-    "Kitchen area": "Kitchen", "kitchen area": "Kitchen",
-    "Toilet": "Toilets", "toilet": "Toilets", "Bathroom": "Toilets", "bathroom": "Toilets",
 }
 
 def normalise_location(loc: str) -> str:
-    """Map free-text location entries to a canonical label. Critical
-    incidents record location as free text (staff type it), while the
-    Quick Incident Log uses a fixed dropdown (LOCATIONS) — so the same
-    physical place easily ends up logged two different ways (e.g. 'JP
-    classroom' vs 'JP Room'), and without normalisation they'd show as
-    separate bars on every location chart.
-
-    Checks the exact-alias dict first (LOCATION_ALIASES, fast and
-    predictable), then falls back to fuzzy matching against the
-    canonical LOCATIONS list for close-but-not-identical wording a
-    fixed alias list can't fully anticipate. Falls back to the original
-    text unchanged if nothing matches closely enough — this only ever
-    merges genuinely similar wording, never guesses at something new."""
-    if not loc:
-        return ""
-    _clean = str(loc).strip()
-    if _clean in LOCATION_ALIASES:
-        return LOCATION_ALIASES[_clean]
-    _canonical_lower = {c.lower(): c for c in LOCATIONS}
-    if _clean.lower() in _canonical_lower:
-        return _canonical_lower[_clean.lower()]
-    _matches = difflib.get_close_matches(_clean.lower(), list(_canonical_lower.keys()), n=1, cutoff=0.75)
-    if _matches:
-        return _canonical_lower[_matches[0]]
-    return _clean
+    """Map historical location aliases to canonical labels."""
+    return LOCATION_ALIASES.get(str(loc).strip(), str(loc).strip()) if loc else ""
 
 
 # ── Clinical behaviour terminology ───────────────────────────────────────────
@@ -1585,7 +200,7 @@ def get_clinical_behaviour(raw: str) -> str:
 INTERVENTIONS = ["CPI Supportive stance", "Offered break", "Reduced demand", "Provided choices",
                 "Removed audience", "Visual supports", "Co-regulation", "Prompted coping skill", "Redirection"]
 LOCATIONS = ["JP Room", "PY Room", "SY Room", "Yard", "Playground", "Library", "Kitchen", "Office", "Student Gate", "Toilets", "Transition area", "Other"]
-VALID_PAGES = ["login", "landing", "program_students", "incident_log", "critical_incident", "review_critical", "leader_approve_critical", "student_analysis", "student_dashboard", "admin_portal", "support_plan", "micro_log"]
+VALID_PAGES = ["login", "landing", "program_students", "incident_log", "critical_incident", "review_critical", "leader_approve_critical", "student_analysis", "student_dashboard", "admin_portal"]
 
 HYPOTHESIS_FUNCTIONS = ["To get", "To avoid"]
 HYPOTHESIS_ITEMS = ["Tangible", "Activity", "Sensory", "Attention"]
@@ -1822,15 +437,8 @@ Critical Incident Form completed and saved.
     """)
 
 
-def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, top_loc, top_session, risk_score, risk_level,
-                                           supports_trialled: str = "", supports_success: str = "", before_after: dict = None,
-                                           full_pack: bool = False, bsem_items: list = None, trials: list = None):
-    """Generate professional BAP — fixed chart sizing and page layout.
-
-    full_pack=True produces the printable "Full Analysis" version: everything in the
-    standard summary PLUS the on-screen-only sections (Window of Tolerance table,
-    combined patterns, considerations, BSEM recommendations, antecedent categories),
-    a complete incident register and a blank meetings-notes/actions page."""
+def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, top_loc, top_session, risk_score, risk_level):
+    """Generate professional BAP — fixed chart sizing and page layout."""
     try:
         from docx import Document
         from docx.shared import Pt, RGBColor, Cm
@@ -1853,10 +461,10 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         WHITE      = "FFFFFF"
         LIGHT_GREY = "F2F6F6"
 
-        FIG_W    = 14.0   # wide, but a saner aspect ratio once scaled to page width
-        FIG_H    = 6.5    # taller — was 4.2, which read as a thin illegible strip once shrunk to fit the page
-        FIG_DPI  = 170    # sharper for printing
-        DOC_W    = Cm(17.0)  # stays inside the printable area (21cm page − 1.8cm margins each side = 17.4cm)
+        FIG_W    = 16.5   # wider — fills the page
+        FIG_H    = 4.2    # taller — more readable when printed
+        FIG_DPI  = 150    # sharper for printing
+        DOC_W    = Cm(18.5)  # stretch to near full page width
         MAX_LABEL_CHARS = 42
 
         def wrap_labels(labels, width=MAX_LABEL_CHARS):
@@ -1926,14 +534,10 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             pic_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
             pic_para.paragraph_format.space_before = Pt(2)
             pic_para.paragraph_format.space_after  = Pt(0)
-            # Keep the image glued to its caption — never split across a page break
-            pic_para.paragraph_format.keep_together = True
-            pic_para.paragraph_format.keep_with_next = True
             cap = doc.add_paragraph()
             cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
             cap.paragraph_format.space_before = Pt(1)
             cap.paragraph_format.space_after  = Pt(6)
-            cap.paragraph_format.keep_together = True
             run = cap.add_run(caption_text)
             run.font.size = Pt(10)   # increased for print readability
             run.font.italic = True
@@ -1945,7 +549,7 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             ax.spines['right'].set_visible(False)
             ax.spines['left'].set_color('#cbd5e1')
             ax.spines['bottom'].set_color('#cbd5e1')
-            ax.tick_params(colors='#334155', labelsize=10)
+            ax.tick_params(colors='#334155', labelsize=9)
             ax.grid(True, alpha=0.25, linestyle='--', color='#94a3b8')
 
         doc = Document()
@@ -1959,7 +563,7 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         tc = t.rows[0].cells[0]
         set_bg(tc, TEAL_HEX); set_borders(tc, TEAL_HEX)
         p1 = tc.paragraphs[0]; p1.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        arun(p1, "FULL ANALYSIS — PRINT PACK" if full_pack else "BEHAVIOUR SUMMARY", bold=True, size=28 if not full_pack else 24, color=WHITE)
+        arun(p1, "BEHAVIOUR SUMMARY", bold=True, size=28, color=WHITE)
         cpara(tc, f"{student['name']}  |  Cowandilla Learning Centre  |  LBU {student.get('program','')} Program",
               size=17, color="FEF3C7", align=WD_ALIGN_PARAGRAPH.CENTER, sb=10, sa=30)
         doc.add_paragraph().paragraph_format.space_after = Pt(4)
@@ -2020,111 +624,19 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             arun(p, f"{label}:  ", bold=True, size=15, color=GREY_DARK)
             arun(p, val, size=15)
 
-        doc.add_paragraph().paragraph_format.space_after = Pt(4)
-
-        # ── ATTENDANCE & ABSENCE (when recorded) ──
-        _ah_w = attendance_headline(student.get("id"), full_df)
-        if _ah_w:
-            at_t = doc.add_table(rows=1, cols=1); at_t.style = 'Table Grid'
-            at_c = at_t.rows[0].cells[0]
-            set_bg(at_c, TEAL_LIGHT); set_borders(at_c, TEAL_HEX)
-            at_c.paragraphs[0].clear()
-            arun(at_c.paragraphs[0], "ATTENDANCE & ABSENCE", bold=True, size=16, color=TEAL_HEX)
-            for _lab, _val in _ah_w["lines"]:
-                _p = at_c.add_paragraph()
-                _p.paragraph_format.space_before = Pt(2); _p.paragraph_format.space_after = Pt(2)
-                arun(_p, f"{_lab}:  ", bold=True, size=15, color=GREY_DARK)
-                arun(_p, _val, size=15)
-            doc.add_paragraph().paragraph_format.space_after = Pt(4)
-
-        # ── AT A GLANCE: hypothesis summary + top strategies ──
-        # (front-page condensed view — full detail follows after the page break)
-        hyp_data_front = generate_strong_clinical_hypothesis(
-            full_df, top_ant, top_beh, top_loc, top_session, student["name"])
-
-        if hyp_data_front.get("summary"):
-            fh = doc.add_table(rows=1, cols=1); fh.style = 'Table Grid'
-            fh_c = fh.rows[0].cells[0]
-            set_bg(fh_c, TEAL_LIGHT); set_borders(fh_c, TEAL_HEX)
-            fh_c.paragraphs[0].clear()
-            p_fh = fh_c.paragraphs[0]
-            p_fh.paragraph_format.space_before = Pt(3); p_fh.paragraph_format.space_after = Pt(3)
-            arun(p_fh, "FUNCTIONAL HYPOTHESIS (Summary):  ", bold=True, size=15, color=TEAL_HEX)
-            arun(p_fh, hyp_data_front["summary"], size=15)
-            doc.add_paragraph().paragraph_format.space_after = Pt(4)
-
-        _front_cats = _top_categories(full_df, n=1)
-        if _front_cats:
-            _front_strats = BSEM_STRATEGY_LIBRARY.get(_front_cats[0], [])[:3]
-            if _front_strats:
-                ts = doc.add_table(rows=1, cols=1); ts.style = 'Table Grid'
-                ts_c = ts.rows[0].cells[0]
-                set_bg(ts_c, AMBER_LIGHT); set_borders(ts_c, AMBER_HEX)
-                ts_c.paragraphs[0].clear()
-                p_ts = ts_c.paragraphs[0]
-                p_ts.paragraph_format.space_before = Pt(3)
-                arun(p_ts, "TOP STRATEGIES TO TRIAL", bold=True, size=15, color=AMBER_HEX)
-                for _s in _front_strats:
-                    p = ts_c.add_paragraph()
-                    p.paragraph_format.space_before = Pt(2); p.paragraph_format.space_after = Pt(2)
-                    arun(p, f"[{_s['domain']}] ", bold=True, size=14, color=GREY_DARK)
-                    arun(p, _s["strategy"], size=14)
-                p_more = ts_c.add_paragraph()
-                p_more.paragraph_format.space_before = Pt(4)
-                arun(p_more, "See Support Lens and Teaching Lens sections (below) for the full set.",
-                     italic=True, size=13, color=GREY_DARK)
-
-        if (supports_trialled or "").strip() or (supports_success or "").strip() or (before_after and not before_after.get("insufficient")):
-            doc.add_paragraph().paragraph_format.space_after = Pt(3)
-            tr = doc.add_table(rows=1, cols=1); tr.style = 'Table Grid'
-            tr_c = tr.rows[0].cells[0]
-            set_bg(tr_c, LIGHT_GREY); set_borders(tr_c, GREY_DARK)
-            tr_c.paragraphs[0].clear()
-            p_tr = tr_c.paragraphs[0]
-            p_tr.paragraph_format.space_before = Pt(3)
-            arun(p_tr, "SUPPORTS TRIALLED & OUTCOMES", bold=True, size=15, color=GREY_DARK)
-            if (supports_trialled or "").strip():
-                p1 = tr_c.add_paragraph()
-                p1.paragraph_format.space_before = Pt(3); p1.paragraph_format.space_after = Pt(2)
-                arun(p1, "Trialled:  ", bold=True, size=14, color=GREY_DARK)
-                arun(p1, supports_trialled.strip(), size=14)
-            if (supports_success or "").strip():
-                p2 = tr_c.add_paragraph()
-                p2.paragraph_format.space_before = Pt(2); p2.paragraph_format.space_after = Pt(3)
-                arun(p2, "Outcome:  ", bold=True, size=14, color=GREY_DARK)
-                arun(p2, supports_success.strip(), size=14)
-            if before_after and not before_after.get("insufficient"):
-                p3 = tr_c.add_paragraph()
-                p3.paragraph_format.space_before = Pt(3); p3.paragraph_format.space_after = Pt(2)
-                arun(p3, "Before/After:  ", bold=True, size=14, color=GREY_DARK)
-                _rate_dir = "fewer" if before_after["pct_rate_change"] is not None and before_after["pct_rate_change"] < 0 else "more"
-                _txt = (f"Before ({before_after['weeks_before']:.1f} wks): {before_after['rate_before']:.1f}/week. "
-                        f"After ({before_after['weeks_after']:.1f} wks): {before_after['rate_after']:.1f}/week.")
-                if before_after["pct_rate_change"] is not None:
-                    _txt += f" ({abs(before_after['pct_rate_change']):.0f}% {_rate_dir} incidents per week since the trial date — preliminary read.)"
-                arun(p3, _txt, size=14)
-
         doc.add_page_break()
-
-        p_detail_note = doc.add_paragraph()
-        p_detail_note.paragraph_format.space_after = Pt(6)
-        arun(p_detail_note, "The pages below expand on the summary above with full charts, "
-             "the complete functional hypothesis, and the full recommendation set.",
-             italic=True, size=14, color=GREY_DARK)
 
         section_header(doc, "VISUAL ANALYTICS — FREQUENCY PATTERNS")
         p_sp = doc.add_paragraph(); p_sp.paragraph_format.space_after = Pt(4)
 
-        # Show all SCHOOL days in range (weekends excluded) so gaps reflect
-        # actual attendance days, not calendar days
+        # Show ALL days in range (not just incident days) so zero-incident days are visible
         import datetime as _bdt
         _b_start = full_df["date_parsed"].min().date()
         _b_end   = full_df["date_parsed"].max().date()
         _b_all_days = []
         _b_d = _b_start
         while _b_d <= _b_end:
-            if _b_d.weekday() < 5:
-                _b_all_days.append(_b_d)
+            _b_all_days.append(_b_d)
             _b_d += _bdt.timedelta(days=1)
         _b_counts_map = full_df.groupby(full_df["date_parsed"].dt.date).size().to_dict()
         daily_all = [(_b_d, _b_counts_map.get(_b_d, 0)) for _b_d in _b_all_days]
@@ -2135,6 +647,7 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         # Compute summary stats for chart 1 caption
         _fi_total_days_bap    = len(_b_all_days)
         _fi_incident_days_bap = sum(1 for v in daily.count if v > 0)
+        _fi_zero_days_bap     = sum(1 for v in daily.count if v == 0)
         _fi_max_day_bap       = max(daily.count) if daily.count else 0
         _fi_avg_per_day_bap   = sum(daily.count) / max(_fi_incident_days_bap, 1)
         _fi_high_days_bap     = sum(1 for v in daily.count if v >= 3)
@@ -2153,7 +666,7 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         ax.set_xticklabels([d.strftime("%a %d/%m") for d in daily.date_parsed],
                            fontsize=7, rotation=35, ha='right')
         ax.set_ylabel("Incidents", fontsize=10, fontweight='bold', color='#334155')
-        ax.set_title("1.  Daily Incident Frequency",
+        ax.set_title("1.  Daily Incident Frequency  —  teal = 1–2 incidents,  red = 3+",
                      fontsize=11.5, fontweight='bold', color='#0f172a', pad=8, loc='left')
         ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True))
         for bar, v in zip(bars, daily.count):
@@ -2163,14 +676,22 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         base_ax_style(ax)
         plt.tight_layout(pad=0.4)
         add_chart(doc, fig,
-            f"{_fi_incident_days_bap} of {_fi_total_days_bap} school days had at least one incident "
-            f"(weekends excluded), averaging {_fi_avg_per_day_bap:.1f} per active day (peak: {_fi_max_day_bap}). "
-            + (f"{_fi_high_days_bap} spike day(s) had 3 or more incidents — worth reviewing what was "
-               "different about staffing, timetable, or demands that day. "
+            f"Daily totals across {_fi_total_days_bap} school days. "
+            f"Incidents occurred on {_fi_incident_days_bap} days ({_fi_zero_days_bap} incident-free). "
+            f"On days with incidents, average was {_fi_avg_per_day_bap:.1f} per day "
+            f"(peak: {_fi_max_day_bap}). "
+            + (f"{_fi_high_days_bap} day(s) had 3 or more incidents — "
+               "these are high-demand days requiring retrospective review: what was different about "
+               "the environment, staffing, timetable, or demands on those days? "
                if _fi_high_days_bap > 0 else "") +
-            (f"{_fi_consec_bap} instance(s) of consecutive high-incident days — may point to insufficient "
-             "recovery time between episodes, or a sustained stressor across multiple days."
-             if _fi_consec_bap >= 2 else ""))
+            (f"There are {_fi_consec_bap} instance(s) of consecutive incident days — "
+             "consecutive high-incident days indicate the student did not have sufficient recovery time "
+             "between episodes, or a systemic stressor was sustained across multiple days. "
+             "Proactive regulation support at the start of each day is strongly indicated. "
+             if _fi_consec_bap >= 2 else "") +
+            f"Incident-free days ({_fi_zero_days_bap}) are equally important — "
+            "what proactive conditions were in place on those days? Replicating them on high-risk days "
+            "is one of the most effective preventive strategies available.")
 
         beh_counts = full_df["behaviour_type"].value_counts().head(6)
         # Use clinical terminology and filter out raw ABCH narratives (>80 chars)
@@ -2197,9 +718,19 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         base_ax_style(ax)
         plt.tight_layout(pad=0.4)
         add_chart(doc, fig,
-            f"Most frequent: {_bap_beh_labels[0] if _bap_beh_labels else 'Unknown'} "
+            f"The most frequently occurring behaviour is {_bap_beh_labels[0] if _bap_beh_labels else 'Unknown'} "
             f"({_bap_beh_vals[0] if _bap_beh_vals else 0} of {len(full_df)} incidents, "
-            f"{int((_bap_beh_vals[0] if _bap_beh_vals else 0)/max(len(full_df),1)*100)}% of total).")
+            f"{int((_bap_beh_vals[0] if _bap_beh_vals else 0)/max(len(full_df),1)*100)}% of total). "
+            + (f"A wide range of behaviour types ({len(_bap_beh_labels)} types shown) indicates a broad stress response — "
+               "the student is communicating distress through multiple channels. "
+               "Foundational Body domain regulation supports (sensory regulation, movement breaks, "
+               "predictable routines) should be the primary focus rather than behaviour-by-behaviour intervention. "
+               if len(_bap_beh_labels) >= 4 else
+               "A narrow behaviour profile (1-2 types) suggests a specific, consistent function — "
+               "the student is using a predictable response to communicate a particular unmet need. "
+               "This supports targeted functional intervention: identify the function, "
+               "teach an alternative, and pre-empt the trigger. ") +
+            "Behaviours are described using consistent, observable language to support shared understanding across the team.")
 
         ant_counts = full_df["antecedent"].value_counts().head(6)
         # Strip category prefix (e.g. "Peer - " → "peer conflict/interaction")
@@ -2225,9 +756,17 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         base_ax_style(ax)
         plt.tight_layout(pad=0.4)
         add_chart(doc, fig,
-            f"Most frequent trigger: '{wrap_labels([top_ant], width=60)[0]}' "
+            f"The most frequent trigger is '{wrap_labels([top_ant], width=60)[0]}' "
             f"({int(ant_counts.values[0])} of {len(full_df)} incidents, "
-            f"{int(ant_counts.values[0]/max(len(full_df),1)*100)}% of total).")
+            f"{int(ant_counts.values[0]/max(len(full_df),1)*100)}% of total). "
+            "Antecedent-stage intervention — modifying what happens before the trigger occurs — "
+            "is consistently more effective than any consequence-based response. "
+            "The goal is either to reduce or modify the trigger itself, or to build the student's "
+            "capacity to tolerate it through graduated exposure and skill-building. "
+            "Triggers that cluster around peer interaction, instruction, or transitions point to "
+            "specific environmental conditions that can be directly modified by staff. "
+            "Sensory triggers indicate the nervous system is overloaded before behaviour emerges — "
+            "a sensory audit and proactive sensory breaks are the most direct preventive intervention.")
 
         doc.add_page_break()
 
@@ -2264,7 +803,33 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         add_chart(doc, fig,
             f"Peak session: {SESSION_LABELS[peak_name].replace(chr(10),' ')} — "
             f"{int(session_counts[peak_name])} of {len(full_df)} incidents "
-            f"({int(session_counts[peak_name]/max(len(full_df),1)*100)}%).")
+            f"({int(session_counts[peak_name]/max(len(full_df),1)*100)}%). "
+            + ({"Morning":
+                "Morning peaks frequently reflect difficulty with the transition from home, "
+                "low readiness to engage, or unmet overnight and morning needs (hunger, sleep disruption, "
+                "sensory dysregulation on arrival). A structured, low-demand arrival routine with a "
+                "trusted adult check-in is the most effective morning intervention. "
+                "Consider: has the student eaten? Have there been any household stressors? "
+                "A predictable, warm, unhurried start to the day reduces cortisol and builds regulatory capacity "
+                "before academic demands are introduced.",
+                "Middle":
+                "Middle-of-day peaks reflect cumulative fatigue — the student has been managing demands "
+                "since arrival and regulatory capacity is depleted. Lunch and transition periods introduce "
+                "unstructured time which can be particularly challenging. "
+                "A mid-day sensory or movement break, a quiet opt-out space, and reduced demand "
+                "before and after the lunch break are high-priority strategies. "
+                "Pre-teach the transition into and out of lunch with explicit expectations and a visual schedule.",
+                "Afternoon":
+                "Afternoon peaks often reflect end-of-day fatigue, anticipatory anxiety about the transition "
+                "home, or the accumulation of the day's regulatory demands. "
+                "A structured, predictable end-of-day routine — including a debrief, a positive closure "
+                "activity, and advance notice of tomorrow's schedule — reduces afternoon escalation. "
+                "Consider the student's home situation: if the transition home is anxiety-provoking, "
+                "this may manifest as afternoon behaviour at school.",
+               }.get(peak_name,
+                "Review the specific conditions of this session and schedule targeted proactive support. "
+                "Identify what is different about the lowest-incident session and replicate those conditions.")) +
+            f" Lowest-frequency session provides a template: identify what differs structurally and replicate.")
 
         loc_counts = full_df["location"].value_counts().head(6)
         labels_loc = wrap_labels(list(loc_counts.index[::-1]))
@@ -2289,18 +854,43 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         add_chart(doc, fig,
             f"Highest-frequency location: {normalise_location(top_loc)} "
             f"({int(loc_counts.values[-1])} of {len(full_df)} incidents, "
-            f"{int(loc_counts.values[-1]/max(len(full_df),1)*100)}% of total).")
+            f"{int(loc_counts.values[-1]/max(len(full_df),1)*100)}% of total). "
+            "Location clustering signals that specific environmental conditions are contributing to behaviour. "
+            + ({"jp room": "Classroom behaviour often reflects academic demand, seating arrangements, "
+                "peer noise, or non-preferred task presentation. Review the physical layout, "
+                "sensory conditions, and demand level of activities occurring at the time of incidents.",
+                "py room": "Classroom behaviour often reflects academic demand, seating arrangements, "
+                "peer noise, or non-preferred task presentation. Review the physical layout, "
+                "sensory conditions, and demand level of activities occurring at the time of incidents.",
+                "sy room": "Classroom behaviour often reflects academic demand, seating arrangements, "
+                "peer noise, or non-preferred task presentation. Review the physical layout, "
+                "sensory conditions, and demand level of activities occurring at the time of incidents.",
+                "yard":    "Yard incidents reflect unstructured time, peer conflict, sensory overload, "
+                "and reduced adult proximity. Increased supervision ratios, structured yard activities, "
+                "and a clear opt-out space are recommended.",
+                "kitchen": "Kitchen incidents may reflect access to food as a motivator, transitions "
+                "in/out of the space, or sensory factors around meal/snack time. "
+                "Ensure clear, consistent expectations and supervised, predictable kitchen routines.",
+                "toilets": "Incidents in or near toilets may indicate the student uses this space as an "
+                "escape route, or that transitions to/from the toilets are a trigger. "
+                "Review supervision and transition routines.",
+               }.get(normalise_location(top_loc).lower(),
+               "Conduct an environmental audit of this location — review noise level, crowding, "
+               "supervision ratio, demand level, and transition patterns in and out of the space. ")) +
+            "An environmental audit of this location is the most direct preventive action. "
+            "Also note whether this hotspot coincides with the peak time of day — "
+            "if so, the combination creates a compounding risk window requiring an immediate targeted plan.")
 
-        # WoT for incidents: yellow/orange=coping (severity 1–3), red=outside window (severity 4–5)
+        # WoT for incidents: yellow/orange=coping (L1-3), red=outside window (L4-5)
         sev_colours = {1:'#eab308',2:'#eab308',3:'#f97316',4:'#ef4444',5:'#7f1d1d'}
-        sev_level_names = {1:'Severity 1 (Minor)',2:'Severity 2 (Low)',3:'Severity 3 (Moderate)',
-                           4:'Severity 4 (Serious)',5:'Severity 5 (Critical)'}
+        sev_level_names = {1:'Level 1 (Minor)',2:'Level 2 (Low)',3:'Level 3 (Moderate)',
+                           4:'Level 4 (Serious)',5:'Level 5 (Critical)'}
         fig, ax = plt.subplots(figsize=(FIG_W, FIG_H), dpi=FIG_DPI)
-        ax.axhspan(0.5, 3.5,  color='#fef9c3', alpha=0.35, zorder=0)  # yellow — coping zone severity 1–3
-        ax.axhspan(3.5, 5.5,  color='#fee2e2', alpha=0.30, zorder=0)  # red — outside window severity 4–5
+        ax.axhspan(0.5, 3.5,  color='#fef9c3', alpha=0.35, zorder=0)  # yellow — coping zone L1-3
+        ax.axhspan(3.5, 5.5,  color='#fee2e2', alpha=0.30, zorder=0)  # red — outside window L4-5
         for y, lbl, col in [(1.5,'Within window (regulated)','#16a34a'),
-                            (3.0,'Coping','#f97316'),
-                            (4.5,'Outside window','#ef4444')]:
+                            (3.0,'Coping','#ca8a04'),
+                            (4.5,'Outside window','#dc2626')]:
             ax.text(full_df['date_parsed'].min(), y, lbl,
                     fontsize=6.5, color=col, alpha=0.6, va='center', style='italic')
         for sev in [1,2,3,4,5]:
@@ -2338,12 +928,36 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
         elif len(full_df) > 0:
             direction = "insufficient data for trend"
         add_chart(doc, fig,
-            f"Severity trend: {direction} (early average {e_avg:.1f} → recent average {r_avg:.1f})."
+            f"Severity trajectory: {direction} (early average {e_avg:.1f} → recent average {r_avg:.1f}). "
             + ({
-               "reducing": f" Reduced by {abs(round(r_avg-e_avg,1))} points — a positive indicator worth sustaining.",
-               "increasing": f" Increased by {abs(round(r_avg-e_avg,1))} points — the most significant finding here; a case review is warranted.",
-               "stable": " Holding steady — current supports are maintaining functioning without a clear recovery trend.",
-              }.get(direction, "")))
+               "reducing": (
+                   f"Average severity has reduced by {abs(round(r_avg-e_avg,1))} levels across the data period. "
+                   "This is a meaningful positive indicator — the student is experiencing less intense episodes over time. "
+                   "This may reflect improved regulatory capacity, more effective proactive supports, or a stronger "
+                   "relational foundation with key staff. Document specifically what has changed and ensure those "
+                   "conditions are deliberately sustained — gains in regulation can reverse quickly if supports "
+                   "are reduced or key staff change."
+               ),
+               "stable": (
+                   "Severity has remained stable across the data period. "
+                   "Current supports are maintaining a consistent level of functioning — not a deterioration, "
+                   "but not a recovery. Consider whether support intensity matches the student's needs, "
+                   "or whether a targeted strategy shift is needed to move the trajectory downward. "
+                   "A case review or consultation with an external specialist may be appropriate "
+                   "if this pattern has held across multiple terms."
+               ),
+               "increasing": (
+                   f"Average severity has increased by {abs(round(r_avg-e_avg,1))} levels — "
+                   "the most significant finding in this analysis. Current supports are insufficient. "
+                   "Recommended immediate actions: case conference, updated safety plan, "
+                   "sensory and environmental audit, review of staffing consistency and relational supports, "
+                   "and consideration of specialist referral. Also check whether external stressors "
+                   "(family changes, transitions, health factors) are contributing."
+               ),
+              }.get(direction, "")) +
+            " Yellow zone (L1–L3) = Coping. Red zone (L4–L5) = Outside window. "
+            "A critical incident does not automatically mean outside the window. "
+            "All episodes in the red zone require post-incident relational repair before re-engaging with learning.")
 
         doc.add_page_break()
 
@@ -2378,8 +992,16 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             _dow_low_bap = _dow_bap[_dow_bap > 0].idxmin() if (_dow_bap > 0).any() else ""
             add_chart(doc, fig,
                 f"Peak incident day: {_dow_peak_bap} ({_dow_peak_n_bap} incidents). "
-                "Worth checking what's specific to the timetable, staffing, or subjects on that day."
-                + (f" Lowest: {_dow_low_bap} — a useful comparison point for what's working."
+                "Day-of-week patterns point to timetable-specific triggers. "
+                "The recommended action is to review the full timetable for the peak day: "
+                "which subjects, staff members, peer groupings, or transitions are unique to that day? "
+                "Is there a particular subject that is cognitively demanding or non-preferred? "
+                "Is there a staffing change (e.g. a relief teacher, a different support worker)? "
+                "Is there an unstructured or transition-heavy period that does not appear on other days? "
+                + (f"The lowest-incident day is {_dow_low_bap} — "
+                   "this day provides a template for what effective conditions look like. "
+                   "Identify what is structurally different and deliberately replicate those conditions "
+                   "on high-risk days. This is one of the highest-leverage preventive strategies available. "
                    if _dow_low_bap and _dow_low_bap != _dow_peak_bap else ""))
 
         # ── Chart 8: Escalation Rate by Behaviour ────────────────────────
@@ -2422,13 +1044,27 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             plt.tight_layout(pad=0.4)
             _high_esc = [x for x in _esc_data if x[3] > 50]
             add_chart(doc, fig,
-                "Escalation rate = the proportion of each behaviour's incidents that reached "
-                "Critical Incident status rather than staying in the Coping zone. Grey bars = fewer than 4 "
-                "incidents, not yet a reliable rate. "
-                + (f"HIGH ESCALATION: {", ".join(x[0][:35] for x in _high_esc)} — proactive strategies "
-                   "need to be in place before these behaviours emerge, not after."
+                "Escalation rate is the proportion of incidents for each behaviour that progressed "
+                "from a regular (Coping zone) episode to a critical incident (ABCH-documented). "
+                "A high rate for a specific behaviour signals that something about how that behaviour unfolds "
+                "— the environment, the staff response, or the student's internal state — "
+                "is not being interrupted effectively while the student is still in the Coping zone. "
+                "Grey bars indicate fewer than 4 incidents — rate is not yet reliable, continue logging. "
+                "The Sev StDev (if shown) tells you how variable the severity is: a low value means "
+                "episodes are consistently similar in intensity; a high value means the student "
+                "oscillates between mild and severe episodes, which may indicate inconsistent triggers "
+                "or inconsistent staff responses across different contexts. "
+                + (f"HIGH ESCALATION RISK IDENTIFIED: {", ".join(x[0][:35] for x in _high_esc)}. "
+                   "For these behaviours, proactive strategies must be in place BEFORE the behaviour emerges. "
+                   "The Coping zone (yellow/orange) is the window for effective intervention — "
+                   "once the student moves to the outside-window zone (red), de-escalation is the only "
+                   "available strategy and learning re-engagement must wait until full recovery. "
+                   "Review the antecedent chain for these specific behaviours: what conditions reliably "
+                   "precede escalation, and how can those conditions be modified or removed? "
                    if _high_esc else
-                   "No behaviours currently show high escalation risk — a positive indicator."))
+                   "No behaviours are currently showing high escalation risk — "
+                   "all incidents are remaining within the Coping zone rather than escalating to critical. "
+                   "This is a significant positive indicator: document and sustain current staff responses. "))
 
         # ── Chart 9: Severity distribution by Behaviour (WoT coloured) ──
         doc.add_paragraph().paragraph_format.space_after = Pt(4)
@@ -2436,8 +1072,8 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
                     if b and len(str(b)) <= 80 and not str(b).startswith("---")]
         if _sv_behs and len(full_df) >= 4:
             _WOT_COLS_BAP = {1:"#eab308",2:"#eab308",3:"#f97316",4:"#ef4444",5:"#7f1d1d"}
-            _WOT_LBLS_BAP = {1:"severity 1 Coping",2:"severity 2 Coping",3:"severity 3 Approaching edge",
-                             4:"severity 4 Outside window",5:"severity 5 Crisis"}
+            _WOT_LBLS_BAP = {1:"L1 Coping",2:"L2 Coping",3:"L3 Approaching edge",
+                             4:"L4 Outside window",5:"L5 Crisis"}
             fig, ax = plt.subplots(figsize=(FIG_W, FIG_H), dpi=FIG_DPI)
             _bar_bottom = [0] * len(_sv_behs)
             _sv_labels_bap = [get_clinical_behaviour(b)[:40] + ("…" if len(get_clinical_behaviour(b)) > 40 else "")
@@ -2470,79 +1106,25 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
             _outside_n = int((full_df["severity"] > 3).sum())
             _c_pct = int(_coping_n / len(full_df) * 100) if len(full_df) else 0
             add_chart(doc, fig,
-                f"{_c_pct}% of all incidents ({_coping_n} of {len(full_df)}) stayed within the Coping zone "
-                f"(severity 1–3); {100-_c_pct}% ({_outside_n}) reached the outside-window zone (severity 4–5)."
-                + (" Every outside-window episode needs relational repair before re-engaging with learning."
-                   if _outside_n > 0 else " A strong positive indicator — document and sustain current strategies."))
-
-        # ── Chart 10: Antecedent Category Breakdown (also shown in-app) ──
-        full_df["_ant_cat"] = full_df["antecedent"].apply(categorize_antecedent)
-        _cat_counts = full_df["_ant_cat"].dropna().value_counts()
-        if not _cat_counts.empty:
-            _cat_order  = ["Peer", "Transition", "Instructions", "Engagement", "Sensory", "Other"]
-            _cat_colors = {"Peer": "#3b82f6", "Transition": "#f59e0b", "Instructions": "#ef4444",
-                           "Engagement": "#8b5cf6", "Sensory": "#10b981", "Other": "#64748b"}
-            _cat_present = [c for c in _cat_order if c in _cat_counts.index]
-            _cat_vals = [int(_cat_counts[c]) for c in _cat_present]
-            fig, ax = plt.subplots(figsize=(FIG_W, FIG_H), dpi=FIG_DPI)
-            bars = ax.bar(_cat_present, _cat_vals,
-                          color=[_cat_colors[c] for c in _cat_present],
-                          edgecolor='white', linewidth=0.6, width=0.6)
-            ax.set_ylabel("Number of incidents", fontsize=10, fontweight='bold', color='#334155')
-            ax.set_title("10.  Antecedent Category Breakdown",
-                         fontsize=11.5, fontweight='bold', color='#0f172a', pad=8, loc='left')
-            ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True))
-            for bar, v in zip(bars, _cat_vals):
-                ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.05,
-                        str(v), ha='center', va='bottom', fontsize=9, fontweight='bold', color='#0f172a')
-            base_ax_style(ax)
-            plt.tight_layout(pad=0.4)
-            _top_cat = _cat_present[_cat_vals.index(max(_cat_vals))]
-            _top_cat_pct = int(max(_cat_vals) / sum(_cat_vals) * 100) if sum(_cat_vals) else 0
-            add_chart(doc, fig,
-                f"Incidents grouped by trigger domain. '{_top_cat}' is the primary domain "
-                f"({_top_cat_pct}% of categorised incidents) — this is where preventive "
-                f"effort is likely to have the most impact.")
-
-        _combos = find_combined_patterns(full_df)
-        if _combos:
-            cb = doc.add_table(rows=1, cols=1); cb.style = 'Table Grid'
-            cb_c = cb.rows[0].cells[0]
-            set_bg(cb_c, "EFF6FF"); set_borders(cb_c, "0284C7")
-            cb_c.paragraphs[0].clear()
-            p_cb = cb_c.paragraphs[0]
-            p_cb.paragraph_format.space_before = Pt(3)
-            arun(p_cb, "COMBINED PATTERN", bold=True, size=15, color="0284C7")
-            for _c in _combos:
-                p = cb_c.add_paragraph()
-                p.paragraph_format.space_before = Pt(2); p.paragraph_format.space_after = Pt(2)
-                arun(p, f"{int(_c['pct']*100)}% of all incidents ", bold=True, size=14)
-                arun(p, f"({_c['count']} of {len(full_df)}) share all three conditions: "
-                        f"{_c['category']}-triggered, in {normalise_location(_c['location'])}, "
-                        f"during the {_c['session']} session.", size=14)
-            doc.add_paragraph().paragraph_format.space_after = Pt(4)
-
-        # ── ATTENDANCE & ABSENCE graphs (when attendance is recorded) ──
-        _att_figs = attendance_report_figures(student.get("id"), full_df)
-        if _att_figs:
-            doc.add_page_break()
-            section_header(doc, "ATTENDANCE, ABSENCE & DAY ENDS — PATTERNS")
-            doc.add_paragraph().paragraph_format.space_after = Pt(4)
-            for _fg, _cap in _att_figs[0]:
-                add_chart(doc, _fg, _cap)
-            if _att_figs[1]:
-                _pt = doc.add_table(rows=1, cols=1); _pt.style = 'Table Grid'
-                _pc = _pt.rows[0].cells[0]
-                set_bg(_pc, TEAL_LIGHT); set_borders(_pc, TEAL_HEX)
-                _pc.paragraphs[0].clear()
-                arun(_pc.paragraphs[0], "WHAT THE DAY ENDS SUGGEST", bold=True, size=16, color=TEAL_HEX)
-                for _t in _att_figs[1]:
-                    _pp = _pc.add_paragraph(); _pp.paragraph_format.space_before = Pt(2); _pp.paragraph_format.space_after = Pt(2)
-                    arun(_pp, "• " + _t, size=15)
-                _pp = _pc.add_paragraph()
-                arun(_pp, "Early patterns with few days are signals to discuss, not conclusions. Absences are not counted as day ends.", italic=True, size=14, color=GREY_DARK)
-                doc.add_paragraph().paragraph_format.space_after = Pt(4)
-            doc.add_page_break()
+                f"{_c_pct}% of all incidents ({_coping_n} of {len(full_df)}) occurred within the Coping zone (L1–L3). "
+                "This chart shows how each behaviour type is distributed across Window of Tolerance zones. "
+                "Colour key: yellow = L1-2 Coping (low-level behaviour, student managing); "
+                "orange = L3 Coping, approaching edge; red = L4-5 Outside window (significant dysregulation). "
+                "Behaviours with a high proportion of yellow/orange are being managed within the Coping zone — "
+                "these are responsive to proactive supports and de-escalation strategies. "
+                "Behaviours with a high proportion of red indicate the student is regularly moving "
+                "outside their window with this specific behaviour — these require urgent antecedent intervention, "
+                "a robust safety plan, and a clear post-incident relational repair protocol. "
+                "Important: a critical incident classification does not automatically mean outside the window — "
+                "many critical incidents are logged at L3 (Coping, approaching edge). "
+                + (f"The remaining {100-_c_pct}% ({_outside_n} incidents) reached the outside-window zone (L4-5). "
+                   "Post-incident repair — re-establishing relational safety before returning to learning — "
+                   "is essential after every outside-window episode. "
+                   "Review what proactive conditions were absent on those days. "
+                   if _outside_n > 0 else
+                   "All logged incidents remained within the Coping zone — a strong positive indicator. "
+                   "Current staff responses are successfully preventing escalation to full dysregulation. "
+                   "Document and sustain current proactive strategies explicitly. "))
 
         section_header(doc, "FUNCTIONAL HYPOTHESIS")
         p_sp3 = doc.add_paragraph(); p_sp3.paragraph_format.space_after = Pt(4)
@@ -2663,9 +1245,6 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
 
         section_header(doc, "TEACHING LENS — RECOMMENDATIONS")
         p_tl = doc.add_paragraph(); p_tl.paragraph_format.space_after = Pt(4)
-        arun(p_tl, "Framed on SMART's core principle: a dysregulated (Regulate-stage) brain can't yet learn or "
-                   "reason — these strategies work by keeping the student regulated before demand increases, "
-                   "not after.", italic=True, size=13, color=GREY_DARK)
 
         tl_tbl = doc.add_table(rows=2, cols=2); tl_tbl.style = 'Table Grid'
         tl_data = [
@@ -2716,9 +1295,6 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
 
         section_header(doc, "SUPPORT LENS — RECOMMENDATIONS")
         p_sl = doc.add_paragraph(); p_sl.paragraph_format.space_after = Pt(4)
-        arun(p_sl, "Sequenced on SMART's Regulate → Relate → Reason principle — co-regulation and safety come "
-                   "first; debrief, repair, and skill-teaching only once the student is genuinely calm.",
-             italic=True, size=13, color=GREY_DARK)
 
         sl_tbl = doc.add_table(rows=2, cols=2); sl_tbl.style = 'Table Grid'
         sl_data = [
@@ -2726,7 +1302,7 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
                 f"Incorporate a sensory diet before the {top_session} session — movement break, heavy work, or proprioceptive input to prepare the nervous system.",
                 "Co-regulate with a key adult using CPI Supportive Stance (low, slow, sideways) as the default interaction posture.",
                 f"Develop a personalised Window of Tolerance profile for {student['name']} — document early warning signs, escalation cues, and effective de-escalation strategies.",
-                "Teach and embed regulation tools during calm states; cue their use proactively at early warning signs, before escalation occurs.",
+                "Teach and embed regulation tools during calm states; cue their use proactively at Level 2 before escalation occurs.",
                 "Monitor medication timing and note correlations with incident frequency in the peak session.",
             ]),
             ("🛡️ Antecedent Prevention", [
@@ -2734,12 +1310,12 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
                 "Implement pre-correction immediately before high-risk contexts — calm reminder of expectations and available supports.",
                 f"Conduct Functional Communication Training (FCT) — teach a socially appropriate replacement behaviour serving the same function as {get_clinical_behaviour(top_beh).lower()}.",
                 "Apply structured peer interaction protocols — pre-assign groupings and roles; avoid unstructured proximity where peer triggers are present.",
-                "Develop a Crisis Safety Plan with Critical Incident protocols, staff roles, and a post-incident restorative repair sequence.",
+                "Develop a Crisis Safety Plan with Level 3+ protocols, staff roles, and a post-incident restorative repair sequence.",
             ]),
             ("🔄 Post-Incident Repair", [
                 "Restore the relationship before re-engaging with academic demands — never return to tasks while the student remains dysregulated.",
                 "Conduct a brief, non-punitive restorative conversation once regulated — focus on impact and repair.",
-                "Complete a structured staff debrief after every Critical Incident.",
+                "Complete a structured staff debrief after every Level 3+ incident.",
                 "Maintain proactive, strengths-focused communication with parent/carer — not solely incident-driven contact.",
             ]),
             ("📅 Case Management", [
@@ -2766,352 +1342,7 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
 
         doc.add_paragraph().paragraph_format.space_after = Pt(5)
 
-        if full_pack:
-            from docx.enum.section import WD_SECTION, WD_ORIENT
-
-            def _clean(v, default="—"):
-                if isinstance(v, (list, tuple)):
-                    v = ", ".join(str(x) for x in v if x)
-                if v is None:
-                    return default
-                try:
-                    if pd.isna(v):
-                        return default
-                except (TypeError, ValueError):
-                    pass
-                v = str(v).strip()
-                return v if v and v.lower() not in ("nan", "none", "nat") else default
-
-            def _set_col_widths(tbl, widths_cm):
-                tbl.autofit = False
-                for idx, w in enumerate(widths_cm):
-                    if idx < len(tbl.columns):
-                        tbl.columns[idx].width = Cm(w)
-                for row in tbl.rows:
-                    for idx, w in enumerate(widths_cm):
-                        if idx < len(row.cells):
-                            row.cells[idx].width = Cm(w)
-
-            def _repeat_header(row):
-                trPr = row._tr.get_or_add_trPr()
-                el = OxmlElement('w:tblHeader'); el.set(qn('w:val'), 'true'); trPr.append(el)
-
-            def grid_table(headers, rows, widths_cm, font=17):
-                tbl = doc.add_table(rows=1, cols=len(headers)); tbl.style = 'Table Grid'
-                for i, h in enumerate(headers):
-                    c = tbl.rows[0].cells[i]
-                    set_bg(c, GREY_DARK); set_borders(c, TEAL_HEX)
-                    c.paragraphs[0].clear()
-                    arun(c.paragraphs[0], h, bold=True, size=font, color=WHITE)
-                _repeat_header(tbl.rows[0])
-                for r_i, r in enumerate(rows):
-                    cells = tbl.add_row().cells
-                    for i, val in enumerate(r):
-                        set_bg(cells[i], LIGHT_GREY if r_i % 2 == 0 else WHITE)
-                        set_borders(cells[i], "CBD5E1")
-                        cells[i].paragraphs[0].clear()
-                        arun(cells[i].paragraphs[0], str(val), size=font)
-                _set_col_widths(tbl, widths_cm)
-                return tbl
-
-            def note(text, size=17):
-                pn = doc.add_paragraph(); pn.paragraph_format.space_after = Pt(4)
-                arun(pn, text, italic=True, size=size, color=GREY_DARK)
-
-            # ── page numbers + confidentiality footer ──
-            _fp = doc.sections[0].footer.paragraphs[0]
-            _fp.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            arun(_fp, f"CONFIDENTIAL — {student['name']} — Full Analysis, printed "
-                      f"{datetime.now().strftime('%d/%m/%Y')} — Page ", size=18, color="666666")
-            _r = _fp.add_run(); _r.font.size = Pt(7); _r.font.name = "Arial"
-            for _t, _txt in (("begin", None), (None, "PAGE"), ("end", None)):
-                if _t:
-                    _e = OxmlElement('w:fldChar'); _e.set(qn('w:fldCharType'), _t)
-                else:
-                    _e = OxmlElement('w:instrText'); _e.set(qn('xml:space'), 'preserve'); _e.text = _txt
-                _r._r.append(_e)
-
-            # ── Suggested strategies to trial (same list as on screen) ──
-            try:
-                _sugg_w = get_trial_suggestions(student.get("id"), full_df)
-            except Exception:
-                _sugg_w = []
-            if _sugg_w:
-                doc.add_page_break()
-                section_header(doc, "SUGGESTED STRATEGIES TO TRIAL")
-                note("Each suggestion is a hypothesis to test for a few weeks, with something specific to track, then record what was learned. "
-                     "They come from the starting profile and from this student's own incident pattern.")
-                _running = {t.get("title") for t in (trials or []) if t.get("status") == "Running"}
-                for _sg in _sugg_w:
-                    _tt = doc.add_table(rows=1, cols=1); _tt.style = 'Table Grid'
-                    _tc = _tt.rows[0].cells[0]; set_borders(_tc, TEAL_HEX, size="10"); _tc.paragraphs[0].clear()
-                    arun(_tc.paragraphs[0], _clean(_sg.get("title")), bold=True, size=19, color=GREY_DARK)
-                    arun(_tc.paragraphs[0], "   [from the starting profile]" if _sg.get("source") == "profile" else "   [from incident data]", size=15, color=TEAL_HEX)
-                    if _sg.get("title") in _running:
-                        arun(_tc.paragraphs[0], "   [already running]", bold=True, size=15, color="1A7A6E")
-                    _rows_sg = [("Where this comes from: " if _sg.get("source") == "profile" else "What the data shows: ", _sg.get("evidence")),
-                                ("", _sg.get("data_note")),
-                                ("Hypothesis to test: ", _sg.get("hypothesis")),
-                                ("Strategy to trial: ", _sg.get("strategy")),
-                                ("What to track: ", _sg.get("measure"))]
-                    for _lab, _val in _rows_sg:
-                        if not _val:
-                            continue
-                        _pp = _tc.add_paragraph(); _pp.paragraph_format.space_before = Pt(2)
-                        if _lab:
-                            arun(_pp, _lab, bold=True, size=16, color=GREY_DARK)
-                        arun(_pp, _tr_text(_val, "—"), size=16, italic=not _lab)
-                    _pp = _tc.add_paragraph(); _pp.paragraph_format.space_before = Pt(3)
-                    arun(_pp, "Start date: ____________   Staff: ____________   Review on: ____________", size=15, color="666666")
-                    doc.add_paragraph().paragraph_format.space_after = Pt(4)
-
-            # ── Attendance & absence ──
-            _ah_p = attendance_headline(student.get("id"), full_df)
-            if _ah_p:
-                doc.add_page_break()
-                section_header(doc, "ATTENDANCE & ABSENCE")
-                note("Set against the student's usual weekly pattern. Incident counts mean more when read alongside how much school was attended.")
-                grid_table(["Measure", "Result"], [[a, b] for a, b in _ah_p["lines"]], [6.2, 11.0], font=18)
-                doc.add_paragraph().paragraph_format.space_after = Pt(6)
-                _recs_p = build_attendance_calendar(student, _ah_p["state"], full_df, _ah_p["start"], _ah_p["end"])
-                if _recs_p:
-                    arun(doc.add_paragraph(), "Week-by-week attendance table", bold=True, size=19, color=GREY_DARK)
-                    note("Times shown where known, otherwise the sessions attended. CI = critical incident. Days with no entry follow the usual weekly pattern.", size=15)
-                    _add_att_calendar_table(doc, _recs_p, font_pt=8, widths_cm=(1.7, 3.1, 3.1, 3.1, 3.1, 3.1))
-
-            # ── Strategy trials ──
-            if trials:
-                doc.add_page_break()
-                section_header(doc, "STRATEGY TRIALS — WHAT WE HAVE TRIED AND LEARNED")
-                note("Each trial tests a hypothesis about this student. Effects are a preliminary read from logged incidents.")
-                for _t in trials:
-                    _st_, _en_ = _trial_date(_t.get("start_date")), _trial_date(_t.get("end_date"))
-                    _eff = compute_trial_effect(full_df, _st_, _en_ if _t.get("status") != "Running" else None, _t.get("focus_session") or "")
-                    _tt = doc.add_table(rows=1, cols=1); _tt.style = 'Table Grid'
-                    _tc = _tt.rows[0].cells[0]; set_borders(_tc, TEAL_HEX, size="10"); _tc.paragraphs[0].clear()
-                    arun(_tc.paragraphs[0], _tr_text(_t.get("title")), bold=True, size=19, color=GREY_DARK)
-                    _status = "Running" if _t.get("status") == "Running" else f"Concluded: {_t.get('outcome') or ''}"
-                    arun(_tc.paragraphs[0], f"   [{_status}]  from {_st_.strftime('%d/%m/%Y') if _st_ else '—'}", size=15, color=TEAL_HEX)
-                    for _lab, _val in (("Hypothesis: ", _t.get("hypothesis")), ("Strategy: ", _t.get("strategy")), ("Tracking: ", _t.get("measure"))):
-                        _pp = _tc.add_paragraph(); _pp.paragraph_format.space_before = Pt(2)
-                        arun(_pp, _lab, bold=True, size=16, color=GREY_DARK); arun(_pp, _tr_text(_val, "—"), size=16)
-                    if _eff and not _eff.get("insufficient"):
-                        for _ln in (_fmt_effect(_eff.get("focus"), f"{_t.get('focus_session')} session"), _fmt_effect(_eff.get("all"), "Whole day")):
-                            if _ln:
-                                _pp = _tc.add_paragraph(); arun(_pp, _ln, size=16, color="1A7A6E")
-                    _al = trial_attendance_line(student.get("id"), _st_, _en_ if _t.get("status") != "Running" else None, full_df)
-                    if _al:
-                        _pp = _tc.add_paragraph(); arun(_pp, _al, size=16, color="1A7A6E")
-                    for _o in (_t.get("observations") or []):
-                        _pp = _tc.add_paragraph(); arun(_pp, f"• {_o.get('date','')} — {_o.get('text','')}", size=15)
-                    if _t.get("conclusion"):
-                        _pp = _tc.add_paragraph(); _pp.paragraph_format.space_before = Pt(2)
-                        arun(_pp, "What we learned: ", bold=True, size=16, color=GREY_DARK); arun(_pp, _tr_text(_t.get("conclusion")), size=16)
-                    doc.add_paragraph().paragraph_format.space_after = Pt(4)
-
-            # ── Antecedent categories ──
-            doc.add_page_break()
-            section_header(doc, "WHAT TENDS TO COME BEFORE THE BEHAVIOUR — BY CATEGORY")
-            note("Each incident's trigger grouped into a category. Count, share of all incidents, and average severity.")
-            _cdf = full_df.copy()
-            if "antecedent" in _cdf.columns:
-                _cdf["_cat"] = _cdf["antecedent"].apply(categorize_antecedent)
-                _cdf["_sev"] = pd.to_numeric(_cdf.get("severity"), errors="coerce")
-                _rows = []
-                for cat, g in _cdf.groupby("_cat"):
-                    _sv = g["_sev"].mean()
-                    _rows.append([cat, len(g), f"{len(g)/len(_cdf)*100:.0f}%",
-                                  f"{_sv:.1f}" if pd.notna(_sv) else "—"])
-                _rows.sort(key=lambda r: -r[1])
-                if _rows:
-                    grid_table(["Category", "Incidents", "Share", "Avg severity"], _rows, [7.4, 3.2, 3.2, 3.6], font=18)
-            doc.add_paragraph().paragraph_format.space_after = Pt(6)
-
-            # ── Where / when crosstab ──
-            if {"location", "session"}.issubset(full_df.columns):
-                section_header(doc, "WHERE AND WHEN — LOCATION × SESSION")
-                note("Number of incidents in each location, by session (Morning before 11:00; Middle 11:00–13:30; Afternoon after 13:30).")
-                _ct = pd.crosstab(full_df["location"].fillna("Unknown"), full_df["session"])
-                for _s in ("Morning", "Middle", "Afternoon"):
-                    if _s not in _ct.columns:
-                        _ct[_s] = 0
-                _ct = _ct[["Morning", "Middle", "Afternoon"]]
-                _ct["Total"] = _ct.sum(axis=1)
-                _ct = _ct.sort_values("Total", ascending=False)
-                grid_table(["Location", "Morning", "Middle", "Afternoon", "Total"],
-                           [[idx, *[int(v) for v in row]] for idx, row in _ct.iterrows()],
-                           [6.0, 2.8, 2.8, 2.9, 2.9], font=18)
-            doc.add_paragraph().paragraph_format.space_after = Pt(6)
-
-            # ── Combined patterns ──
-            _combos = find_combined_patterns(full_df)
-            if _combos:
-                section_header(doc, "COMBINED PATTERNS")
-                note("Where trigger, place and time of day overlap — a stronger signal than any one on its own.")
-                grid_table(["Trigger category", "Location", "Session", "Incidents", "Share"],
-                           [[c["category"], c["location"], c["session"], c["count"], f"{c['pct']*100:.0f}%"] for c in _combos],
-                           [4.4, 4.4, 3.2, 2.7, 2.7], font=18)
-                doc.add_paragraph().paragraph_format.space_after = Pt(6)
-
-            # ── Considerations ──
-            _cons = build_considerations(full_df, top_ant, top_loc, top_session)
-            if _cons:
-                section_header(doc, "THINGS TO CONSIDER BEFORE ACTING ON THIS DATA")
-                note("Other explanations worth ruling out before treating a pattern as purely behavioural.")
-                for _c in _cons:
-                    _pc = doc.add_paragraph(); _pc.paragraph_format.space_after = Pt(3)
-                    _pc.paragraph_format.left_indent = Cm(0.4)
-                    arun(_pc, "☐  ", size=20, color=TEAL_HEX); arun(_pc, _c, size=18)
-                doc.add_paragraph().paragraph_format.space_after = Pt(6)
-
-            # ── Demand-avoidant presentations ──
-            doc.add_page_break()
-            section_header(doc, "DEMAND-AVOIDANT PRESENTATIONS — PERCEIVED CHOICE APPROACH")
-            _sig = demand_avoidance_signal(full_df)
-            note((f"{_sig['n']} of {_sig['total']} incidents ({_sig['pct']*100:.0f}%) were linked to demands, instructions, "
-                  "transitions or refusal/avoidance. " if _sig["flag"] else "")
-                 + "Useful whether or not a diagnosis (e.g. ODD or PDA profile) exists. This is a prompt for team discussion, not a label.")
-            for _d in DEMAND_AVOIDANCE_STRATEGIES:
-                _pd = doc.add_paragraph(); _pd.paragraph_format.space_after = Pt(3)
-                _pd.paragraph_format.left_indent = Cm(0.4)
-                arun(_pd, f"[{_d['domain']}]  ", bold=True, size=17, color=TEAL_HEX); arun(_pd, _d["strategy"], size=17)
-            doc.add_paragraph().paragraph_format.space_after = Pt(3)
-            note("Perceived choice: reframing the language. Both options must be acceptable; the choice is in how, when, where or with whom, not whether.")
-            grid_table(["Instead of...", "Try..."], [[a, b] for a, b in PERCEIVED_CHOICE_PHRASES], [6.0, 11.4], font=17)
-
-            # ── Window of Tolerance ──
-            doc.add_page_break()
-            section_header(doc, "WINDOW OF TOLERANCE — DRAFT FROM THIS STUDENT'S DATA")
-            note("Draft only, built from logged behaviour types and severity. Context is de-identified (people shown by role). "
-                 "Review with the team and complete the regulated 'Window of Tolerance' zone directly in the Creator.")
-            _wot = build_wot_with_micro(full_df, student_id=student.get("id"))
-            if not _wot:
-                note("Not enough classifiable incidents yet to draft this table.")
-            elif any(_v.get("micro") for _v in _wot.values()):
-                note("The two Coping zones (just outside the window) also list every micro behaviour logged "
-                     "for this student, with counts, settings and what helped them settle.")
-            for _z in WOT_ZONES:
-                if _z["id"] not in _wot:
-                    continue
-                _zd = _wot[_z["id"]]
-                _mz = _zd.get("micro")
-                _blocks = []
-                if _zd["n"]:
-                    _blocks.append((None, (("Context", _zd["context"]), ("Behaviour", _zd["behaviour"]),
-                                           ("Interventions", _zd["interventions"] or ["— none logged for this zone —"]))))
-                if _mz:
-                    _blocks.append((f"Micro behaviours — coping signs ({_mz['n']} entries)",
-                                    tuple((_h, _mz[_k] or ["—"]) for _h, _k in MICRO_WOT_COLS)))
-                _nrows = 1 + sum(2 if _t else 1 for _t, _ in _blocks)
-                _zt = doc.add_table(rows=_nrows, cols=3); _zt.style = 'Table Grid'
-                _hc = _zt.rows[0].cells[0].merge(_zt.rows[0].cells[2])
-                set_bg(_hc, _z["color"].lstrip("#")); set_borders(_hc, _z["color"].lstrip("#"))
-                _hc.paragraphs[0].clear()
-                arun(_hc.paragraphs[0], f"{_z['label']}  —  {_wot_zone_heading(_zd)}", bold=True, size=20, color=WHITE)
-                _ri = 1
-                for _title, _cols in _blocks:
-                    if _title:
-                        _tc = _zt.rows[_ri].cells[0].merge(_zt.rows[_ri].cells[2])
-                        set_borders(_tc, _z["color"].lstrip("#"))
-                        _tc.paragraphs[0].clear()
-                        arun(_tc.paragraphs[0], _title, bold=True, size=17, color=_z["color"].lstrip("#"))
-                        _ri += 1
-                    for _ci, (_h, _items) in enumerate(_cols):
-                        _cell = _zt.rows[_ri].cells[_ci]
-                        set_borders(_cell, _z["color"].lstrip("#"))
-                        _cell.paragraphs[0].clear()
-                        arun(_cell.paragraphs[0], _h, bold=True, size=17, color=GREY_DARK)
-                        for _it in _items:
-                            _pi = _cell.add_paragraph(); _pi.paragraph_format.space_after = Pt(1)
-                            arun(_pi, f"• {_clean(_it)}", size=17)
-                    _ri += 1
-                _set_col_widths(_zt, [5.8, 5.8, 5.8])
-                doc.add_paragraph().paragraph_format.space_after = Pt(4)
-
-            # ── BSEM recommendations (fully expanded for print) ──
-            if bsem_items:
-                doc.add_page_break()
-                section_header(doc, "BERRY STREET EDUCATION MODEL — RECOMMENDED STRATEGIES")
-                note("Strategies matched to this student's pattern, framed for handover to a receiving school. "
-                     "SMART reminder: regulate before you reason.")
-                _dom_col = {"Body": "10B981", "Relationship": "3B82F6", "Stamina": "F97316",
-                            "Engagement": "8B5CF6", "Character": "EAB308"}
-                for _it in bsem_items:
-                    _bt = doc.add_table(rows=1, cols=1); _bt.style = 'Table Grid'
-                    _bc = _bt.rows[0].cells[0]
-                    _col = _dom_col.get(_it.get("domain"), "64748B")
-                    set_borders(_bc, _col, size="12"); _bc.paragraphs[0].clear()
-                    arun(_bc.paragraphs[0], f"{str(_it.get('domain','')).upper()}   ", bold=True, size=17, color=_col)
-                    arun(_bc.paragraphs[0], _clean(_it.get("strategy")), bold=True, size=20, color=GREY_DARK)
-                    for _lab, _key in (("Why it fits: ", "why"), ("How to put it in place: ", "how")):
-                        _txt = _clean(_it.get(_key), default="")
-                        if _txt and not _txt.startswith("[DEBUG]"):
-                            _pw = _bc.add_paragraph(); _pw.paragraph_format.space_before = Pt(2)
-                            arun(_pw, _lab, bold=True, size=17, color=GREY_DARK); arun(_pw, _txt, size=17)
-                    doc.add_paragraph().paragraph_format.space_after = Pt(3)
-
-            # ── Incident register (landscape) ──
-            _land = doc.add_section(WD_SECTION.NEW_PAGE)
-            _land.orientation = WD_ORIENT.LANDSCAPE
-            _land.page_width, _land.page_height = Cm(29.7), Cm(21)
-            for _a in ('left_margin', 'right_margin', 'top_margin', 'bottom_margin'):
-                setattr(_land, _a, Cm(1.5))
-            section_header(doc, f"INCIDENT REGISTER — ALL {len(full_df)} DATED INCIDENTS")
-            note("Every incident on file, oldest first. Q = Quick log, C = Critical (ABCH).")
-            _reg_rows = []
-            for _, r in full_df.sort_values("date_parsed").iterrows():
-                _desc = _clean(r.get("description"), default="")
-                if not _desc and isinstance(r.get("ABCH_primary"), dict):
-                    _desc = _clean(r["ABCH_primary"].get("behaviour"), default="")
-                if len(_desc) > 150:
-                    _desc = _desc[:147].rstrip() + "…"
-                _sev = pd.to_numeric(r.get("severity"), errors="coerce")
-                _reg_rows.append([
-                    r["date_parsed"].strftime("%d/%m/%y"),
-                    _clean(r.get("time"), default="")[:5],
-                    "C" if r.get("incident_type") == "Critical" else "Q",
-                    _clean(r.get("location")),
-                    _clean(r.get("behaviour_type")),
-                    _clean(r.get("antecedent")),
-                    "—" if pd.isna(_sev) else int(_sev),
-                    _clean(r.get("intervention")),
-                    _desc or "—",
-                ])
-            grid_table(["Date", "Time", "Type", "Location", "Behaviour", "Antecedent (trigger)", "Sev", "Interventions", "Notes"],
-                       _reg_rows, [1.8, 1.3, 1.4, 2.6, 4.1, 4.1, 1.1, 4.2, 6.0], font=16)
-
-            # ── Meeting notes & actions (portrait, blank for handwriting) ──
-            _port = doc.add_section(WD_SECTION.NEW_PAGE)
-            _port.orientation = WD_ORIENT.PORTRAIT
-            _port.page_width, _port.page_height = Cm(21), Cm(29.7)
-            for _a in ('left_margin', 'right_margin', 'top_margin', 'bottom_margin'):
-                setattr(_port, _a, Cm(1.8))
-            section_header(doc, "MEETING NOTES & AGREED ACTIONS")
-            doc.add_paragraph().paragraph_format.space_after = Pt(2)
-            _hdr = doc.add_table(rows=1, cols=2); _hdr.style = 'Table Grid'
-            for _i, _t in enumerate(("Date of meeting:", "Present:")):
-                set_borders(_hdr.rows[0].cells[_i], TEAL_HEX); _hdr.rows[0].cells[_i].paragraphs[0].clear()
-                arun(_hdr.rows[0].cells[_i].paragraphs[0], _t, bold=True, size=20, color=GREY_DARK)
-            doc.add_paragraph().paragraph_format.space_after = Pt(2)
-            _nt = doc.add_table(rows=2, cols=1); _nt.style = 'Table Grid'
-            set_borders(_nt.rows[0].cells[0], TEAL_HEX); _nt.rows[0].cells[0].paragraphs[0].clear()
-            arun(_nt.rows[0].cells[0].paragraphs[0], "Notes", bold=True, size=20, color=GREY_DARK)
-            set_borders(_nt.rows[1].cells[0], TEAL_HEX)
-            _nt.rows[1].height = Cm(9.5)
-            doc.add_paragraph().paragraph_format.space_after = Pt(2)
-            _act = grid_table(["Agreed action", "Who", "By when"], [["", "", ""] for _ in range(6)], [10.0, 3.8, 3.6], font=18)
-            for _row in _act.rows[1:]:
-                _row.height = Cm(1.5)
-
         # Sign-off section removed — BAP approved via portal workflow
-
-        # Prevent any table row (Student Details, Key Findings, Risk banner,
-        # recommendation tables, etc.) from splitting across a page break
-        for _tbl in doc.tables:
-            for _row in _tbl.rows:
-                _trPr = _row._tr.get_or_add_trPr()
-                _cant_split = OxmlElement('w:cantSplit')
-                _trPr.append(_cant_split)
 
         file_stream = BytesIO()
         doc.save(file_stream)
@@ -3140,8 +1371,8 @@ def load_attendance_from_db(student_id):
     if not supabase or not student_id:
         return {}
     try:
-        res = _db_retry(lambda: supabase.table("student_attendance")
-                        .select("*").eq("student_id", student_id).limit(1).execute())
+        res = supabase.table("student_attendance") \
+            .select("*").eq("student_id", student_id).limit(1).execute()
         if res.data:
             row = res.data[0]
             return {
@@ -3149,2309 +1380,53 @@ def load_attendance_from_db(student_id):
                 "pt_days":      row.get("pt_days") or ["Monday","Tuesday","Wednesday","Thursday","Friday"],
                 "pt_sessions":  row.get("pt_sessions") or ["Full day"],
                 "pt_notes":     row.get("pt_notes") or "",
-                "schedule":     row.get("schedule") or [],
-                "exceptions":   row.get("exceptions") or [],
             }
     except Exception:
         pass
     return {}
 
 
-ATTENDANCE_SQL = """create table if not exists student_attendance (
-  student_id text primary key,
-  absent_dates jsonb default '[]'::jsonb,
-  pt_days jsonb default '[]'::jsonb,
-  pt_sessions jsonb default '[]'::jsonb,
-  pt_notes text default '',
-  schedule jsonb default '[]'::jsonb,
-  exceptions jsonb default '[]'::jsonb,
-  updated_at timestamptz default now()
-);
-alter table student_attendance add column if not exists schedule jsonb default '[]'::jsonb;
-alter table student_attendance add column if not exists exceptions jsonb default '[]'::jsonb;
-alter table student_attendance disable row level security;"""
-
-
-def save_attendance_to_db(student_id, absent_dates, pt_days, pt_sessions, pt_notes, schedule=None, exceptions=None):
-    """Upsert attendance record for a student in Supabase. If the newer schedule /
-    exceptions columns don't exist yet, the older fields are still saved and a flag is set
-    so the page can show the one-line SQL needed."""
-    if _viewer_write_blocked("update attendance"):
-        return False
+def save_attendance_to_db(student_id, absent_dates, pt_days, pt_sessions, pt_notes):
+    """Upsert attendance record for a student in Supabase."""
     if not supabase or not student_id:
         return False
-    base = {
-        "student_id":   student_id,
-        "absent_dates": absent_dates or [],
-        "pt_days":      pt_days or [],
-        "pt_sessions":  pt_sessions or [],
-        "pt_notes":     pt_notes or "",
-    }
-    full = dict(base)
-    if schedule is not None: full["schedule"] = schedule
-    if exceptions is not None: full["exceptions"] = exceptions
-
-    def _write(data):
-        res = _db_retry(lambda: supabase.table("student_attendance").update(data).eq("student_id", student_id).execute())
-        if not res.data:
-            _db_retry(lambda: supabase.table("student_attendance").insert(data).execute())
-
     try:
-        _write(full)
-        st.session_state.pop("_att_new_cols_missing", None)
-        return True
-    except Exception as e:
-        st.session_state["_last_save_error"] = str(e)
-        if len(full) > len(base):
-            try:
-                _write(base)
-                st.session_state["_att_new_cols_missing"] = True
-                return True
-            except Exception as e2:
-                st.session_state["_last_save_error"] = str(e2)
-        return False
-
-
-# ── Attendance model: weekly schedule (versioned) + dated exceptions ─────────
-# Staff set the usual weekly pattern once and only touch it when the pattern changes
-# ("applies from" a given Monday). Day-to-day variation is recorded as an exception
-# only when it happens, so no one needs to enter attendance daily.
-ATT_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"]
-ATT_DAYS_FULL = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-ATT_SESSIONS = ["Morning", "Middle", "Afternoon"]
-ATT_SESSION_LABEL = {"Morning": "AM", "Middle": "Mid", "Afternoon": "PM"}
-ATT_TYPES = ["Absent", "Finished early", "Arrived late", "Different sessions", "Extra day", "No school"]
-ATT_TYPE_HELP = {
-    "Absent": "Did not attend at all",
-    "Finished early": "Went home before the end of the day (e.g. a day end to avoid potential escalation, to reset, or negotiated with the student)",
-    "Arrived late": "Missed the start of the day",
-    "Different sessions": "Attended a different mix of sessions to usual",
-    "Extra day": "Attended on a day they don't usually",
-    "No school": "Holiday, closure or student-free day (not counted as expected attendance)",
-}
-ATT_ESCALATION_REASON = "Day end: avoid potential escalation"
-ATT_RESET_REASON = "Day end: needs reset"
-ATT_NEGOTIATED_REASON = "Day end: negotiated"
-ATT_CI_REASON = "C.I. (critical incident)"
-ATT_REASONS = [ATT_ESCALATION_REASON, ATT_RESET_REASON, ATT_NEGOTIATED_REASON, ATT_CI_REASON, "Re-entry meeting", "Transport / travel", "Slow to start / reluctant to come in", "Illness", "Appointment",
-               "Family / personal", "Other"]
-ATT_DAYEND_REASONS = (ATT_ESCALATION_REASON, ATT_RESET_REASON, ATT_NEGOTIATED_REASON)
-# Earlier wording, converted automatically when a record is loaded
-ATT_LEGACY_REASONS = {"Day end to avoid escalation": ATT_ESCALATION_REASON,
-                      "Day end: needs reset, negotiated time": ATT_RESET_REASON}
-
-
-def _att_monday(d):
-    return d - timedelta(days=d.weekday())
-
-
-def _att_sess_text(sessions) -> str:
-    sessions = [x for x in ATT_SESSIONS if x in (sessions or [])]
-    if len(sessions) == len(ATT_SESSIONS): return "Full day"
-    if not sessions: return "—"
-    return " + ".join(sessions)
-
-
-def attendance_state(student_id) -> dict:
-    """The student's attendance model, cached per session. Legacy fields (regular days,
-    sessions, absent dates) are converted the first time so nothing already entered is lost."""
-    ck = f"att2_{student_id}"
-    if ck in st.session_state:
-        return st.session_state[ck]
-    state = {"schedule": [], "exceptions": [], "notes": ""}
-    leg = load_attendance_from_db(student_id)
-    if leg:
-        state["notes"] = leg.get("pt_notes", "") or ""
-        state["schedule"] = list(leg.get("schedule") or [])
-        state["exceptions"] = list(leg.get("exceptions") or [])
-        if not state["schedule"]:
-            pt_days = leg.get("pt_days") or ATT_DAYS_FULL
-            sess_opts = leg.get("pt_sessions") or ["Full day"]
-            sess = set()
-            for o in sess_opts:
-                if o == "Full day": sess |= set(ATT_SESSIONS)
-                elif o == "Morning only": sess.add("Morning")
-                elif o == "Middle of day only": sess.add("Middle")
-                elif o == "Afternoon only": sess.add("Afternoon")
-                elif o == "Morning + Middle": sess |= {"Morning", "Middle"}
-                elif o == "Middle + Afternoon": sess |= {"Middle", "Afternoon"}
-            sess = [x for x in ATT_SESSIONS if x in sess] or list(ATT_SESSIONS)
-            days_map = {ATT_DAYS[i]: (sess if ATT_DAYS_FULL[i] in pt_days else []) for i in range(5)}
-            if any(v != list(ATT_SESSIONS) for v in days_map.values()):
-                state["schedule"] = [{"from": "2000-01-01", "days": days_map, "note": ""}]
-        have = {e.get("date") for e in state["exceptions"]}
-        for d in leg.get("absent_dates") or []:
-            if d not in have:
-                state["exceptions"].append({"date": d, "type": "Absent", "sessions": [], "reason": "", "note": ""})
-    for e in state["exceptions"]:
-        if e.get("reason") in ATT_LEGACY_REASONS:
-            e["reason"] = ATT_LEGACY_REASONS[e["reason"]]
-    st.session_state[ck] = state
-    return state
-
-
-def attendance_persist(student_id, state) -> bool:
-    """Save the model and refresh the older session keys other parts of the page still read."""
-    state["schedule"] = sorted(state.get("schedule", []), key=lambda v: v["from"])
-    state["exceptions"] = sorted(state.get("exceptions", []), key=lambda e: e["date"])
-    st.session_state[f"att2_{student_id}"] = state
-    absent = sorted({e["date"] for e in state["exceptions"] if e.get("type") == "Absent"})
-    st.session_state[f"absent_dates_{student_id}"] = absent
-    cur = attendance_current_days(state)
-    days_on = [ATT_DAYS_FULL[i] for i, dname in enumerate(ATT_DAYS) if cur.get(dname)]
-    full_week = all(set(cur.get(d, [])) == set(ATT_SESSIONS) for d in ATT_DAYS)
-    return save_attendance_to_db(student_id, absent, days_on, ["Full day"] if full_week else ["See weekly schedule"],
-                                 state.get("notes", ""), schedule=state["schedule"], exceptions=state["exceptions"])
-
-
-def attendance_current_days(state, on=None) -> dict:
-    """Sessions per weekday in force on a given date (default today)."""
-    on = on or date.today()
-    vers = sorted(state.get("schedule", []), key=lambda v: v["from"])
-    if not vers:
-        return {d: list(ATT_SESSIONS) for d in ATT_DAYS}
-    chosen = vers[0]
-    for v in vers:
-        if v["from"] <= on.isoformat():
-            chosen = v
-    return {d: list(chosen["days"].get(d, [])) for d in ATT_DAYS}
-
-
-def attendance_current_starts(state, on=None) -> dict:
-    """Usual arrival time per weekday ('' = the normal start of the day) in force on a date."""
-    on = on or date.today()
-    vers = sorted(state.get("schedule", []), key=lambda v: v["from"])
-    if not vers:
-        return {d: "" for d in ATT_DAYS}
-    chosen = vers[0]
-    for v in vers:
-        if v["from"] <= on.isoformat():
-            chosen = v
-    return {d: (chosen.get("starts") or {}).get(d, "") for d in ATT_DAYS}
-
-
-def _att_minutes(hhmm):
-    """Minutes after midnight for '9:00', '10:15', '1:30' (school hours: 1-6 are pm). None if not a time."""
-    m = re.match(r"^\s*(\d{1,2}):(\d{2})\s*$", hhmm or "")
-    if not m:
-        return None
-    h, mi = int(m.group(1)), int(m.group(2))
-    if h > 23 or mi > 59:
-        return None
-    if h <= 6:
-        h += 12
-    return h * 60 + mi
-
-
-def attendance_day(state, d) -> dict:
-    """Planned vs actual sessions for one date, after any exception."""
-    exc = next((e for e in state.get("exceptions", []) if e.get("date") == d.isoformat()), None)
-    planned = attendance_current_days(state, d).get(ATT_DAYS[d.weekday()], []) if d.weekday() < 5 else []
-    if exc and exc.get("type") == "No school":
-        return {"planned": [], "actual": [], "exc": exc, "no_school": True, "expected_start": ""}
-    actual = planned
-    if exc:
-        actual = [] if exc.get("type") == "Absent" else [x for x in ATT_SESSIONS if x in (exc.get("sessions") or [])]
-    exp_start = attendance_current_starts(state, d).get(ATT_DAYS[d.weekday()], "") if d.weekday() < 5 else ""
-    return {"planned": planned, "actual": actual, "exc": exc, "no_school": False, "expected_start": exp_start}
-
-
-def attendance_summary(state, start, end) -> dict:
-    exp = act = 0
-    days_on = early = esc = absent = late = late_min = 0
-    esc_dates, early_dates = [], []
-    d = start
-    while d <= end:
-        day = attendance_day(state, d)
-        if not day["no_school"]:
-            exp += len(day["planned"]); act += len(day["actual"])
-            if day["actual"]: days_on += 1
-            exc = day["exc"]
-            if exc:
-                if exc["type"] == "Absent": absent += 1
-                if exc["type"] == "Arrived late" or exc.get("late_min"):
-                    late += 1; late_min += int(exc.get("late_min") or 0)
-                if exc["type"] == "Finished early":
-                    early += 1; early_dates.append(d)
-                    if exc.get("reason") in ATT_DAYEND_REASONS:
-                        esc += 1; esc_dates.append(d)
-        d += timedelta(days=1)
-    return {"expected": exp, "attended": act, "lost": max(exp - act, 0), "days_attended": days_on,
-            "absent_days": absent, "early_days": early, "escalation_day_ends": esc,
-            "early_dates": early_dates, "esc_dates": esc_dates, "late_days": late, "late_minutes": late_min}
-
-
-def _att_infer_type(planned, chosen):
-    """What kind of change is this day, compared with the usual pattern? None = went to plan."""
-    P = [x for x in ATT_SESSIONS if x in (planned or [])]
-    C = [x for x in ATT_SESSIONS if x in (chosen or [])]
-    if C == P:
-        return None
-    if not C:
-        return "Absent"
-    if not P:
-        return "Extra day"
-    if set(C) < set(P):
-        iP = [ATT_SESSIONS.index(x) for x in P]
-        iC = [ATT_SESSIONS.index(x) for x in C]
-        if min(iC) == min(iP):
-            return "Finished early"
-        if max(iC) == max(iP):
-            return "Arrived late"
-    return "Different sessions"
-
-
-def _att_clear_widgets(student_id):
-    """Forget cached widget values so the week view re-reads what is actually saved."""
-    pre = (f"attw_{student_id}_", f"attwr_{student_id}_", f"att_sched_{student_id}_")
-    for k in [k for k in st.session_state if isinstance(k, str) and k.startswith(pre)]:
-        del st.session_state[k]
-
-
-def attendance_headline(student_id, full_df):
-    """Headline attendance/absence facts for the summary and printed reports. None when nothing is recorded."""
-    try:
-        state = attendance_state(student_id)
-        if not state["schedule"] and not state["exceptions"]:
-            return None
-        if full_df is None or full_df.empty or "date_parsed" not in full_df.columns:
-            return None
-        start, end = full_df["date_parsed"].min().date(), full_df["date_parsed"].max().date()
-        for e in state["exceptions"]:
-            try:
-                ed = date.fromisoformat(e["date"])
-                start, end = min(start, ed), max(end, ed)
-            except Exception:
-                pass
-        end = min(end, date.today()) if end > date.today() else end
-        sm = attendance_summary(state, start, end)
-        if not sm["expected"]:
-            return None
-        absent_dates, d = [], start
-        while d <= end:
-            day = attendance_day(state, d)
-            if not day["no_school"] and day["exc"] and day["exc"].get("type") == "Absent":
-                absent_dates.append(d)
-            d += timedelta(days=1)
-        pct = round(sm["attended"] / sm["expected"] * 100) if sm["expected"] else 0
-        per10 = (len(full_df) / sm["attended"] * 10) if sm["attended"] else 0
-        dstr = ", ".join(x.strftime("%-d %b") for x in absent_dates[:12]) + (f" and {len(absent_dates) - 12} more" if len(absent_dates) > 12 else "")
-        lines = [("Sessions attended", f"{sm['attended']} of {sm['expected']} planned ({pct}%)"),
-                 ("Days absent", f"{len(absent_dates)}" + (f" — {dstr}" if absent_dates else "")),
-                 ("Early finishes / day ends", f"{sm['early_days']}" + (f" ({sm['escalation_day_ends']} day end(s) by agreement, to reset or to avoid escalation)" if sm["escalation_day_ends"] else "")),
-                 ("Incidents per 10 sessions attended", f"{per10:.1f}")]
-        if sm.get("late_days"):
-            _avg = round(sm["late_minutes"] / sm["late_days"]) if sm["late_minutes"] else 0
-            lines.insert(2, ("Late arrivals", f"{sm['late_days']}" + (f" (about {_avg} min after the expected time, on average)" if _avg else "")))
-        if len(absent_dates) >= 2:
-            from collections import Counter
-            wd, n = Counter(ATT_DAYS_FULL[x.weekday()] for x in absent_dates).most_common(1)[0]
-            if n >= 2:
-                lines.insert(2, ("Most absences fall on", f"{wd} ({n} of {len(absent_dates)})"))
-        return {"sm": sm, "pct": pct, "per10": per10, "absent_dates": absent_dates, "lines": lines,
-                "start": start, "end": end, "state": state}
-    except Exception:
-        return None
-
-
-def render_attendance_tracking(student_id):
-    """Week-by-week attendance. Pick a week, tick the sessions the student actually attended,
-    and save. Anything different from the usual pattern is recorded for that exact date."""
-    ss = st.session_state
-    state = attendance_state(student_id)
-    if ss.get("_att_new_cols_missing"):
-        st.warning("⚠️ Saved, but the newer schedule details can't be stored permanently until the attendance table is updated. "
-                   "Copy this into the Supabase SQL Editor and run it once:")
-        st.code(ATTENDANCE_SQL, language="sql")
-    if ss.pop(f"_att_flash_{student_id}", False):
-        st.success("✅ Week saved.")
-
-    # ── 1. choose the week ──
-    dk = f"attdate_{student_id}"
-    if dk not in ss:
-        ss[dk] = date.today()
-
-    def _shift(n):
-        ss[dk] = ss[dk] + timedelta(days=n)
-
-    def _today():
-        ss[dk] = date.today()
-
-    n1, n2, n3, n4 = st.columns([1.2, 2.6, 1.2, 1.4])
-    n1.button("◀ Previous", key=f"att_prev_{student_id}", on_click=_shift, args=(-7,), use_container_width=True)
-    n2.date_input("Any date in the week", key=dk, label_visibility="collapsed")
-    n3.button("Next ▶", key=f"att_next_{student_id}", on_click=_shift, args=(7,), use_container_width=True)
-    n4.button("This week", key=f"att_today_{student_id}", on_click=_today, use_container_width=True)
-    mon = _att_monday(ss[dk])
-    fri = mon + timedelta(days=4)
-    st.markdown(f"#### Week of {mon.strftime('%-d %b')} – {fri.strftime('%-d %b %Y')}")
-    st.caption("Tick the sessions the student **attended**. They start from the usual pattern, so on a normal week there is "
-               "nothing to change and nothing to save. Only days that differ are recorded.")
-
-    # ── 2. the week grid ──
-    days = [mon + timedelta(days=i) for i in range(5)]
-    info = [attendance_day(state, d) for d in days]
-    cols = st.columns(5)
-    chosen, no_school, arrived, late_min = {}, {}, {}, {}
-    for i, d in enumerate(days):
-        base_key = f"attw_{student_id}_{mon.isoformat()}_{ATT_DAYS[i]}"
-        with cols[i]:
-            st.markdown(f"**{ATT_DAYS[i]}** · {d.strftime('%-d %b')}")
-            planned_txt = " ".join(ATT_SESSION_LABEL[x] for x in ATT_SESSIONS if x in info[i]["planned"]) or "not usual day"
-            st.caption(f"Usual: {planned_txt}" + (f" · from {info[i]['expected_start']}" if info[i]["expected_start"] and info[i]["planned"] else ""))
-            ns = st.checkbox("No school", value=info[i]["no_school"], key=f"{base_key}_ns")
-            no_school[i] = ns
-            got = []
-            for s in ATT_SESSIONS:
-                if st.checkbox(ATT_SESSION_LABEL[s], value=(s in info[i]["actual"]), key=f"{base_key}_{s}", disabled=ns):
-                    got.append(s)
-            chosen[i] = [] if ns else got
-            exp_t = info[i]["expected_start"] or "9:00"
-            arr_in = st.text_input("Arrived at (if late)", value=(info[i]["exc"] or {}).get("arrived", ""), key=f"{base_key}_arr",
-                                   placeholder=f"expected {exp_t}", disabled=ns,
-                                   help="Leave empty if they arrived on time. Enter the time they actually arrived, e.g. 10:15.").strip()
-            arrived[i] = arr_in if _att_minutes(arr_in) is not None else ""
-            if arr_in and not arrived[i]:
-                st.caption("Use the form 10:15")
-            elif arrived[i]:
-                lm = _att_minutes(arrived[i]) - (_att_minutes(exp_t) or 540)
-                late_min[i] = lm if lm > 0 else 0
-
-    # ── 3. what changed ──
-    changes = {}
-    for i, d in enumerate(days):
-        typ = "No school" if no_school[i] else _att_infer_type(info[i]["planned"], chosen[i])
-        if no_school[i] and not info[i]["planned"]:
-            typ = None            # a non-attending day that is also "no school" needs no record
-        if not no_school[i] and late_min.get(i, 0) > 0 and typ in (None, "Arrived late"):
-            typ = "Arrived late"   # all sessions attended, but arrived after the expected time
-        if typ:
-            changes[i] = typ
-    details = {}
-    if changes:
-        st.markdown("**Changes from the usual pattern**")
-        for i, typ in changes.items():
-            d = days[i]
-            ex = info[i]["exc"] or {}
-            same = ex.get("type") == typ
-            label = f"**{ATT_DAYS[i]} {d.strftime('%-d %b')}** · {typ}"
-            if typ == "Arrived late" and late_min.get(i, 0) > 0:
-                label += f" — arrived {arrived[i]}, {late_min[i]} min after the expected {info[i]['expected_start'] or '9:00'}"
-            elif typ not in ("Absent", "No school"):
-                label += f" ({_att_sess_text(chosen[i])})"
-            st.markdown(label)
-            if typ == "No school":
-                details[i] = {"reason": "", "note": ex.get("note", "") if same else "", "left": ""}
-                continue
-            dflt = ex.get("reason") if same and ex.get("reason") in ATT_REASONS else {
-                "Finished early": ATT_ESCALATION_REASON, "Absent": "Illness"}.get(typ, "Other")
-            c1, c2, c3 = st.columns([2.2, 1.2, 2.6])
-            rk = f"attwr_{student_id}_{mon.isoformat()}_{ATT_DAYS[i]}"
-            reason = c1.selectbox("Reason", ATT_REASONS, index=ATT_REASONS.index(dflt), key=f"{rk}_r")
-            left = ""
-            if typ == "Finished early":
-                left = c2.text_input("Left at (e.g. 11:30)", value=ex.get("left", "") if same else "", key=f"{rk}_l").strip()
-            
-            note = c3.text_input("Note (optional)", value=ex.get("note", "") if same else "", key=f"{rk}_n",
-                                 placeholder="e.g. Left after recess when signs of escalation appeared")
-            details[i] = {"reason": reason, "note": note, "left": left}
-
-    if st.button("💾 Save this week", type="primary", key=f"att_save_week_{student_id}", use_container_width=True):
-        wk_iso = {d.isoformat() for d in days}
-        state["exceptions"] = [e for e in state["exceptions"] if e["date"] not in wk_iso]
-        for i, typ in changes.items():
-            dd = details.get(i, {})
-            state["exceptions"].append({"date": days[i].isoformat(), "type": typ,
-                                        "sessions": [] if typ in ("Absent", "No school") else chosen[i],
-                                        "reason": dd.get("reason", ""), "note": dd.get("note", ""), "left": dd.get("left", ""),
-                                        "arrived": arrived.get(i, "") if late_min.get(i, 0) > 0 or typ == "Arrived late" else "",
-                                        "late_min": late_min.get(i, 0)})
-        _att_clear_widgets(student_id)
-        if attendance_persist(student_id, state):
-            ss[f"_att_flash_{student_id}"] = True
-            st.rerun()
-        else:
-            show_save_problem("This week's attendance", ATTENDANCE_SQL)
-
-    sm = attendance_summary(state, mon, fri)
-    if sm["expected"]:
-        st.caption(f"Saved for this week: {sm['attended']} of {sm['expected']} planned sessions attended"
-                   + (f" · {sm['escalation_day_ends']} day end(s)" if sm["escalation_day_ends"] else "") + ".")
-
-    # ── 4. usual pattern (changes apply from the week being viewed) ──
-    st.markdown("---")
-    with st.expander("📅 Usual weekly pattern (change only when the student's days or times change)", expanded=not state["schedule"]):
-        cur = attendance_current_days(state, mon)
-        _cs = attendance_current_starts(state, mon)
-        st.caption("In force for this week: " + " · ".join(f"{d} {_att_sess_text(cur[d])}" + (f" from {_cs[d]}" if _cs.get(d) else "") for d in ATT_DAYS))
-        for dname in ATT_DAYS:
-            if f"att_sched_{student_id}_{mon.isoformat()}_{dname}" not in ss:
-                ss[f"att_sched_{student_id}_{mon.isoformat()}_{dname}"] = cur[dname]
-        presets = {
-            "Choose a quick start…": None,
-            "Full time (all sessions, Mon–Fri)": {d: list(ATT_SESSIONS) for d in ATT_DAYS},
-            "Mornings only, Mon–Fri": {d: ["Morning"] for d in ATT_DAYS},
-            "Mon–Wed full days": {d: (list(ATT_SESSIONS) if d in ("Mon", "Tue", "Wed") else []) for d in ATT_DAYS},
-            "Tue–Thu full days": {d: (list(ATT_SESSIONS) if d in ("Tue", "Wed", "Thu") else []) for d in ATT_DAYS},
+        data = {
+            "student_id":   student_id,
+            "absent_dates": absent_dates or [],
+            "pt_days":      pt_days or [],
+            "pt_sessions":  pt_sessions or [],
+            "pt_notes":     pt_notes or "",
         }
-        pc1, pc2 = st.columns([3, 1])
-        pick = pc1.selectbox("Quick start", list(presets), key=f"att_preset_{student_id}", label_visibility="collapsed")
-        if pc2.button("Apply", key=f"att_preset_go_{student_id}", use_container_width=True) and presets[pick]:
-            for dname in ATT_DAYS:
-                ss[f"att_sched_{student_id}_{mon.isoformat()}_{dname}"] = presets[pick][dname]
-        pcols = st.columns(5)
-        new_days = {}
-        for i, dname in enumerate(ATT_DAYS):
-            new_days[dname] = pcols[i].multiselect(ATT_DAYS_FULL[i], ATT_SESSIONS,
-                                                   key=f"att_sched_{student_id}_{mon.isoformat()}_{dname}")
-        cur_starts = attendance_current_starts(state, mon)
-        st.caption("Usual arrival time, only for days the student is expected later than the normal start (leave empty for the normal start). "
-                   "A later arrival than this is recorded as a late arrival.")
-        scols = st.columns(5)
-        new_starts = {}
-        for i, dname in enumerate(ATT_DAYS):
-            new_starts[dname] = scols[i].text_input(f"{dname} arrives", value=cur_starts.get(dname, ""), placeholder="9:00",
-                                                    key=f"att_sched_{student_id}_{mon.isoformat()}_start_{dname}").strip()
-        scope = st.radio("Use this pattern",
-                         [f"From the week of {mon.strftime('%-d %b')} onward", "For the whole placement (replaces earlier patterns)"],
-                         key=f"att_scope_{student_id}", horizontal=True)
-        notes = st.text_input("Schedule notes (optional)", value=state.get("notes", ""), key=f"att_notes_{student_id}",
-                              placeholder="e.g. Building up to full days over Term 4")
-        if st.button("💾 Save usual pattern", key=f"att_save_sched_{student_id}", use_container_width=True):
-            start = mon.isoformat() if scope.startswith("From") else "2000-01-01"
-            ver = {"from": start, "days": {d: [x for x in ATT_SESSIONS if x in new_days[d]] for d in ATT_DAYS}, "note": notes,
-                   "starts": {d: t for d, t in new_starts.items() if t and _att_minutes(t) is not None}}
-            if start == "2000-01-01":
-                state["schedule"] = [ver]
-            else:
-                state["schedule"] = [v for v in state["schedule"] if v["from"] != start] + [ver]
-            state["notes"] = notes
-            _att_clear_widgets(student_id)
-            if attendance_persist(student_id, state):
-                ss[f"_att_flash_{student_id}"] = True
-                st.rerun()
-            else:
-                show_save_problem("The usual pattern", ATTENDANCE_SQL)
-        if state["schedule"]:
-            st.markdown("**Pattern history** (the pattern in force on each date is used for the analysis)")
-            for v in sorted(state["schedule"], key=lambda v: v["from"], reverse=True):
-                txt = " · ".join(f"{d} {_att_sess_text(v['days'].get(d, []))}" for d in ATT_DAYS)
-                c1, c2 = st.columns([6, 1])
-                c1.markdown(f"From **{v['from'] if v['from'] != '2000-01-01' else 'the start'}**: {txt}")
-                if c2.button("Remove", key=f"att_rmv_{student_id}_{v['from']}"):
-                    state["schedule"] = [x for x in state["schedule"] if x["from"] != v["from"]]
-                    _att_clear_widgets(student_id)
-                    attendance_persist(student_id, state); st.rerun()
-
-    # ── 5. everything recorded ──
-    excs = sorted(state["exceptions"], key=lambda e: e["date"], reverse=True)
-    with st.expander(f"🗂️ All recorded changes ({len(excs)})"):
-        if not excs:
-            st.info("Nothing recorded yet. Days are assumed to go to plan.")
-        for e in excs[:40]:
-            c1, c2 = st.columns([6, 1])
-            extra = (f" ({_att_sess_text(e.get('sessions'))})" if e["type"] in ("Finished early", "Arrived late", "Different sessions", "Extra day") else "")
-            c1.markdown(f"**{e['date']}** · {e['type']}{extra}" + (f" · {e['reason']}" if e.get("reason") else "")
-                        + (f" · left {e['left']}" if e.get("left") else "")
-                        + (f" · *{e['note']}*" if e.get("note") else ""))
-            if c2.button("Remove", key=f"att_ex_rm_{student_id}_{e['date']}"):
-                state["exceptions"] = [x for x in state["exceptions"] if x["date"] != e["date"]]
-                _att_clear_widgets(student_id)
-                attendance_persist(student_id, state); st.rerun()
-        if len(excs) > 40:
-            st.caption(f"{len(excs) - 40} older record(s) not shown.")
-
-
-ATT_CAT_COLORS = {
-    "Attended": "#99d5cf",
-    "Day end: avoid potential escalation": "#d97706",
-    "Day end: needs reset": "#3b82f6",
-    "Day end: negotiated": "#7c3aed",
-    "C.I. (critical incident)": "#be123c",
-    "Left early (other reason)": "#94a3b8",
-    "Absent": "#cbd5e1",
-    "Arrived late": "#c4b5a5",
-    "Different sessions": "#e9d5ff",
-}
-
-
-def _att_loss_category(exc) -> str:
-    if not exc:
-        return "Different sessions"
-    t, r = exc.get("type"), exc.get("reason")
-    if t == "Absent": return "Absent"
-    if t == "Arrived late": return "Arrived late"
-    if t == "Finished early":
-        if r == ATT_ESCALATION_REASON: return "Day end: avoid potential escalation"
-        if r == ATT_RESET_REASON: return "Day end: needs reset"
-        if r == ATT_NEGOTIATED_REASON: return "Day end: negotiated"
-        if r == ATT_CI_REASON: return "C.I. (critical incident)"
-        return "Left early (other reason)"
-    return "Different sessions"
-
-
-def _att_insight(text: str) -> None:
-    st.markdown(
-        "<div style='background:#f8fafc;border-left:4px solid #1A7A7A;border-radius:8px;padding:.75rem 1.1rem;margin:.5rem 0;"
-        "font-size:.84rem;color:#1e293b;line-height:1.65;'><b>📊 Understanding this chart:</b><br>" + text + "</div>",
-        unsafe_allow_html=True)
-
-
-def attendance_analysis(state, full_df, start, end) -> dict:
-    """Everything the attendance charts and conclusions are built from."""
-    inc_dates = full_df["date_parsed"].dt.date
-    weeks, d = [], _att_monday(start)
-    while d <= end:
-        row = {"week": d, "attended": 0, "lost": {}, "incidents": int(((inc_dates >= d) & (inc_dates <= d + timedelta(days=6))).sum())}
-        for i in range(7):
-            day = attendance_day(state, d + timedelta(days=i))
-            if day["no_school"]:
-                continue
-            row["attended"] += len(day["actual"])
-            gap = len([x for x in day["planned"] if x not in day["actual"]])
-            if gap:
-                c = _att_loss_category(day["exc"])
-                row["lost"][c] = row["lost"].get(c, 0) + gap
-        weeks.append(row); d += timedelta(days=7)
-    by_dow = {n: {"attended": 0, "dayends": 0, "absent": 0, "inc": 0} for n in ATT_DAYS}
-    ended = {x: {"Day end: avoid potential escalation": 0, "Day end: needs reset": 0, "Day end: negotiated": 0, "C.I. (critical incident)": 0, "Left early (other reason)": 0} for x in ATT_SESSIONS}
-    dayend_dates, d = [], start
-    while d <= end:
-        if d.weekday() < 5:
-            day = attendance_day(state, d); n = ATT_DAYS[d.weekday()]
-            if not day["no_school"]:
-                by_dow[n]["attended"] += len(day["actual"])
-                e = day["exc"]
-                if e and e["type"] == "Absent": by_dow[n]["absent"] += 1
-                if e and e["type"] == "Finished early":
-                    by_dow[n]["dayends"] += 1
-                    cat = _att_loss_category(e)
-                    last = [x for x in ATT_SESSIONS if x in day["actual"]]
-                    ended[last[-1] if last else "Morning"][cat] = ended[last[-1] if last else "Morning"].get(cat, 0) + 1
-                    dayend_dates.append(d)
-        d += timedelta(days=1)
-    for dt, n in zip(inc_dates, full_df["date_parsed"].dt.weekday):
-        if n < 5: by_dow[ATT_DAYS[n]]["inc"] += 1
-    # what follows a day end: the next day the student attended
-    follow_inc = follow_att = 0
-    followed = 0
-    for de in dayend_dates:
-        nd = de + timedelta(days=1)
-        while nd <= end and not attendance_day(state, nd)["actual"]:
-            nd += timedelta(days=1)
-        if nd <= end:
-            followed += 1
-            follow_att += len(attendance_day(state, nd)["actual"])
-            follow_inc += int((inc_dates == nd).sum())
-    total_att = sum(w["attended"] for w in weeks)
-    other_att = max(total_att - follow_att, 0)
-    other_inc = max(len(full_df) - follow_inc - int(inc_dates.isin(set(dayend_dates)).sum()), 0)
-    half = start + (end - start) / 2
-    first_half = sum(1 for x in dayend_dates if x <= half); second_half = len(dayend_dates) - first_half
-    return {"weeks": weeks, "by_dow": by_dow, "ended": ended, "dayend_dates": dayend_dates,
-            "follow": {"n": followed, "inc": follow_inc, "att": follow_att, "other_inc": other_inc, "other_att": other_att},
-            "halves": (first_half, second_half), "total_att": total_att}
-
-
-def attendance_insights(an, state, full_df, start, end) -> dict:
-    """The plain-language reading of each attendance chart, shared by the screen and the Word reports."""
-    out = {"weeks": None, "dow": None, "ended": None, "points": []}
-    weeks = an["weeks"]
-    if len(weeks) >= 2:
-        busiest = max((w for w in weeks if w["attended"]), key=lambda w: w["incidents"] / w["attended"], default=None)
-        out["weeks"] = ("Each bar is one week of school. The teal part is the sessions the student attended; the coloured parts are sessions "
-                        "planned but not attended, by reason (amber, blue and purple are the three kinds of day end). The red line is incidents for every 10 sessions "
-                        "attended, so a short week isn't mistaken for improvement. Look for weeks where coloured blocks grow and the line "
-                        "rises or falls with them. "
-                        + (f"The highest rate was the week starting {busiest['week'].strftime('%-d %b')} ({busiest['incidents']} incident(s) in "
-                           f"{busiest['attended']} sessions)." if busiest else ""))
-    dow = an["by_dow"]
-    if any(v["attended"] or v["dayends"] or v["absent"] for v in dow.values()):
-        top_de = max(ATT_DAYS, key=lambda x: dow[x]["dayends"])
-        out["dow"] = ("Which weekdays carry the day ends, absences and incidents. A weekday where all three rise together points to something about "
-                      "that day (the timetable, the staffing, what came before it) rather than the student alone."
-                      + (f" Day ends are most frequent on {ATT_DAYS_FULL[ATT_DAYS.index(top_de)]}s ({dow[top_de]['dayends']})." if dow[top_de]["dayends"] else ""))
-    if an["dayend_dates"]:
-        tot = {x: sum(an["ended"][x].values()) for x in ATT_SESSIONS}
-        topk = max(tot, key=tot.get)
-        out["ended"] = ("The last session the student attended on days that finished early. Day ends bunched after one session show where "
-                        "the day starts to become too much, which is the place to try a planned break, lower demand or a negotiated "
-                        f"alternative earlier. Most often the day ended after {topk} ({tot[topk]} of {len(an['dayend_dates'])}).")
-        pts = out["points"]
-        f = an["follow"]
-        if f["n"] >= 3 and f["att"] and f["other_att"]:
-            r1, r2 = f["inc"] / f["att"] * 10, f["other_inc"] / f["other_att"] * 10
-            if r1 < r2 * 0.8:
-                pts.append(f"On the next day attended after a day end, incidents were lower ({r1:.1f} per 10 sessions) than on other days ({r2:.1f}). "
-                           "The reset appears to be helping the student return settled.")
-            elif r1 > r2 * 1.2:
-                pts.append(f"On the next day attended after a day end, incidents were higher ({r1:.1f} per 10 sessions) than on other days ({r2:.1f}). "
-                           "The day end may be postponing the difficulty rather than resolving it, so consider acting earlier in the day or planning the return.")
-            else:
-                pts.append(f"Incidents on the day after a day end ({r1:.1f} per 10 sessions) were similar to other days ({r2:.1f}), so there is no clear sign yet "
-                           "of the day end helping or hurting the next day.")
-        elif f["n"]:
-            pts.append(f"Only {f['n']} day end(s) have a following day to compare, which is too few to draw a conclusion yet.")
-        a1, a2 = an["halves"]
-        if len(an["dayend_dates"]) >= 4:
-            if a2 < a1:
-                pts.append(f"Day ends are reducing: {a1} in the first half of the period and {a2} in the second half.")
-            elif a2 > a1:
-                pts.append(f"Day ends are increasing: {a1} in the first half of the period and {a2} in the second half. This is worth raising at the next case meeting.")
-            else:
-                pts.append(f"Day ends are steady at {a1} in each half of the period.")
-        neg = sum(1 for dd in an["dayend_dates"] if next((e for e in state["exceptions"] if e["date"] == dd.isoformat()), {}).get("reason") == ATT_NEGOTIATED_REASON)
-        if neg:
-            pts.append(f"{neg} day end(s) were negotiated with the student, which builds their say in the plan. Note whether these become earlier, later or shorter over time.")
-    return out
-
-
-def attendance_report_figures(student_id, full_df):
-    """Matplotlib versions of the attendance charts for Word. Returns (figures, points) or None.
-    figures = [(fig, caption)]; points = the 'what the day ends suggest' lines."""
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        state = attendance_state(student_id)
-        if not state["schedule"] and not state["exceptions"]:
-            return None
-        if full_df is None or full_df.empty or "date_parsed" not in full_df.columns:
-            return None
-        start, end = full_df["date_parsed"].min().date(), full_df["date_parsed"].max().date()
-        sm = attendance_summary(state, start, end)
-        if not sm["expected"]:
-            return None
-        an = attendance_analysis(state, full_df, start, end)
-        ins = attendance_insights(an, state, full_df, start, end)
-        figs = []
-
-        def style(ax):
-            ax.spines["top"].set_visible(False)
-            ax.grid(axis="y", color="#e2e8f0", linewidth=0.6)
-            ax.set_axisbelow(True)
-
-        weeks = an["weeks"]
-        if ins["weeks"]:
-            fig, ax = plt.subplots(figsize=(9, 3.9), dpi=150)
-            xs = list(range(len(weeks)))
-            bottom = [0] * len(weeks)
-            layers = [("Attended", [w["attended"] for w in weeks])] + [
-                (c, [w["lost"].get(c, 0) for w in weeks]) for c in ATT_CAT_COLORS if c != "Attended"]
-            for name, vals in layers:
-                if any(vals):
-                    ax.bar(xs, vals, bottom=bottom, color=ATT_CAT_COLORS[name], label=name, width=0.65, edgecolor="white", linewidth=0.5)
-                    bottom = [b + v for b, v in zip(bottom, vals)]
-            ax.set_xticks(xs); ax.set_xticklabels([w["week"].strftime("%-d %b") for w in weeks], fontsize=8, rotation=30, ha="right")
-            ax.set_ylabel("Sessions", fontsize=9, fontweight="bold"); ax.set_xlabel("Week starting", fontsize=8)
-            ax2 = ax.twinx()
-            rate = [(w["incidents"] / w["attended"] * 10) if w["attended"] else None for w in weeks]
-            ax2.plot([x for x, r in zip(xs, rate) if r is not None], [r for r in rate if r is not None], color="#be123c", marker="o", linewidth=2.2,
-                     label="Incidents per 10 sessions attended")
-            ax2.set_ylim(bottom=0); ax2.set_ylabel("Incidents per 10 sessions", fontsize=9, color="#be123c")
-            ax2.spines["top"].set_visible(False)
-            h1, l1 = ax.get_legend_handles_labels(); h2, l2 = ax2.get_legend_handles_labels()
-            ax.legend(h1 + h2, l1 + l2, fontsize=7, loc="upper center", bbox_to_anchor=(0.5, 1.22), ncol=3, frameon=False)
-            style(ax); plt.tight_layout(pad=0.4)
-            figs.append((fig, "Attendance by week, with incidents per 10 sessions attended. " + ins["weeks"]))
-        dow = an["by_dow"]
-        if ins["dow"]:
-            fig, ax = plt.subplots(figsize=(9, 3.3), dpi=150)
-            xs = list(range(5)); w = 0.36
-            ax.bar([x - w / 2 for x in xs], [dow[d]["dayends"] for d in ATT_DAYS], w, color="#d97706", label="Day ends / early finishes")
-            ax.bar([x + w / 2 for x in xs], [dow[d]["absent"] for d in ATT_DAYS], w, color="#cbd5e1", label="Absent days")
-            ax.set_xticks(xs); ax.set_xticklabels(ATT_DAYS_FULL, fontsize=9)
-            ax.set_ylabel("Number of days", fontsize=9, fontweight="bold")
-            ax.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(integer=True))
-            ax2 = ax.twinx()
-            pts = [(x, dow[d]["inc"] / dow[d]["attended"] * 10) for x, d in enumerate(ATT_DAYS) if dow[d]["attended"]]
-            if pts:
-                ax2.plot([a for a, _ in pts], [b for _, b in pts], color="#be123c", marker="o", linewidth=2.2, label="Incidents per 10 sessions attended")
-            ax2.set_ylim(bottom=0); ax2.set_ylabel("Incidents per 10 sessions", fontsize=9, color="#be123c"); ax2.spines["top"].set_visible(False)
-            h1, l1 = ax.get_legend_handles_labels(); h2, l2 = ax2.get_legend_handles_labels()
-            ax.legend(h1 + h2, l1 + l2, fontsize=7, loc="upper center", bbox_to_anchor=(0.5, 1.2), ncol=3, frameon=False)
-            style(ax); plt.tight_layout(pad=0.4)
-            figs.append((fig, "Day ends, absences and incident rate by day of the week. " + ins["dow"]))
-        if ins["ended"]:
-            fig, ax = plt.subplots(figsize=(9, 3.1), dpi=150)
-            xs = list(range(3)); bottom = [0, 0, 0]
-            for cat in ("Day end: avoid potential escalation", "Day end: needs reset", "Day end: negotiated", "C.I. (critical incident)", "Left early (other reason)"):
-                vals = [an["ended"][x].get(cat, 0) for x in ATT_SESSIONS]
-                if any(vals):
-                    ax.bar(xs, vals, bottom=bottom, color=ATT_CAT_COLORS[cat], label=cat, width=0.55, edgecolor="white", linewidth=0.5)
-                    bottom = [b + v for b, v in zip(bottom, vals)]
-            ax.set_xticks(xs); ax.set_xticklabels([f"After {x}" for x in ATT_SESSIONS], fontsize=9)
-            ax.set_ylabel("Number of day ends", fontsize=9, fontweight="bold")
-            ax.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(integer=True))
-            ax.legend(fontsize=7, loc="upper center", bbox_to_anchor=(0.5, 1.25), ncol=3, frameon=False)
-            style(ax); plt.tight_layout(pad=0.4)
-            figs.append((fig, "When the day ended (the last session attended). " + ins["ended"]))
-        if not figs:
-            return None
-        return figs, ins["points"]
-    except Exception:
-        return None
-
-
-def render_attendance_context(student, full_df):
-    """Attendance in the analysis: how much school the student actually attended, incidents
-    relative to that, and what early finishes and day ends show about what helps."""
-    sid = student["id"]
-    state = attendance_state(sid)
-    if not state["schedule"] and not state["exceptions"]:
-        return
-    if full_df is None or full_df.empty or "date_parsed" not in full_df.columns:
-        return
-    start, end = full_df["date_parsed"].min().date(), full_df["date_parsed"].max().date()
-    sm = attendance_summary(state, start, end)
-    if sm["expected"] == 0:
-        return
-    an = attendance_analysis(state, full_df, start, end)
-    n = len(full_df)
-    st.markdown("### 🗓️ Attendance Context")
-    st.caption("Incident counts mean more when set against how much school the student actually attended, and day ends show "
-               "where the day becomes too much and whether the reset works.")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Sessions expected", sm["expected"])
-    c2.metric("Sessions attended", sm["attended"], f"{sm['attended'] / sm['expected'] * 100:.0f}% of expected")
-    c3.metric("Incidents per 10 sessions", f"{(n / sm['attended'] * 10) if sm['attended'] else 0:.1f}")
-    c4.metric("Day ends / early finishes", sm["early_days"], f"{sm['escalation_day_ends']} day ends" if sm["escalation_day_ends"] else None)
-    if sm.get("late_days"):
-        _avgl = round(sm["late_minutes"] / sm["late_days"]) if sm["late_minutes"] else 0
-        st.caption(f"Late arrivals: {sm['late_days']} day(s)" + (f", about {_avgl} minutes after the expected time on average." if _avgl else "."))
-
-    ins = attendance_insights(an, state, full_df, start, end)
-    # ── 1. weekly picture ──
-    weeks = an["weeks"]
-    if len(weeks) >= 2:
-        xs = [w["week"].strftime("%-d %b") for w in weeks]
-        fig = go.Figure()
-        fig.add_bar(x=xs, y=[w["attended"] for w in weeks], name="Attended", marker_color=ATT_CAT_COLORS["Attended"], yaxis="y")
-        for cat in [c for c in ATT_CAT_COLORS if c != "Attended"]:
-            vals = [w["lost"].get(cat, 0) for w in weeks]
-            if any(vals):
-                fig.add_bar(x=xs, y=vals, name=cat, marker_color=ATT_CAT_COLORS[cat], yaxis="y")
-        fig.add_scatter(x=xs, y=[(w["incidents"] / w["attended"] * 10) if w["attended"] else None for w in weeks],
-                        name="Incidents per 10 sessions attended", mode="lines+markers", line=dict(color="#be123c", width=3), yaxis="y2")
-        fig.update_layout(barmode="stack", height=380, margin=dict(t=30, b=40, l=50, r=50), legend=dict(orientation="h", y=1.18),
-                          yaxis=dict(title="Sessions"), yaxis2=dict(title="Incidents per 10 sessions", overlaying="y", side="right", rangemode="tozero"),
-                          xaxis=dict(title="Week starting"))
-        st.plotly_chart(fig, use_container_width=True)
-        _att_insight(ins['weeks'])
-
-    # ── 2. which day of the week ──
-    dow = an["by_dow"]
-    if any(v["attended"] or v["dayends"] or v["absent"] for v in dow.values()):
-        fig2 = go.Figure()
-        fig2.add_bar(x=ATT_DAYS, y=[dow[x]["dayends"] for x in ATT_DAYS], name="Day ends / early finishes", marker_color="#d97706")
-        fig2.add_bar(x=ATT_DAYS, y=[dow[x]["absent"] for x in ATT_DAYS], name="Absent days", marker_color="#cbd5e1")
-        fig2.add_scatter(x=ATT_DAYS, y=[(dow[x]["inc"] / dow[x]["attended"] * 10) if dow[x]["attended"] else None for x in ATT_DAYS],
-                         name="Incidents per 10 sessions attended", mode="lines+markers", line=dict(color="#be123c", width=3), yaxis="y2")
-        fig2.update_layout(barmode="group", height=320, margin=dict(t=30, b=40, l=50, r=50), legend=dict(orientation="h", y=1.18),
-                           yaxis=dict(title="Number of days"), yaxis2=dict(title="Incidents per 10 sessions", overlaying="y", side="right", rangemode="tozero"))
-        st.plotly_chart(fig2, use_container_width=True)
-        _att_insight(ins['dow'])
-
-    # ── 3. when the day ends ──
-    if an["dayend_dates"]:
-        fig3 = go.Figure()
-        for cat in ("Day end: avoid potential escalation", "Day end: needs reset", "Day end: negotiated", "C.I. (critical incident)", "Left early (other reason)"):
-            vals = [an["ended"][x][cat] for x in ATT_SESSIONS]
-            if any(vals):
-                fig3.add_bar(x=[f"After {x}" for x in ATT_SESSIONS], y=vals, name=cat, marker_color=ATT_CAT_COLORS[cat])
-        fig3.update_layout(barmode="stack", height=300, margin=dict(t=30, b=40, l=50, r=30), legend=dict(orientation="h", y=1.2),
-                           yaxis=dict(title="Number of day ends", dtick=1))
-        st.plotly_chart(fig3, use_container_width=True)
-        _att_insight(ins['ended'])
-
-        # ── 4. what the data suggests ──
-        st.markdown("**What the day ends suggest**")
-        pts = ins['points']
-        for ptxt in pts:
-            st.markdown(f"- {ptxt}")
-        st.caption("Early patterns with few days are signals to discuss, not conclusions. Absences are not counted as day ends.")
-    render_attendance_calendar(student, state, full_df)
-    st.markdown("---")
-
-
-# ── Attendance calendar: a Term-week × Mon–Fri table for staff reports ───────
-ATT_TERM_STARTS = {  # SA public school terms (Monday of week 1). Add new years here.
-    2026: [date(2026, 2, 2), date(2026, 4, 27), date(2026, 7, 20), date(2026, 10, 12)],
-}
-ATT_SESSION_TIMES = {"Morning": ("9:00", "11:00"), "Middle": ("11:00", "13:30"), "Afternoon": ("13:30", "14:45")}
-
-
-def _att_clock(hhmm: str):
-    """'14:20' or '2:20' -> (display, suffix). School hours: 1-6 are pm, 7-11 am, 12 pm."""
-    m = re.match(r"^\s*(\d{1,2}):(\d{2})\s*(am|pm)?\s*$", hhmm or "", re.I)
-    if not m:
-        return None
-    h, mi, suf = int(m.group(1)), m.group(2), (m.group(3) or "").lower()
-    if not suf:
-        suf = "pm" if (h >= 12 or h <= 6) else "am"
-    h12 = h - 12 if h > 12 else h
-    return (f"{h12}" + ("" if mi == "00" else f":{mi}"), suf)
-
-
-def _att_range_text(start_hhmm: str, end_hhmm: str) -> str:
-    a, b = _att_clock(start_hhmm), _att_clock(end_hhmm)
-    if not a or not b:
-        return f"{start_hhmm}-{end_hhmm}"
-    return f"{a[0]}{a[1] if a[1] == 'pm' else ''}-{b[0]}{b[1]}"
-
-
-def _att_term_week(d):
-    """('T3', 8) for a date, or None when the term dates aren't known."""
-    for yr, starts in ATT_TERM_STARTS.items():
-        if d.year != yr:
-            continue
-        for i in range(len(starts) - 1, -1, -1):
-            if d >= starts[i]:
-                wk = (d - starts[i]).days // 7 + 1
-                return (f"T{i + 1}", wk) if wk <= 10 else None
-    return None
-
-
-def _att_day_times(day, exc) -> str:
-    """The times (or sessions) attended on a day, in the style staff already use, e.g. 9-2:45pm."""
-    act = [x for x in ATT_SESSIONS if x in day["actual"]]
-    if not act:
-        return ""
-    exc = exc or {}
-    start = exc.get("arrived") or day.get("expected_start") or ATT_SESSION_TIMES[act[0]][0]
-    end = exc.get("left") or ATT_SESSION_TIMES[act[-1]][1]
-    full = len(act) == len(ATT_SESSIONS)
-    contiguous = ATT_SESSIONS.index(act[-1]) - ATT_SESSIONS.index(act[0]) == len(act) - 1
-    if full or (contiguous and (exc.get("left") or exc.get("arrived"))):
-        return _att_range_text(start, end)
-    return " + ".join(ATT_SESSION_LABEL[x] for x in act)
-
-
-def build_attendance_calendar(student, state, full_df, start, end) -> list:
-    """One record per school day between start and end, for the on-screen table, Word and CSV."""
-    crit_by_day, quick_by_day = {}, {}
-    if full_df is not None and not full_df.empty and "date_parsed" in full_df.columns:
-        for _, r in full_df.iterrows():
-            dd = r["date_parsed"]
-            if pd.isna(dd):
-                continue
-            dd = dd.date()
-            if r.get("incident_type") == "Critical":
-                ab = r.get("ABCH_primary")
-                desc = (ab.get("behaviour", "") if isinstance(ab, dict) else "") or str(r.get("behaviour_type", "") or "")
-                crit_by_day.setdefault(dd, []).append(re.sub(r"\s+", " ", str(desc)).strip()[:110])
-            else:
-                quick_by_day[dd] = quick_by_day.get(dd, 0) + 1
-    recs = []
-    d = _att_monday(start)
-    while d <= end:
-        in_term = (d.year not in ATT_TERM_STARTS) or _att_term_week(d) is not None   # skip school holidays
-        if d.weekday() < 5 and d >= start and in_term:
-            day = attendance_day(state, d)
-            exc = day["exc"] or {}
-            reason, note = exc.get("reason", ""), exc.get("note", "")
-            cis = crit_by_day.get(d, [])
-            is_ci = reason == ATT_CI_REASON or bool(cis)
-            status = "No school" if day["no_school"] else ("Absent" if exc.get("type") == "Absent" else
-                     ("Attended" if day["actual"] else ""))
-            times = "" if day["no_school"] else _att_day_times(day, exc)
-            tw = _att_term_week(d)
-            event = ""
-            if is_ci:
-                event = "CI"
-            elif reason == "Re-entry meeting":
-                event = "Re-entry meeting"
-            elif reason in ATT_DAYEND_REASONS:
-                event = reason
-            elif exc.get("type") == "Arrived late" or exc.get("late_min"):
-                event = "Late arrival"
-            ci_text = "; ".join(c for c in cis if c)
-            recs.append({"date": d, "weekday": ATT_DAYS_FULL[d.weekday()], "term": tw[0] if tw else "", "term_week": tw[1] if tw else None,
-                         "week_start": _att_monday(d), "status": status, "times": times, "event": event,
-                         "ci_description": ci_text, "reason": reason, "note": note,
-                         "quick_incidents": quick_by_day.get(d, 0), "critical_incidents": len(cis),
-                         "exc_type": exc.get("type", ""), "arrived": exc.get("arrived", ""), "late_min": int(exc.get("late_min") or 0), "no_school": day["no_school"], "planned": bool(day["planned"])})
-        d += timedelta(days=1)
-    return recs
-
-
-def _att_cell_lines(r):
-    """[(text, style)] describing one day, in the order staff read it."""
-    L = []
-    if r["no_school"]:
-        return [("No school", "muted")]
-    if r["late_min"] and r["event"] != "Late arrival":
-        L.append((f"Late arrival ({r['late_min']} min)", "event"))
-    if r["event"] == "CI":
-        L.append(("CI", "ci"))
-        txt = r["ci_description"] or r["note"]
-        if txt:
-            L.append((txt, "note"))
-    elif r["event"]:
-        L.append((r["event"] + (f" ({r['late_min']} min)" if r["event"] == "Late arrival" and r["late_min"] else ""),
-                  "ci" if r["event"] == "Re-entry meeting" else "event"))
-        if r["note"]:
-            L.append((r["note"], "note"))
-    if r["status"] == "Absent":
-        L.append(("Absent", "absent"))
-        if r["reason"] and r["reason"] != "Illness" and not r["event"]:
-            pass
-        if r["note"] and not r["event"]:
-            L.append((r["note"], "note"))
-    elif r["times"]:
-        L.append((r["times"], "time"))
-    if r["event"] == "CI" and r["note"] and r["ci_description"]:
-        L.append((r["note"], "note"))
-    if r["quick_incidents"]:
-        L.append((f"{r['quick_incidents']} incident(s) logged", "muted"))
-    return L
-
-
-def _att_calendar_weeks(recs):
-    weeks = {}
-    for r in recs:
-        weeks.setdefault(r["week_start"], {})[r["date"].weekday()] = r
-    return [(ws, weeks[ws]) for ws in sorted(weeks)]
-
-
-def _att_week_label(ws):
-    tw = _att_term_week(ws)
-    return f"{tw[0]} Wk {tw[1]}" if tw else f"Wk of {ws.strftime('%-d %b')}"
-
-
-def attendance_calendar_html(recs) -> str:
-    import html as _h
-    col = {"ci": "#b91c1c", "event": "#b45309", "absent": "#166534", "time": "#111827", "note": "#374151", "muted": "#6b7280"}
-    bold = {"ci", "absent", "event"}
-    out = ["<table style='width:100%;border-collapse:collapse;font-size:0.85rem'>",
-           "<tr>" + "".join(f"<th style='background:#a9d18e;border:1px solid #444;padding:6px'>{h}</th>"
-                            for h in ["Week", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]) + "</tr>"]
-    for ws, cells in _att_calendar_weeks(recs):
-        row = f"<tr><td style='background:#e2f0d9;border:1px solid #444;padding:6px;text-align:center;font-weight:600'>{_h.escape(_att_week_label(ws))}</td>"
-        for i in range(5):
-            r = cells.get(i)
-            if not r:
-                row += "<td style='border:1px solid #444;background:#f3f4f6'></td>"
-                continue
-            lab = r["date"].strftime("%-d %B") if r["date"].day == 1 else str(r["date"].day)
-            body = "".join(f"<div style='color:{col[s]};{'font-weight:700;' if s in bold else ''}'>{_h.escape(t)}</div>" for t, s in _att_cell_lines(r))
-            row += f"<td style='border:1px solid #444;padding:5px;vertical-align:top;color:#111827'><div style='font-size:0.75rem;color:#6b7280'>{lab}</div>{body}</td>"
-        out.append(row + "</tr>")
-    out.append("</table>")
-    return "".join(out)
-
-
-def attendance_calendar_csv(student, recs) -> bytes:
-    rows = [{"Student": student.get("name", ""), "Date": r["date"].isoformat(), "Weekday": r["weekday"],
-             "Term": r["term"], "Term week": r["term_week"] or "", "Status": r["status"], "Times / sessions": r["times"],
-             "Event": r["event"], "Arrived at": r["arrived"], "Minutes late": r["late_min"] or "", "Critical incident description": r["ci_description"], "Reason": r["reason"],
-             "Note": r["note"], "Incidents logged": r["quick_incidents"], "Critical incidents": r["critical_incidents"]}
-            for r in recs]
-    return pd.DataFrame(rows).to_csv(index=False).encode("utf-8-sig")
-
-
-def _add_att_calendar_table(doc, recs, font_pt=9, widths_cm=(2.2, 4.9, 4.9, 4.9, 4.9, 4.9)):
-    """Append the week × Mon–Fri attendance table to a python-docx document."""
-    from docx.shared import Pt, Cm, RGBColor
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.oxml import OxmlElement
-    from docx.oxml.ns import qn
-
-    def shade(cell, hexcol):
-        tcPr = cell._tc.get_or_add_tcPr()
-        sh = OxmlElement("w:shd"); sh.set(qn("w:val"), "clear"); sh.set(qn("w:color"), "auto"); sh.set(qn("w:fill"), hexcol)
-        tcPr.append(sh)
-
-    def flag(row, tag, val=None):
-        trPr = row._tr.get_or_add_trPr(); e = OxmlElement(tag)
-        if val: e.set(qn("w:val"), val)
-        trPr.append(e)
-
-    weeks = _att_calendar_weeks(recs)
-    tbl = doc.add_table(rows=1, cols=6)
-    tbl.style = "Table Grid"
-    tbl.autofit = False
-    widths = [Cm(w) for w in widths_cm]
-    hdr = tbl.rows[0]; flag(hdr, "w:tblHeader", "true")
-    for i, h in enumerate(["Week", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]):
-        c = hdr.cells[i]; c.width = widths[i]; shade(c, "A9D18E")
-        c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-        rr = c.paragraphs[0].add_run(h); rr.bold = True; rr.font.size = Pt(font_pt)
-    colors = {"ci": RGBColor(0xB9, 0x1C, 0x1C), "event": RGBColor(0xB4, 0x53, 0x09), "absent": RGBColor(0x16, 0x65, 0x34),
-              "time": RGBColor(0, 0, 0), "note": RGBColor(0x37, 0x41, 0x51), "muted": RGBColor(0x6B, 0x72, 0x80)}
-    for ws, cells in weeks:
-        row = tbl.add_row(); flag(row, "w:cantSplit")
-        for i in range(6):
-            row.cells[i].width = widths[i]
-        wc = row.cells[0]; shade(wc, "E2F0D9")
-        wc.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-        wr = wc.paragraphs[0].add_run(_att_week_label(ws)); wr.bold = True; wr.font.size = Pt(font_pt)
-        for i in range(5):
-            c = row.cells[i + 1]; r = cells.get(i)
-            if not r:
-                shade(c, "F3F4F6"); continue
-            lab = c.paragraphs[0].add_run(r["date"].strftime("%-d %B") if r["date"].day == 1 else str(r["date"].day))
-            lab.font.size = Pt(font_pt - 1); lab.font.color.rgb = RGBColor(0x6B, 0x72, 0x80)
-            for txt, sty in _att_cell_lines(r):
-                q = c.add_paragraph(); q.paragraph_format.space_after = Pt(0)
-                rr = q.add_run(txt); rr.font.size = Pt(font_pt); rr.font.color.rgb = colors[sty]
-                rr.bold = sty in ("ci", "absent", "event")
-    return tbl
-
-
-def generate_attendance_calendar_docx(student, recs, start, end):
-    from docx import Document
-    from docx.shared import Pt, Cm
-    from docx.enum.section import WD_ORIENT
-    doc = Document()
-    sec = doc.sections[0]
-    sec.orientation = WD_ORIENT.LANDSCAPE
-    sec.page_width, sec.page_height = Cm(29.7), Cm(21.0)
-    for m in ("left_margin", "right_margin", "top_margin", "bottom_margin"):
-        setattr(sec, m, Cm(1.3))
-    st0 = doc.styles["Normal"]; st0.font.name = "Calibri"; st0.font.size = Pt(9)
-    terms = sorted({(r["term"]) for r in recs if r["term"]})
-    term_txt = (f"Term{'s' if len(terms) > 1 else ''} {' & '.join(t[1:] for t in terms)} {start.year}" if terms else str(start.year))
-    p = doc.add_paragraph()
-    for txt in (f"{term_txt}    ", f"{student.get('name', '')}    ", "Cowandilla Learning Centre    ", "Attendance"):
-        r = p.add_run(txt); r.bold = True; r.font.size = Pt(12)
-    p2 = doc.add_paragraph()
-    r = p2.add_run(f"Dates covered: {start.strftime('%A %-d %b %Y')} – {end.strftime('%A %-d %b %Y')}"); r.font.size = Pt(9)
-    _add_att_calendar_table(doc, recs)
-    doc.add_paragraph()
-    k = doc.add_paragraph()
-    kr = k.add_run("Times are shown where known; otherwise the sessions attended (AM, Mid, PM). CI = critical incident. "
-                   "Days with no entry follow the student's usual weekly pattern.")
-    kr.italic = True; kr.font.size = Pt(8)
-    buf = BytesIO(); doc.save(buf); buf.seek(0)
-    return buf.getvalue()
-
-
-def render_attendance_calendar(student, state, full_df):
-    st.markdown("#### 📋 Attendance table for reports")
-    st.caption("Week-by-week table (Monday to Friday) showing the times attended, absences, critical incidents (CI), re-entry "
-               "meetings and day ends. It is built from the attendance and incident records above, so it stays in step with them.")
-    sid = student["id"]
-    dates = [full_df["date_parsed"].min().date(), full_df["date_parsed"].max().date()]
-    for e in state.get("exceptions", []):
-        try:
-            dates.append(date.fromisoformat(e["date"]))
-        except Exception:
-            pass
-    first = min(dates)
-    last = min(max(dates), date.today()) if max(dates) > date.today() else max(dates)
-    last = max(last, first)
-    c1, c2 = st.columns(2)
-    d_from = c1.date_input("Table starts", value=first, key=f"attcal_from_{sid}")
-    d_to = c2.date_input("Table ends", value=last, key=f"attcal_to_{sid}")
-    if d_to < d_from:
-        st.warning("The end date is before the start date.")
-        return
-    recs = build_attendance_calendar(student, state, full_df, d_from, d_to)
-    if not recs:
-        st.info("No school days in that range.")
-        return
-    _att_html = attendance_calendar_html(recs)
-    st.markdown(_att_html, unsafe_allow_html=True)
-    nm = student["name"].replace(" ", "_")
-    stamp = datetime.now().strftime("%Y%m%d")
-    b1, b2 = st.columns(2)
-    try:
-        b1.download_button("⬇️ Attendance table (Word)", generate_attendance_calendar_docx(student, recs, d_from, d_to),
-                           file_name=f"Attendance_{nm}_{stamp}.docx",
-                           mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                           use_container_width=True, key=f"dl_attcal_docx_{sid}")
-    except Exception as e:
-        b1.warning(f"Could not prepare the Word table: {e}")
-    b2.download_button("⬇️ Attendance table (Excel / CSV)", attendance_calendar_csv(student, recs),
-                       file_name=f"Attendance_{nm}_{stamp}.csv", mime="text/csv",
-                       use_container_width=True, key=f"dl_attcal_csv_{sid}")
-
-
-def trial_attendance_line(student_id, start, end=None, full_df=None) -> str:
-    """Attendance before vs during a strategy trial: how much school the student attended,
-    how often the day ended early, and incidents per attended session."""
-    state = attendance_state(student_id)
-    if not start or (not state["schedule"] and not state["exceptions"]):
-        return ""
-    end = end or date.today()
-    if end < start:
-        return ""
-    b_start, b_end = start - timedelta(days=28), start - timedelta(days=1)
-
-    def _win(a, b):
-        sm = attendance_summary(state, a, b)
-        days = sum(1 for i in range((b - a).days + 1) if (a + timedelta(days=i)).weekday() < 5
-                   and not attendance_day(state, a + timedelta(days=i))["no_school"])
-        weeks = max(days, 1) / 5.0
-        rate = None
-        if full_df is not None and not full_df.empty and sm["attended"]:
-            d = full_df["date_parsed"].dt.date
-            rate = int(((d >= a) & (d <= b)).sum()) / sm["attended"] * 10
-        return sm, weeks, rate
-    sb, wb, rb = _win(b_start, b_end)
-    sd, wd, rd = _win(start, end)
-    if not sb["expected"] or not sd["expected"]:
-        return ""
-    bits = [f"{sb['attended'] / sb['expected'] * 100:.0f}% of expected sessions attended before, {sd['attended'] / sd['expected'] * 100:.0f}% during",
-            f"day ends/early finishes {sb['early_days'] / wb:.1f}/wk before, {sd['early_days'] / wd:.1f}/wk during"]
-    if rb is not None and rd is not None:
-        bits.append(f"incidents per 10 attended sessions {rb:.1f} before, {rd:.1f} during")
-    return "Attendance: " + "; ".join(bits) + "."
-
-
-def load_placement_extensions_from_db(student_id):
-    """Load all recorded placement extensions for a student from Supabase,
-    oldest first."""
-    if not supabase or not student_id:
-        return []
-    try:
-        res = supabase.table("placement_extensions") \
-            .select("*").eq("student_id", student_id).order("from_date").execute()
-        return [
-            {"id": row.get("id"), "from": row.get("from_date"), "to": row.get("to_date"), "reason": row.get("reason", "")}
-            for row in (res.data or [])
-        ]
-    except Exception:
-        return []
-
-
-def save_placement_extension_to_db(student_id, from_date, to_date, reason):
-    """Insert a new placement extension record in Supabase."""
-    if _viewer_write_blocked("add a placement extension"):
-        return False
-    if not supabase or not student_id:
-        return False
-    try:
-        supabase.table("placement_extensions").insert({
-            "student_id": student_id,
-            "from_date": from_date,
-            "to_date": to_date,
-            "reason": reason,
-        }).execute()
+        # Try update first
+        res = supabase.table("student_attendance") \
+            .update(data).eq("student_id", student_id).execute()
+        if not res.data:
+            # No existing row — insert
+            supabase.table("student_attendance").insert(data).execute()
         return True
     except Exception as e:
-        st.error(f"Error saving extension: {e}")
         return False
 
 
-def delete_placement_extension_from_db(extension_id):
-    """Permanently delete a placement extension record from Supabase."""
-    if _viewer_write_blocked("delete a placement extension"):
-        return False
-    if not supabase or not extension_id:
-        return False
-    try:
-        supabase.table("placement_extensions").delete().eq("id", extension_id).execute()
-        return True
-    except Exception as e:
-        st.error(f"Error deleting extension: {e}")
-        return False
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# BEHAVIOUR SUPPORT PLAN (student-lens, living document)
-# Data-derived sections (Target Behaviours, Possible Function, Known
-# Triggers) are deliberately NOT stored — they're computed live from
-# incident data every time the plan is opened, so they always reflect the
-# latest data with no separate "refresh" step and no risk of ever being
-# overwritten by (or overwriting) staff/student writing. Only the
-# staff/student-authored sections below are persisted.
-# ══════════════════════════════════════════════════════════════════════════
-SUPPORT_PLAN_FIELDS = [
-    "class_teacher", "support_staff", "date_commenced", "review_date",
-    "strengths", "interests", "purpose", "early_warning_signs",
-    "proactive_strategies_additional", "teaching_strategies",
-    "response_early_signs", "response_escalation", "safety_risk_management",
-    "post_incident_repair", "reinforcement", "adjustments_supports",
-    "short_term_goals", "student_voice", "recovery_time",
-]
-
-
-def load_support_plan_from_db(student_id):
-    """Load the staff/student-authored sections of a student's Behaviour
-    Support Plan."""
-    if not supabase or not student_id:
-        return {}
-    try:
-        res = supabase.table("support_plans").select("*").eq("student_id", student_id).limit(1).execute()
-        return res.data[0] if res.data else {}
-    except Exception:
-        return {}
-
-
-def save_support_plan_to_db(student_id, data: dict, updated_by: str = ""):
-    """Upsert the staff/student-authored sections of a Behaviour Support
-    Plan. Only ever touches fields staff explicitly edited."""
-    if _viewer_write_blocked("save the support plan"):
-        return False
-    if not supabase or not student_id:
-        return False
-    try:
-        payload = {k: v for k, v in data.items() if k in SUPPORT_PLAN_FIELDS}
-        payload["student_id"] = student_id
-        payload["last_updated_by"] = updated_by
-        payload["last_updated_at"] = datetime.utcnow().isoformat()
-        existing = supabase.table("support_plans").select("id").eq("student_id", student_id).limit(1).execute()
-        if existing.data:
-            supabase.table("support_plans").update(payload).eq("student_id", student_id).execute()
-        else:
-            supabase.table("support_plans").insert(payload).execute()
-        return True
-    except Exception as e:
-        st.error(f"Error saving support plan: {e}")
-        return False
-
-
-# ============================================
-# STRATEGY TRIALS — suggest, run, measure, report back
-# ============================================
-# CLC-LBU's small, structured setting is where new strategies can actually be
-# trialled and compared (a mainstream class of 30+ rarely can). Each trial is a
-# hypothesis -> strategy -> measure -> outcome record per student, so what is
-# learned here can travel with the student and inform receiving schools.
-#
-# Table (create once in Supabase):
-#   create table strategy_trials (
-#     id uuid primary key default gen_random_uuid(),
-#     student_id text not null, title text, hypothesis text, strategy text,
-#     measure text, focus_session text, start_date date, review_date date,
-#     end_date date, status text default 'Running', outcome text, conclusion text,
-#     observations jsonb default '[]'::jsonb, created_by text,
-#     created_at timestamptz default now());
-# If the table doesn't exist the tool still works for the current session only.
-
-TRIAL_OUTCOMES = ["Worked well", "Partly helped", "No clear change", "Made things harder", "Adapted — new version to trial"]
-
-
-def _tr_text(v, default=""):
-    try:
-        if v is None or (not isinstance(v, (list, dict)) and pd.isna(v)):
-            return default
-    except (TypeError, ValueError):
-        pass
-    return str(v).strip() or default
-
-
-def build_trial_suggestions(full_df, max_n: int = 3) -> list[dict]:
-    """Turn this student's data pattern into specific, trialable strategies.
-    Each carries the evidence it is based on, a provisional hypothesis (never
-    a conclusion), a strategy offering genuinely acceptable choices, and what
-    to measure. Rule-based so it is predictable and always grounded in data."""
-    if full_df is None or full_df.empty:
-        return []
-    df = full_df.copy()
-    total = len(df)
-    sugg = []
-
-    def _pct(n): return f"{n} of {total} incidents ({n/total*100:.0f}%)"
-
-    # --- patterns ---
-    sess = df["session"].value_counts() if "session" in df.columns else pd.Series(dtype=int)
-    locs = df["location"].fillna("").astype(str).value_counts() if "location" in df.columns else pd.Series(dtype=int)
-    cats = (df["antecedent"].apply(categorize_antecedent) if "antecedent" in df.columns else pd.Series([None] * total)).value_counts()
-    beh = df["behaviour_type"].fillna("").astype(str) if "behaviour_type" in df.columns else pd.Series([""] * total, index=df.index)
-    verbal = int(beh.str.contains("verbal|swear|vocal|calling out|commentary|abuse", case=False, regex=True).sum())
-
-    def _mins(t):
-        try:
-            h, m = str(t).split(":")[:2]; return int(h) * 60 + int(m)
-        except Exception:
-            return None
-    arrival = 0
-    if "time" in df.columns:
-        _m = df["time"].apply(_mins)
-        arrival = int(((_m >= 8 * 60) & (_m <= 9 * 60 + 45)).sum())
-
-    # 1. Arrival / entry anxiety
-    morning = int(sess.get("Morning", 0))
-    if arrival >= 3 and arrival / total >= 0.3 or (morning / total >= 0.5 and verbal >= 2):
-        n_ev = arrival if arrival >= 3 else morning
-        sugg.append({
-            "key": "arrival_entry", "score": n_ev / total + 0.15,
-            "title": "Arrival: perceived-choice entry to the morning",
-            "evidence": f"{_pct(n_ev)} happen {'around arrival (8:00–9:45)' if arrival >= 3 else 'in the morning session'}"
-                        + (f", with {verbal} verbal outburst(s)." if verbal else "."),
-            "hypothesis": "Entering the room and being seen by peers may feel anxious or exposing, and the outburst may be masking that "
-                          "anxiety rather than being aimed at anyone. (Provisional: the trial will help test this.)",
-            "strategy": "At arrival, greet calmly and offer a perceived choice of how to start the morning. Both options are fine: "
-                        "(a) begin in the aligned room, away from other students, and join the group at an agreed later time; or "
-                        "(b) take a short moment outside the room first, then enter. Say nothing about earlier outbursts at the door and "
-                        "keep demands minimal for the first few minutes.",
-            "measure": "Daily: outbursts or incidents in the first 30 minutes, which option was chosen, and how long before joining the group.",
-            "focus_session": "Morning"})
-
-    # 2. Demand / instruction
-    sig = demand_avoidance_signal(df)
-    n_ins = int(cats.get("Instructions", 0))
-    if n_ins / total >= 0.3 or sig["flag"]:
-        n_ev = max(n_ins, sig["n"]) if sig["flag"] else n_ins
-        sugg.append({
-            "key": "instruction_choice", "score": n_ev / total,
-            "title": "Instructions: declarative language and perceived choice",
-            "evidence": f"{_pct(n_ev)} linked to instructions, demands or refusal/avoidance.",
-            "hypothesis": "Direct demands may be felt as a loss of control, prompting refusal as a way to regain it.",
-            "strategy": "Swap direct commands for invitations and two acceptable options (what, where, with whom or in what order, never whether). "
-                        "e.g. 'Do you want to start with the reading or the writing?' Drop non-essential demands during the peak session.",
-            "measure": "Tally per day: first instructions followed within 2 minutes, refusals, and how often a choice was offered.",
-            "focus_session": ""})
-
-    # 3. Transition
-    n_tr = int(cats.get("Transition", 0))
-    if n_tr / total >= 0.3:
-        sugg.append({
-            "key": "transition_choice", "score": n_tr / total,
-            "title": "Transitions: shared control of the routine",
-            "evidence": f"{_pct(n_tr)} follow a transition.",
-            "hypothesis": "Sudden change may feel unpredictable; sharing control of how the change happens may reduce threat.",
-            "strategy": "Give a 5-then-2-minute warning with a visual, then offer a choice within the transition (which route, which job, "
-                        "who walks with them, what they carry). Both options meet the same goal.",
-            "measure": "Per transition: smooth, needed support, or incident. Note which choice was picked.",
-            "focus_session": ""})
-
-    # 4. Peer
-    n_pe = int(cats.get("Peer", 0))
-    if n_pe / total >= 0.3:
-        sugg.append({
-            "key": "peer_choice", "score": n_pe / total,
-            "title": "Peers: choice of when and with whom",
-            "evidence": f"{_pct(n_pe)} are peer-related.",
-            "hypothesis": "Unstructured peer proximity may be the trigger, and having a say in the social load may help.",
-            "strategy": "Offer a structured choice for high-risk times: join a supported small group, or take a parallel activity near a "
-                        "trusted adult, with a planned time to rejoin. Both are positive options, not a consequence.",
-            "measure": "Peer-related incidents per week; which option chosen; whether the student rejoined.",
-            "focus_session": ""})
-
-    # 5. Sensory
-    n_se = int(cats.get("Sensory", 0))
-    if n_se / total >= 0.25:
-        sugg.append({
-            "key": "sensory_choice", "score": n_se / total,
-            "title": "Sensory: prepare the body before the busy moment",
-            "evidence": f"{_pct(n_se)} are sensory-linked.",
-            "hypothesis": "Noise, light or crowding may be overloading the nervous system before any demand is placed.",
-            "strategy": "Before the known busy session, offer a choice of sensory preparation: a quiet 5 minutes in a low-stimulation space, "
-                        "or a movement or heavy-work task, then join.",
-            "measure": "Incidents in the following session versus days without the prep; which option was chosen.",
-            "focus_session": ""})
-
-    # 6. Engagement
-    n_en = int(cats.get("Engagement", 0))
-    if n_en / total >= 0.3:
-        sugg.append({
-            "key": "engagement_start", "score": n_en / total,
-            "title": "Task start: a strength-first, chosen starting point",
-            "evidence": f"{_pct(n_en)} are linked to task engagement.",
-            "hypothesis": "The start of a task may feel risky; a guaranteed early success and some control may lower that threshold.",
-            "strategy": "Offer a choice of two starting tasks, one always at mastery level or linked to an interest. Chunk the task with a "
-                        "visible endpoint and a planned movement break before fatigue.",
-            "measure": "Time to begin the task; tasks completed; incidents during independent work.",
-            "focus_session": ""})
-
-    # 7. Afternoon
-    aft = int(sess.get("Afternoon", 0))
-    if aft / total >= 0.45:
-        sugg.append({
-            "key": "afternoon_reset", "score": aft / total,
-            "title": "Afternoon: a planned reset after lunch",
-            "evidence": f"{_pct(aft)} happen in the afternoon.",
-            "hypothesis": "Fatigue, hunger or the unstructured lunch break may be carrying over into the afternoon.",
-            "strategy": "Check food, water and tiredness, then offer a choice of reset: movement break or quiet time with a preferred activity, "
-                        "before the first afternoon demand.",
-            "measure": "Afternoon incidents per week; which reset was chosen.",
-            "focus_session": "Afternoon"})
-
-    # 8. Unstructured space
-    _yard = int(sum(c for l, c in locs.items() if re.search(r"yard|playground|oval|outside", l, re.I)))
-    if _yard / total >= 0.4:
-        sugg.append({
-            "key": "yard_choice", "score": _yard / total,
-            "title": "Break times: a choice of structured options",
-            "evidence": f"{_pct(_yard)} happen outside or in the yard.",
-            "hypothesis": "Unstructured time may be the pressure point, and a ready choice of activity may reduce it.",
-            "strategy": "Offer two ready options before break: a supported game or activity, or a quiet space with a trusted adult. "
-                        "Both are valued choices, with a check-in at the end.",
-            "measure": "Yard incidents per week; option chosen; ease of returning to class.",
-            "focus_session": ""})
-
-    sugg.sort(key=lambda d: -d["score"])
-    if not sugg:
-        sugg.append({
-            "key": "baseline_choice", "score": 0.1,
-            "title": "Start with choice at the start of the day",
-            "evidence": "No single pattern stands out yet.",
-            "hypothesis": "A small, predictable sense of control at the start of the day may help settle the student.",
-            "strategy": "Offer a choice of how to begin the day (two acceptable options) and keep demands low for the first few minutes.",
-            "measure": "Daily: how the first 30 minutes went (settled, needed support, incident).",
-            "focus_session": "Morning"})
-    return sugg[:max_n]
-
-
-def load_trials(student_id) -> list[dict]:
-    """Trials from Supabase (cached for the session, refreshed after any save), merged
-    with any held only in this session (used if the table hasn't been created yet)."""
-    ck = f"_trials_cache_{student_id}"
-    if ck in st.session_state:
-        rows = st.session_state[ck]
-    else:
-        rows = []
-        if supabase and student_id:
-            try:
-                res = _db_retry(lambda: supabase.table("strategy_trials").select("*").eq("student_id", student_id).order("start_date", desc=True).execute())
-                rows = res.data or []
-                st.session_state["_trials_db_ok"] = True
-                st.session_state[ck] = rows
-            except Exception as e:
-                # Only a missing table means "not saved permanently"; a network blip just retries next time.
-                if not _is_transient_db_error(e):
-                    st.session_state["_trials_db_ok"] = False
-    local = st.session_state.get(f"trials_local_{student_id}", [])
-    return rows + [t for t in local if t.get("id") not in {r.get("id") for r in rows}]
-
-
-def save_trial(student_id, trial: dict) -> bool:
-    """Insert or update a trial. Falls back to session storage (returning False, with the
-    reason in session_state['_last_save_error']) if the database save fails."""
-    if _viewer_write_blocked("save a strategy trial"):
-        return False
-    trial = dict(trial)
-    trial["student_id"] = student_id
-    st.session_state.pop(f"_trials_cache_{student_id}", None)
-    st.session_state.pop("_last_save_error", None)
-    if supabase:
-        try:
-            if trial.get("id") and not str(trial["id"]).startswith("local-"):
-                tid = trial.pop("id")
-                _db_retry(lambda: supabase.table("strategy_trials").update(trial).eq("id", tid).execute())
-            else:
-                trial.pop("id", None)
-                _db_retry(lambda: supabase.table("strategy_trials").insert(trial).execute())
-            st.session_state.pop("_trials_save_problem", None)
-            st.session_state["_trials_db_ok"] = True
-            return True
-        except Exception as e:
-            st.session_state["_last_save_error"] = str(e)
-    else:
-        st.session_state["_last_save_error"] = "No database connection."
-    loc_key = f"trials_local_{student_id}"
-    lst = st.session_state.get(loc_key, [])
-    if trial.get("id"):
-        lst = [trial if t.get("id") == trial["id"] else t for t in lst]
-    else:
-        trial["id"] = f"local-{uuid.uuid4()}"
-        lst.append(trial)
-    st.session_state[loc_key] = lst
-    st.session_state["_trials_save_problem"] = True
-    return False
-
-
-def compute_trial_effect(full_df, start, end=None, focus_session: str = "") -> dict | None:
-    """Compare incidents per school week in the (up to) 4 weeks before the
-    trial with the trial period itself, overall and in the targeted session.
-    Preliminary by design: it does not account for absences."""
-    if full_df is None or full_df.empty or "date_parsed" not in full_df.columns or not start:
-        return None
-    try:
-        s_ts = pd.Timestamp(start).normalize()
-        e_ts = pd.Timestamp(end).normalize() if end else pd.Timestamp(date.today())
-    except Exception:
-        return None
-    df = full_df.dropna(subset=["date_parsed"])
-    if df.empty or e_ts < s_ts:
-        return None
-    b_start = max(df["date_parsed"].min().normalize(), s_ts - pd.Timedelta(days=28))
-    if b_start >= s_ts:
-        return {"insufficient": True}
-    def _wk(a, b): return max(int(np.busday_count(a.date(), b.date())), 1) / 5.0
-    wk_b, wk_d = _wk(b_start, s_ts), _wk(s_ts, e_ts + pd.Timedelta(days=1))
-    out = {"insufficient": False, "weeks_before": wk_b, "weeks_during": wk_d}
-    def _slice(d):
-        before = d[(d["date_parsed"] >= b_start) & (d["date_parsed"] < s_ts)]
-        during = d[(d["date_parsed"] >= s_ts) & (d["date_parsed"] <= e_ts + pd.Timedelta(days=1))]
-        return before, during
-    for tag, d in (("all", df), ("focus", df[df["session"] == focus_session] if focus_session and "session" in df.columns else None)):
-        if d is None:
-            out[tag] = None; continue
-        b, du = _slice(d)
-        rb, rd = len(b) / wk_b, len(du) / wk_d
-        sb = pd.to_numeric(b.get("severity"), errors="coerce").mean() if "severity" in b.columns else np.nan
-        sd = pd.to_numeric(du.get("severity"), errors="coerce").mean() if "severity" in du.columns else np.nan
-        out[tag] = {"n_before": len(b), "n_during": len(du), "rate_before": rb, "rate_during": rd,
-                    "sev_before": None if pd.isna(sb) else float(sb), "sev_during": None if pd.isna(sd) else float(sd),
-                    "pct": ((rd - rb) / rb * 100) if rb > 0 else None}
-    return out
-
-
-def _fmt_effect(block: dict | None, label: str) -> str:
-    if not block:
-        return ""
-    pct = block["pct"]
-    arrow = "no baseline to compare" if pct is None else f"{abs(pct):.0f}% {'fewer' if pct < 0 else 'more'} per week"
-    return (f"{label}: {block['rate_before']:.1f}/wk before ({block['n_before']}) → {block['rate_during']:.1f}/wk during "
-            f"({block['n_during']}), {arrow}.")
-
-
-def _trial_date(v):
-    try:
-        return pd.Timestamp(v).date() if v else None
-    except Exception:
-        return None
-
-
-def get_trial_suggestions(student_id, full_df) -> list:
-    """The trial suggestions shown on screen (starting-profile themes first, then data-driven ones)."""
-    _data_sugg = build_trial_suggestions(full_df, max_n=8)
-    _profile = load_starting_profile(student_id)
-    _psugg = build_profile_trial_suggestions(_profile, _data_sugg)
-    _covered = {STARTING_PROFILE_TAGS[t["tag"]].get("equiv") for t in (_profile or {}).get("tags", []) if t.get("include", True) and t.get("tag") in STARTING_PROFILE_TAGS}
-    return _psugg + [d for d in _data_sugg if d["key"] not in _covered][:3]
-
-
-def render_strategy_trials(student, full_df):
-    student_id = student["id"]
-    st.markdown("### 🧪 Strategies to Trial")
-    st.caption("Suggestions are drawn from this student's own pattern. Each is a hypothesis to test, not a conclusion. "
-               "Run it for a few weeks, note what you see, then record what you learned. That evidence can travel "
-               "with the student to a receiving school.")
-    if st.session_state.get("_trials_db_ok") is False or st.session_state.get("_trials_save_problem"):
-        show_save_problem("Strategy trials", STRATEGY_TRIALS_SQL)
-    me = (st.session_state.get("current_user") or {}).get("name", "") or ""
-    trials = load_trials(student_id)
-    running_titles = {t.get("title") for t in trials if t.get("status") == "Running"}
-
-    sugg = get_trial_suggestions(student_id, full_df)
-    if not sugg:
-        st.info("Add a Starting Profile above, or log some incidents, to get trial suggestions.")
-    for i, sg in enumerate(sugg):
-        with st.container(border=True):
-            st.markdown(f"**💡 {sg['title']}**" + ("  \n*📄 From the starting profile*" if sg.get("source") == "profile" else "  \n*📊 From incident data*"))
-            st.markdown(f"*{'Where this comes from' if sg.get('source') == 'profile' else 'What the data shows'}:* {sg['evidence']}")
-            if sg.get('data_note'):
-                st.markdown(f"*{sg['data_note']}*")
-            st.markdown(f"*Hypothesis to test:* {sg['hypothesis']}")
-            st.markdown(f"*Strategy to trial:* {sg['strategy']}")
-            st.markdown(f"*What to track:* {sg['measure']}")
-            if sg["title"] in running_titles:
-                st.success("This trial is already running (see below).")
-                continue
-            if st.button("▶️ Start this trial", key=f"trial_start_{student_id}_{sg['key']}"):
-                st.session_state[f"trial_form_{student_id}"] = i
-    open_i = st.session_state.get(f"trial_form_{student_id}")
-    if open_i is not None and 0 <= open_i < len(sugg):
-        sg = sugg[open_i]
-        with st.form(f"trial_new_{student_id}"):
-            st.markdown(f"**Start trial: {sg['title']}**")
-            c1, c2 = st.columns(2)
-            _start = c1.date_input("Start date", value=date.today())
-            _review = c2.date_input("Review date", value=date.today() + timedelta(days=21))
-            _strat = st.text_area("Strategy (edit to fit this student)", value=sg["strategy"], height=130)
-            _meas = st.text_area("What staff will track", value=sg["measure"], height=70)
-            _sess = st.selectbox("Session this should affect most", ["", "Morning", "Middle", "Afternoon"],
-                                 index=["", "Morning", "Middle", "Afternoon"].index(sg["focus_session"]),
-                                 format_func=lambda x: x or "Whole day")
-            ok = st.form_submit_button("✅ Start trial", type="primary")
-        if ok:
-            saved = save_trial(student_id, {
-                "title": sg["title"], "hypothesis": sg["hypothesis"], "strategy": _strat, "measure": _meas,
-                "focus_session": _sess, "start_date": _start.isoformat(), "review_date": _review.isoformat(),
-                "status": "Running", "observations": [], "created_by": me})
-            st.session_state.pop(f"trial_form_{student_id}", None)
-            st.rerun()
-
-    with st.expander("➕ Plan your own trial"):
-        with st.form(f"trial_custom_{student_id}"):
-            _t = st.text_input("Title", placeholder="e.g. Choice of first activity after lunch")
-            _h = st.text_area("Hypothesis (what do you think is going on?)", height=70)
-            _s = st.text_area("Strategy to trial", height=90)
-            _m = st.text_area("What will staff track?", height=60)
-            c1, c2, c3 = st.columns(3)
-            _sd = c1.date_input("Start date", value=date.today(), key=f"cust_sd_{student_id}")
-            _rd = c2.date_input("Review date", value=date.today() + timedelta(days=21), key=f"cust_rd_{student_id}")
-            _fs = c3.selectbox("Session affected", ["", "Morning", "Middle", "Afternoon"], format_func=lambda x: x or "Whole day",
-                               key=f"cust_fs_{student_id}")
-            if st.form_submit_button("✅ Start trial", type="primary"):
-                if not _t.strip() or not _s.strip():
-                    st.error("Add at least a title and a strategy.")
-                else:
-                    save_trial(student_id, {"title": _t.strip(), "hypothesis": _h, "strategy": _s, "measure": _m,
-                                            "focus_session": _fs, "start_date": _sd.isoformat(),
-                                            "review_date": _rd.isoformat(), "status": "Running",
-                                            "observations": [], "created_by": me})
-                    st.rerun()
-
-    if not trials:
-        return
-    st.markdown("#### 📋 Trials for this student")
-    for t in trials:
-        tid = str(t.get("id"))
-        running = t.get("status") == "Running"
-        start, review, end = _trial_date(t.get("start_date")), _trial_date(t.get("review_date")), _trial_date(t.get("end_date"))
-        due = running and review and review <= date.today()
-        badge = "🟢 Running" if running else f"✅ {t.get('outcome') or 'Concluded'}"
-        with st.expander(f"{badge} — {t.get('title','')}" + (" — ⏰ review due" if due else ""), expanded=due):
-            st.markdown(f"**Hypothesis:** {_tr_text(t.get('hypothesis'), '—')}")
-            st.markdown(f"**Strategy:** {_tr_text(t.get('strategy'), '—')}")
-            st.markdown(f"**Tracking:** {_tr_text(t.get('measure'), '—')}")
-            st.caption(f"Started {start.strftime('%d/%m/%Y') if start else '—'} · review {review.strftime('%d/%m/%Y') if review else '—'}"
-                       + (f" · ended {end.strftime('%d/%m/%Y')}" if end else "") + (f" · by {t.get('created_by')}" if t.get("created_by") else ""))
-            eff = compute_trial_effect(full_df, start, end if not running else None, t.get("focus_session") or "")
-            if eff and eff.get("insufficient"):
-                st.info("Not enough earlier data to compare against yet.")
-            elif eff:
-                for line in (_fmt_effect(eff.get("focus"), f"{t.get('focus_session')} session"), _fmt_effect(eff.get("all"), "Whole day")):
-                    if line:
-                        st.markdown(f"📈 {line}")
-                _al = trial_attendance_line(student_id, start, end if not running else None, full_df)
-                if _al:
-                    st.markdown(f"🗓️ {_al}")
-                st.caption("Preliminary read from logged incidents. Fewer logged incidents is only one measure, and the attendance line shows whether "
-                           "the student was at school more or less, so weigh both with the staff observations below.")
-            obs = t.get("observations") or []
-            if obs:
-                st.markdown("**Staff observations**")
-                for o in obs:
-                    st.markdown(f"- {o.get('date','')} — {o.get('text','')}" + (f" *({o.get('by')})*" if o.get("by") else ""))
-            if running:
-                with st.form(f"trial_obs_{tid}"):
-                    _o = st.text_input("Add an observation", placeholder="e.g. Chose to start in the quiet room 4/5 days; joined group by 9:20")
-                    if st.form_submit_button("➕ Add"):
-                        if _o.strip():
-                            upd = dict(t); upd["observations"] = obs + [{"date": date.today().strftime("%d/%m"), "text": _o.strip(), "by": me}]
-                            save_trial(student_id, upd); st.rerun()
-                with st.form(f"trial_end_{tid}"):
-                    st.markdown("**Conclude this trial**")
-                    _out = st.selectbox("How did it go?", TRIAL_OUTCOMES, key=f"out_{tid}")
-                    _con = st.text_area("What did you learn? What would you keep, change or pass on to a receiving school?", height=90, key=f"con_{tid}")
-                    if st.form_submit_button("✅ Conclude trial"):
-                        upd = dict(t); upd.update({"status": "Concluded", "outcome": _out, "conclusion": _con, "end_date": date.today().isoformat()})
-                        save_trial(student_id, upd); st.rerun()
-            else:
-                st.markdown(f"**What we learned:** {_tr_text(t.get('conclusion'), '—')}")
-                if st.button("↩️ Reopen", key=f"reopen_{tid}"):
-                    upd = dict(t); upd.update({"status": "Running", "end_date": None}); save_trial(student_id, upd); st.rerun()
-
-
-# ============================================
-# STARTING PROFILE — suggestions from day one
-# ============================================
-# By the time incident data reveals a pattern, much of a placement may be gone.
-# Staff can upload (or paste) the referral, transition report or earlier school
-# information; themes are extracted and matched to trial-ready strategies so
-# something useful can be tried in the first weeks. Only the extracted themes
-# are kept, never the document itself, and the student's name is removed from
-# the text before it goes to the AI. Staff confirm each theme before it is used.
-#
-# Table (create once in Supabase):
-#   create table starting_profiles (
-#     student_id text primary key, profile jsonb, updated_by text,
-#     updated_at timestamptz default now());
-
-STARTING_PROFILE_TAGS = {
-    "difficult_start": {
-        "label": "Finds the start of the day hard",
-        "title": "Soft landing at the start of the day",
-        "hypothesis": "Arriving and joining the group may feel unpredictable or exposing, and a calm, low-demand start may settle the student before anything is expected.",
-        "strategy": "Greet calmly and offer a choice of how to begin. Both options are fine: settle in a quieter space and join the group at an agreed later time, or take a short moment outside first. Keep demands low and skip questions about the morning for the first few minutes. Follow with a predictable first task the student can succeed at.",
-        "measure": "Daily: how the first 30 minutes went (settled, needed support, incident), which option was chosen, and time to join the group.",
-        "focus_session": "Morning", "equiv": "arrival_entry"},
-    "demand_avoidance": {
-        "label": "Strong need for control, resists direct demands",
-        "title": "Low-demand, perceived-choice approach",
-        "hypothesis": "Direct demands may feel like a loss of control, prompting refusal or escalation to regain it. This fits a demand-avoidant presentation, whether or not it is diagnosed.",
-        "strategy": "Swap commands for invitations and declarative language ('I wonder if...'). Offer two acceptable options about what, where, with whom or in what order, never whether. Keep a few non-negotiables (safety) and drop the rest. Avoid ultimatums and public correction, and hand control back in small safe ways (setting the timer, choosing the start point).",
-        "measure": "Tally per day: first instructions followed within 2 minutes, refusals or escalations, and how often a choice was offered.",
-        "focus_session": "", "equiv": "instruction_choice"},
-    "subject_difficulty": {
-        "label": "Finds a particular subject very hard",
-        "title": "{subject}: prepare, support closely, lower the demand",
-        "hypothesis": "{subject} may feel overwhelming or exposing, and leaving the room or escalating may be a way to escape that feeling.",
-        "strategy": "Before {subject}, prepare the student: preview what is coming, agree the first step and when the lesson will finish, and offer a choice of how to start. During the lesson, stay close, lower the demand (shorter chunked tasks, fewer items, a familiar entry point) and set up early chances to succeed. Notice and name effort, not only correct answers. Agree a way to pause (break card) before the student reaches the point of leaving.",
-        "measure": "Per {subject} lesson: stayed in the room, needed a break, or left; time to first task; success moments noted.",
-        "focus_session": "", "equiv": None},
-    "transitions": {
-        "label": "Finds changes and transitions hard",
-        "title": "Transitions: shared control of the routine",
-        "hypothesis": "Sudden change may feel unpredictable, and sharing control of how the change happens may reduce the threat.",
-        "strategy": "Give a 5-then-2-minute warning with a visual, then offer a choice within the transition (which route, which job, who walks with them, what they carry). Both options reach the same goal.",
-        "measure": "Per transition: smooth, needed support, or incident. Note which choice was picked.",
-        "focus_session": "", "equiv": "transition_choice"},
-    "peer_difficulty": {
-        "label": "Finds peer relationships hard",
-        "title": "Peers: choice of when and with whom",
-        "hypothesis": "Unstructured peer proximity may be the pressure point, and having a say in the social load may help.",
-        "strategy": "Offer a structured choice at higher-risk times: join a supported small group, or work on a parallel activity near a trusted adult with a planned time to rejoin. Both are positive options, not a consequence.",
-        "measure": "Peer-related incidents per week, which option was chosen, and whether the student rejoined.",
-        "focus_session": "", "equiv": "peer_choice"},
-    "sensory": {
-        "label": "Sensory sensitivities or needs",
-        "title": "Sensory: prepare the body before the busy moment",
-        "hypothesis": "Noise, light or crowding may overload the nervous system before any demand is placed.",
-        "strategy": "Before the known busy session, offer a choice of sensory preparation: a quiet 5 minutes in a low-stimulation space, or a movement or heavy-work task, then join. Offer it discreetly.",
-        "measure": "Incidents in the following session on days with and without the prep; which option was chosen.",
-        "focus_session": "", "equiv": "sensory_choice"},
-    "emotional_regulation": {
-        "label": "Escalates quickly, big emotional responses",
-        "title": "Regulate first: early signs and a choice of reset",
-        "hypothesis": "Big reactions may come when the student's stress response takes over before they have a way to settle.",
-        "strategy": "Identify the early warning signs with the student, and agree a short menu of two reset options (movement, quiet space, trusted adult). Offer the menu at the first signs, using few words and a calm tone, and keep any talking about it until the student is regulated.",
-        "measure": "Per day: early signs noticed, reset option used, and whether escalation was avoided.",
-        "focus_session": "", "equiv": None},
-    "low_confidence": {
-        "label": "Fear of failure, low confidence or perfectionism",
-        "title": "Success first: a guaranteed early win",
-        "hypothesis": "Starting a task may feel risky, and a guaranteed early success may lower the threshold for trying.",
-        "strategy": "Offer a choice of two starting tasks, one always at mastery level or linked to an interest. Model that mistakes are normal, praise effort and strategy rather than the answer, and keep a visible record of successes.",
-        "measure": "Time to begin the task; tasks attempted; incidents during independent work.",
-        "focus_session": "", "equiv": None},
-    "attention_executive": {
-        "label": "Difficulty starting, focusing or organising work",
-        "title": "Chunk it, show it, check in",
-        "hypothesis": "Large or vague tasks may be hard to start and sustain, and visible structure may help.",
-        "strategy": "Break work into short, visible chunks with a checklist and a clear endpoint. Check in at the start of each chunk, build in movement before fatigue, and let the student choose the order of chunks.",
-        "measure": "Chunks completed per session; time to start; prompts needed.",
-        "focus_session": "", "equiv": None},
-    "communication": {
-        "label": "Difficulty expressing needs or understanding language",
-        "title": "Make asking for help easy",
-        "hypothesis": "Behaviour may be communicating a need the student cannot yet put into words.",
-        "strategy": "Pre-teach key routines with visuals, allow extra processing time and use fewer words. Give the student an easy way to ask for a break or help without speaking (card, gesture, symbol) and respond to it every time.",
-        "measure": "Times the student used the break or help signal, and what happened after.",
-        "focus_session": "", "equiv": None},
-    "unstructured_time": {
-        "label": "Finds unstructured time hard (breaks, yard)",
-        "title": "Break times: a choice of structured options",
-        "hypothesis": "Unstructured time may be the pressure point, and a ready choice of activity may reduce it.",
-        "strategy": "Before break, offer two ready options: a supported game or activity, or a quiet space with a trusted adult. Both are valued choices, with a check-in at the end.",
-        "measure": "Incidents at break per week; option chosen; ease of returning to class.",
-        "focus_session": "", "equiv": "yard_choice"},
-    "adult_trust": {
-        "label": "Finds it hard to trust or connect with adults",
-        "title": "Connection before correction",
-        "hypothesis": "Trust in adults may be fragile, so relationship safety needs to come before expectations.",
-        "strategy": "Give the student a consistent key adult and a predictable greeting. Spend a few minutes of low-demand connection daily, repair quickly after any rupture, and keep correction private and brief.",
-        "measure": "Weekly: quality of greetings and connection (1 to 5), and how quickly the student recovered after difficult moments.",
-        "focus_session": "", "equiv": None},
-    "anxiety": {
-        "label": "Anxious presentation",
-        "title": "Predictability and a named safe adult",
-        "hypothesis": "Uncertainty may be driving some behaviour, and more predictability and a trusted person may settle it.",
-        "strategy": "Preview the day and any changes on a visual schedule, name a safe adult the student can go to, and offer a choice of calming option at the first signs of worry.",
-        "measure": "Daily: worry signs noticed, safe adult or calming option used, how the student settled.",
-        "focus_session": "", "equiv": None},
-}
-
-
-def _extract_upload_text(f) -> str:
-    """Plain text from an uploaded .docx / .pdf / .odt / .txt file."""
-    name = f.name.lower()
-    # getvalue() not read(): read() continues from where the last read stopped, so a second
-    # click (or any rerun) returned empty bytes and the file looked blank.
-    raw = f.getvalue()
-    try:
-        if name.endswith(".pdf"):
-            try:
-                import fitz
-                d = fitz.open(stream=raw, filetype="pdf")
-                txt = " ".join(pg.get_text() for pg in d); d.close()
-                return txt
-            except Exception:
-                from pypdf import PdfReader
-                return " ".join((pg.extract_text() or "") for pg in PdfReader(BytesIO(raw)).pages)
-        if name.endswith(".odt"):
-            import zipfile, xml.etree.ElementTree as _ET
-            return " ".join(_ET.fromstring(zipfile.ZipFile(BytesIO(raw)).read("content.xml")).itertext())
-        if name.endswith(".txt"):
-            return raw.decode("utf-8", errors="ignore")
-        from docx import Document as _D
-        d = _D(BytesIO(raw))
-        return " ".join([p.text for p in d.paragraphs if p.text.strip()] +
-                        [c.text for t in d.tables for r in t.rows for c in r.cells if c.text.strip()])
-    except Exception as e:
-        return f"[Could not read {f.name}: {e}]"
-
-
-def _strip_student_name(text: str, name: str) -> str:
-    for tok in {t for t in re.split(r"\W+", name or "") if len(t) >= 3}:
-        text = re.sub(rf"\b{re.escape(tok)}(?:'s)?\b", "the student", text, flags=re.I)
-    return text
-
-
-def extract_starting_profile(text: str, student_name: str) -> dict:
-    """AI reads referral / transition information and returns confirmed-able themes
-    tagged against the fixed STARTING_PROFILE_TAGS list."""
-    tag_lines = "; ".join(f'"{k}" = {v["label"]}' for k, v in STARTING_PROFILE_TAGS.items())
-    prompt = (
-        "You support teachers at an alternative education setting. Read this information about a new student and "
-        "identify which themes it describes. Use ONLY the tags provided, only where the document gives clear evidence, "
-        "and do not diagnose. Return ONLY valid JSON, no markdown. Structure: "
-        '{"summary":"2 sentence plain summary","strengths":["..."],"interests":["..."],'
-        '"what_helps":["..."],"what_doesnt_help":["..."],'
-        '"tags":[{"tag":"one of the tags","evidence":"short paraphrase from the document","detail":"for subject_difficulty give the subject name, else empty"}]}. '
-        f"Allowed tags: {tag_lines}. "
-        "Document: " + _strip_student_name(text, student_name)[:7000]
-    )
-    raw = groq_ai_call(prompt, max_tokens=2000, temperature=0.1)
-    raw = raw.replace("```json", "").replace("```", "").strip()
-    a, b = raw.find("{"), raw.rfind("}")
-    data = json.loads(raw[a:b + 1])
-    tags, seen = [], set()
-    for t in data.get("tags", []):
-        k = str(t.get("tag", "")).strip()
-        if k in STARTING_PROFILE_TAGS and (k, str(t.get("detail", ""))) not in seen:
-            seen.add((k, str(t.get("detail", ""))))
-            tags.append({"tag": k, "evidence": str(t.get("evidence", ""))[:300],
-                         "detail": str(t.get("detail", ""))[:60], "include": True})
-    return {"summary": str(data.get("summary", "")), "strengths": [str(x) for x in data.get("strengths", [])][:8],
-            "interests": [str(x) for x in data.get("interests", [])][:8],
-            "what_helps": [str(x) for x in data.get("what_helps", [])][:8],
-            "what_doesnt_help": [str(x) for x in data.get("what_doesnt_help", [])][:8], "tags": tags}
-
-
-def load_starting_profile(student_id) -> dict:
-    ck = f"_profile_cache_{student_id}"
-    if ck in st.session_state:
-        return st.session_state[ck]
-    if supabase and student_id:
-        try:
-            res = _db_retry(lambda: supabase.table("starting_profiles").select("*").eq("student_id", student_id).limit(1).execute())
-            st.session_state["_profile_db_ok"] = True
-            prof = (res.data[0].get("profile") if res.data else None) or st.session_state.get(f"starting_profile_{student_id}", {})
-            st.session_state[ck] = prof
-            return prof
-        except Exception as e:
-            if not _is_transient_db_error(e):
-                st.session_state["_profile_db_ok"] = False
-    return st.session_state.get(f"starting_profile_{student_id}", {})
-
-
-def save_starting_profile(student_id, profile: dict, by: str = "") -> bool:
-    """Save to the database. Always keeps a session copy; returns False (and records
-    why in session_state['_last_save_error']) if the database save did not go through."""
-    if _viewer_write_blocked("save the starting profile"):
-        return False
-    st.session_state[f"starting_profile_{student_id}"] = profile
-    st.session_state[f"_profile_cache_{student_id}"] = profile
-    st.session_state.pop("_last_save_error", None)
-    if not supabase:
-        st.session_state["_last_save_error"] = "No database connection."
-        return False
-    try:
-        payload = {"student_id": str(student_id), "profile": profile, "updated_by": by,
-                   "updated_at": datetime.utcnow().isoformat()}
-        try:
-            _db_retry(lambda: supabase.table("starting_profiles").upsert(payload, on_conflict="student_id").execute())
-        except TypeError:
-            _db_retry(lambda: supabase.table("starting_profiles").upsert(payload).execute())
-        st.session_state["_profile_db_ok"] = True
-        return True
-    except Exception as e:
-        st.session_state["_last_save_error"] = str(e)
-        return False
-
-
-def delete_starting_profile(student_id) -> bool:
-    """Remove a student's starting profile completely (database + this session),
-    e.g. when another student's documents were uploaded by mistake."""
-    if _viewer_write_blocked("delete the starting profile"):
-        return False
-    sid = str(student_id)
-    ok = True
-    if supabase:
-        try:
-            _db_retry(lambda: supabase.table("starting_profiles").delete().eq("student_id", sid).execute())
-        except Exception as e:
-            st.session_state["_last_save_error"] = str(e)
-            ok = False
-    for k in list(st.session_state.keys()):
-        ks = str(k)
-        if ks in (f"starting_profile_{sid}", f"_profile_cache_{sid}", f"sp_paste_{sid}",
-                  f"sp_save_problem_{sid}", f"sp_del_confirm_{sid}") or \
-                ((ks.startswith("sp_inc_") or ks.startswith("sp_ev_")) and ks.endswith(f"_{sid}")):
-            del st.session_state[k]
-    # new key for the file uploader so the uploaded file is cleared from the box too
-    st.session_state[f"sp_upl_nonce_{sid}"] = st.session_state.get(f"sp_upl_nonce_{sid}", 0) + 1
-    return ok
-
-
-STARTING_PROFILES_SQL = """create table if not exists starting_profiles (
-  student_id text primary key,
-  profile jsonb,
-  updated_by text,
-  updated_at timestamptz default now()
-);
-alter table starting_profiles disable row level security;"""
-
-STRATEGY_TRIALS_SQL = """create table if not exists strategy_trials (
-  id uuid primary key default gen_random_uuid(),
-  student_id text not null,
-  title text, hypothesis text, strategy text, measure text,
-  focus_session text, start_date date, review_date date, end_date date,
-  status text default 'Running', outcome text, conclusion text,
-  observations jsonb default '[]'::jsonb, created_by text,
-  created_at timestamptz default now()
-);
-alter table strategy_trials disable row level security;"""
-
-
-def show_save_problem(what: str, sql: str):
-    """Tell staff plainly when something only saved for this session, and why."""
-    err = st.session_state.get("_last_save_error", "")
-    st.warning(f"⚠️ {what} was kept for this session only, because it couldn't be saved to the database.")
-    if err:
-        st.caption(f"Reason given: {err}")
-    st.caption("This usually means the table hasn't been created yet. Copy this into the Supabase SQL Editor and run it once:")
-    st.code(sql, language="sql")
-
-
-def build_profile_trial_suggestions(profile: dict, data_suggestions: list | None = None) -> list[dict]:
-    """Trial suggestions for every confirmed theme in the starting profile, each
-    noting what the incident data says so far (once there is any)."""
-    out = []
-    data_by_key = {d["key"]: d for d in (data_suggestions or [])}
-    for t in (profile or {}).get("tags", []):
-        if not t.get("include", True):
-            continue
-        meta = STARTING_PROFILE_TAGS.get(t.get("tag"))
-        if not meta:
-            continue
-        subj = (t.get("detail") or "").strip() or "this subject"
-        fmt = lambda x: x.replace("{subject}", subj)
-        eq = data_by_key.get(meta.get("equiv"))
-        out.append({
-            "key": f"profile_{t['tag']}_{re.sub(r'[^a-z0-9]', '', subj.lower())}",
-            "score": 1.0, "source": "profile",
-            "title": fmt(meta["title"]),
-            "evidence": "From the starting information: " + (t.get("evidence") or meta["label"]),
-            "data_note": ("Incident data so far supports this: " + eq["evidence"]) if eq else "",
-            "hypothesis": fmt(meta["hypothesis"]) + " (Provisional: the trial will help test this.)",
-            "strategy": fmt(meta["strategy"]), "measure": fmt(meta["measure"]),
-            "focus_session": meta["focus_session"]})
-    return out
-
-
-def _profile_sections(profile: dict) -> dict:
-    """The printable content of a starting profile, in print order."""
-    themes = []
-    for t in (profile or {}).get("tags", []):
-        if not t.get("include", True):
-            continue
-        meta = STARTING_PROFILE_TAGS.get(t.get("tag"), {})
-        lbl = meta.get("label", t.get("tag", ""))
-        if (t.get("detail") or "").strip():
-            lbl = f"{lbl} ({t['detail'].strip()})"
-        themes.append((lbl, (t.get("evidence") or "").strip()))
-    return {
-        "summary": (profile or {}).get("summary", ""),
-        "lists": [("Strengths", profile.get("strengths", [])), ("Interests", profile.get("interests", [])),
-                  ("What helps", profile.get("what_helps", [])),
-                  ("What doesn't help", profile.get("what_doesnt_help", []))],
-        "themes": themes,
-        "trials": build_profile_trial_suggestions(profile),
-    }
-
-
-def generate_starting_profile_docx(student: dict, profile: dict) -> BytesIO:
-    """One printable Word summary of what was drawn from the uploaded referral /
-    transition information: summary, strengths, interests, what helps / doesn't,
-    the confirmed themes with evidence, and the suggested first trials."""
-    from docx import Document
-    from docx.shared import Pt, Cm, RGBColor
-    from docx.oxml import OxmlElement
-    from docx.oxml.ns import qn
-    TEAL = RGBColor(0x1A, 0x7A, 0x7A)
-
-    def shade(cell, hexcol):
-        tcPr = cell._tc.get_or_add_tcPr()
-        shd = OxmlElement("w:shd"); shd.set(qn("w:val"), "clear"); shd.set(qn("w:color"), "auto")
-        shd.set(qn("w:fill"), hexcol); tcPr.append(shd)
-
-    def heading(text):
-        p = doc.add_paragraph(); p.paragraph_format.space_before = Pt(10); p.paragraph_format.space_after = Pt(3)
-        r = p.add_run(text.upper()); r.bold = True; r.font.size = Pt(11); r.font.color.rgb = TEAL
-
-    sec = _profile_sections(profile)
-    doc = Document()
-    sc = doc.sections[0]
-    sc.page_width, sc.page_height = Cm(21), Cm(29.7)
-    sc.left_margin = sc.right_margin = Cm(1.8); sc.top_margin = sc.bottom_margin = Cm(1.6)
-    doc.styles["Normal"].font.size = Pt(10.5)
-
-    t = doc.add_table(rows=1, cols=1); c = t.rows[0].cells[0]; shade(c, "1A7A7A")
-    c.paragraphs[0].clear()
-    r = c.paragraphs[0].add_run("STARTING PROFILE SUMMARY"); r.bold = True; r.font.size = Pt(16)
-    r.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
-    p2 = c.add_paragraph()
-    r2 = p2.add_run(f"{student.get('name', '')}  ·  {PROGRAM_NAMES.get(student.get('program'), student.get('program', ''))}"
-                    f"  ·  Cowandilla Learning Centre — LBU")
-    r2.font.size = Pt(10); r2.font.color.rgb = RGBColor(0xFE, 0xF3, 0xC7)
-    note = doc.add_paragraph()
-    nr = note.add_run(f"Drawn from the referral / transition information uploaded to the Behaviour Support Tool. "
-                      f"Only themes confirmed by staff are shown. The source documents are not stored. "
-                      f"Printed {datetime.now().strftime('%d/%m/%Y')}.")
-    nr.italic = True; nr.font.size = Pt(9)
-
-    if sec["summary"]:
-        heading("Summary")
-        doc.add_paragraph(sec["summary"])
-
-    lists = [(h, items) for h, items in sec["lists"] if items]
-    for i in range(0, len(lists), 2):
-        pair = lists[i:i + 2]
-        tb = doc.add_table(rows=1, cols=2); tb.style = "Table Grid"
-        for j, (h, items) in enumerate(pair):
-            cell = tb.rows[0].cells[j]; cell.paragraphs[0].clear()
-            hr = cell.paragraphs[0].add_run(h); hr.bold = True; hr.font.color.rgb = TEAL
-            for it in items:
-                cell.add_paragraph(str(it), style="List Bullet")
-        doc.add_paragraph().paragraph_format.space_after = Pt(2)
-
-    heading("Confirmed themes")
-    if sec["themes"]:
-        tb = doc.add_table(rows=1, cols=2); tb.style = "Table Grid"
-        for j, h in enumerate(("Theme", "What the information said")):
-            cell = tb.rows[0].cells[j]; shade(cell, "D6EEEB"); cell.paragraphs[0].clear()
-            cell.paragraphs[0].add_run(h).bold = True
-        for lbl, ev in sec["themes"]:
-            row = tb.add_row().cells
-            row[0].text = lbl; row[1].text = ev or "—"
-        for rw in tb.rows:
-            rw.cells[0].width, rw.cells[1].width = Cm(6.2), Cm(11.2)
-    else:
-        doc.add_paragraph("No themes confirmed yet.")
-
-    if sec["trials"]:
-        heading("Suggested strategies to trial in the first weeks")
-        for n, tr in enumerate(sec["trials"], 1):
-            tb = doc.add_table(rows=4, cols=1); tb.style = "Table Grid"
-            hc = tb.rows[0].cells[0]; shade(hc, "D6EEEB"); hc.paragraphs[0].clear()
-            hc.paragraphs[0].add_run(f"{n}. {tr['title']}").bold = True
-            for k, (lbl, key) in enumerate((("Why", "hypothesis"), ("What to try", "strategy"),
-                                            ("How we'll know", "measure")), 1):
-                cell = tb.rows[k].cells[0]; cell.paragraphs[0].clear()
-                cell.paragraphs[0].add_run(f"{lbl}: ").bold = True
-                cell.paragraphs[0].add_run(tr.get(key, ""))
-            doc.add_paragraph().paragraph_format.space_after = Pt(2)
-
-    heading("Team notes and agreed next steps")
-    for _ in range(6):
-        doc.add_paragraph("_" * 95)
-    buf = BytesIO(); doc.save(buf); buf.seek(0)
-    return buf
-
-
-def starting_profile_print_html(student: dict, profile: dict) -> bytes:
-    """Print-ready (browser → Print / Save as PDF) version of the same summary."""
-    import html as _h
-    e = lambda v: _h.escape(str(v or ""))
-    sec = _profile_sections(profile)
-    parts = [f"<h1>Starting Profile Summary</h1><p class='sub'>{e(student.get('name'))} · "
-             f"{e(PROGRAM_NAMES.get(student.get('program'), student.get('program', '')))} · Cowandilla Learning Centre — LBU</p>",
-             f"<p class='note'>Drawn from the referral / transition information uploaded to the Behaviour Support Tool. "
-             f"Only themes confirmed by staff are shown. The source documents are not stored. "
-             f"Printed {datetime.now().strftime('%d/%m/%Y')}.</p>"]
-    if sec["summary"]:
-        parts.append(f"<h2>Summary</h2><p>{e(sec['summary'])}</p>")
-    lists = [(h, items) for h, items in sec["lists"] if items]
-    if lists:
-        parts.append("<div class='grid'>" + "".join(
-            f"<div class='box'><h3>{e(h)}</h3><ul>" + "".join(f"<li>{e(x)}</li>" for x in items) + "</ul></div>"
-            for h, items in lists) + "</div>")
-    parts.append("<h2>Confirmed themes</h2>")
-    if sec["themes"]:
-        parts.append("<table><tr><th>Theme</th><th>What the information said</th></tr>" + "".join(
-            f"<tr><td>{e(l)}</td><td>{e(ev) or '—'}</td></tr>" for l, ev in sec["themes"]) + "</table>")
-    else:
-        parts.append("<p>No themes confirmed yet.</p>")
-    if sec["trials"]:
-        parts.append("<h2>Suggested strategies to trial in the first weeks</h2>")
-        for n, tr in enumerate(sec["trials"], 1):
-            parts.append(f"<div class='trial'><h3>{n}. {e(tr['title'])}</h3>"
-                         f"<p><b>Why:</b> {e(tr.get('hypothesis'))}</p><p><b>What to try:</b> {e(tr.get('strategy'))}</p>"
-                         f"<p><b>How we'll know:</b> {e(tr.get('measure'))}</p></div>")
-    parts.append("<h2>Team notes and agreed next steps</h2><div class='notes'></div>")
-    css = ("body{font-family:Arial,Helvetica,sans-serif;color:#1e293b;max-width:800px;margin:0 auto;padding:16px;font-size:11pt}"
-           "h1{color:#1A7A7A;margin:0}h2{color:#1A7A7A;font-size:12pt;text-transform:uppercase;border-bottom:2px solid #D6EEEB;"
-           "padding-bottom:3px;margin-top:18px}h3{margin:0 0 4px;font-size:11pt;color:#1A7A7A}.sub{margin:2px 0 6px;color:#475569}"
-           ".note{font-style:italic;font-size:9pt;color:#64748b}.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}"
-           ".box,.trial{border:1px solid #cbd5e1;border-radius:6px;padding:8px 10px;break-inside:avoid}.trial{margin:6px 0}"
-           ".trial p{margin:3px 0}ul{margin:2px 0;padding-left:18px}table{border-collapse:collapse;width:100%}"
-           "th,td{border:1px solid #cbd5e1;padding:5px 7px;text-align:left;vertical-align:top}th{background:#D6EEEB}"
-           ".notes{border:1px solid #94a3b8;min-height:60mm}.bar{background:#1A7A7A;color:#fff;padding:8px 12px;"
-           "border-radius:6px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center}"
-           ".bar button{font-size:11pt;padding:4px 12px}@media print{.bar{display:none}body{padding:0}}")
-    doc = ("<!doctype html><html><head><meta charset='utf-8'><title>Starting Profile — " + e(student.get("name")) +
-           f"</title><style>{css}</style></head><body><div class='bar'><span>Press Print, then choose your printer "
-           "or Save as PDF.</span><button onclick='window.print()'>🖨️ Print</button></div>" + "".join(parts) +
-           "</body></html>")
-    return doc.encode("utf-8")
-
-
-def render_starting_profile(student):
-    """Upload / paste referral information, confirm the themes found, and save them."""
-    sid = student["id"]
-    me = (st.session_state.get("current_user") or {}).get("name", "") or ""
-    profile = load_starting_profile(sid)
-    n_tags = len([t for t in profile.get("tags", []) if t.get("include", True)]) if profile else 0
-    label = "🌱 Starting Profile — get suggestions from day one" + (f" ({n_tags} themes saved)" if n_tags else "")
-    with st.expander(label, expanded=not profile):
-        st.caption("Upload or paste the referral, transition report or earlier school information. Themes (for example finding the "
-                   "start of the day hard, resisting direct demands, or struggling with a subject) are matched to strategies you "
-                   "can trial in the first weeks. The student's name is removed before the AI reads it, only the themes you "
-                   "confirm are kept, and the document itself is not stored.")
-        if st.session_state.get("_profile_db_ok") is False:
-            show_save_problem("The starting profile", STARTING_PROFILES_SQL)
-        if st.session_state.pop(f"sp_deleted_{sid}", False):
-            st.success("🗑️ Starting profile deleted. Nothing from those documents is kept. You can upload the "
-                       "correct student's information below.")
-        files = st.file_uploader("Upload one or more documents", type=["docx", "pdf", "odt", "txt"],
-                                 accept_multiple_files=True,
-                                 key=f"sp_files_{sid}_{st.session_state.get(f'sp_upl_nonce_{sid}', 0)}")
-        pasted = st.text_area("…or paste text here", height=120, key=f"sp_paste_{sid}",
-                              placeholder="Paste referral notes, a transition summary or previous school report…")
-        if st.button("🤖 Find themes and suggestions", type="primary", key=f"sp_run_{sid}", use_container_width=True):
-            _parts = [(f.name, _extract_upload_text(f).strip()) for f in (files or [])]
-            text = "\n\n".join([t for _, t in _parts if t] + ([pasted] if pasted.strip() else [])).strip()
-            if not text:
-                if files:
-                    st.warning("The file uploaded, but no readable text was found in it ("
-                               + ", ".join(f"{n}: {len(t)} characters" for n, t in _parts)
-                               + "). This usually means a scanned or image-only PDF. Try a Word version, or copy the text and paste it into the box below.")
-                else:
-                    st.warning("Upload a document or paste some text first.")
-            elif not st.secrets.get("GROQ_API_KEY", ""):
-                st.error("AI key not configured, so extraction isn't available.")
-            else:
-                with st.spinner("Reading and matching to strategies..."):
-                    try:
-                        prof = extract_starting_profile(text, student["name"])
-                        if not save_starting_profile(sid, prof, me):
-                            st.session_state[f"sp_save_problem_{sid}"] = True
-                        for k in [k for k in st.session_state if str(k).startswith(f"sp_inc_") and str(k).endswith(sid)]:
-                            del st.session_state[k]
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Could not extract themes: {e}")
-        if not profile:
-            return
-        st.markdown("---")
-        with st.container(border=True):
-            st.markdown("**🗑️ Wrong student's information? Delete this starting profile**")
-            st.caption("Removes the summary, strengths, interests, what helps / doesn't help and all themes for "
-                       "this student, so nothing from the uploaded documents is kept. The documents themselves "
-                       "were never stored. Any strategy trial already started from these suggestions stays in "
-                       "🧪 Strategies to Trial — remove it there if it no longer applies.")
-            _conf = st.checkbox(f"Yes, delete the starting profile for {student['name']}",
-                                key=f"sp_del_confirm_{sid}")
-            if st.button("🗑️ Delete starting profile", key=f"sp_del_{sid}", disabled=not _conf):
-                if delete_starting_profile(sid):
-                    st.session_state[f"sp_deleted_{sid}"] = True
-                    st.rerun()
-                else:
-                    st.error("Couldn't delete it from the database: "
-                             f"{st.session_state.get('_last_save_error', 'unknown error')}. Please try again.")
-        if profile.get("summary"):
-            st.info(profile["summary"])
-        cs, ci = st.columns(2)
-        with cs:
-            if profile.get("strengths"):
-                st.markdown("**Strengths**")
-                for x in profile["strengths"]: st.markdown(f"- {x}")
-            if profile.get("what_helps"):
-                st.markdown("**What helps**")
-                for x in profile["what_helps"]: st.markdown(f"- {x}")
-        with ci:
-            if profile.get("interests"):
-                st.markdown("**Interests**")
-                for x in profile["interests"]: st.markdown(f"- {x}")
-            if profile.get("what_doesnt_help"):
-                st.markdown("**What doesn't help**")
-                for x in profile["what_doesnt_help"]: st.markdown(f"- {x}")
-        st.markdown("**Confirm the themes to use.** Untick anything that doesn't fit, and edit the wording if needed.")
-        tags = profile.get("tags", [])
-        edited = []
-        for i, t in enumerate(tags):
-            meta = STARTING_PROFILE_TAGS.get(t["tag"], {})
-            c1, c2 = st.columns([1, 4])
-            inc = c1.checkbox(meta.get("label", t["tag"]), value=t.get("include", True), key=f"sp_inc_{i}_{sid}")
-            ev = c2.text_input("Evidence" if not t.get("detail") else f"Evidence (subject: {t['detail']})", value=t.get("evidence", ""),
-                               key=f"sp_ev_{i}_{sid}", label_visibility="collapsed")
-            edited.append({**t, "include": inc, "evidence": ev})
-        if st.button("💾 Save confirmed themes", key=f"sp_save_{sid}"):
-            if save_starting_profile(sid, {**profile, "tags": edited}, me):
-                st.session_state.pop(f"sp_save_problem_{sid}", None)
-                st.success("Saved. See the suggested trials under 🧪 Strategies to Trial.")
-                st.rerun()
-            else:
-                st.session_state[f"sp_save_problem_{sid}"] = True
-        if st.session_state.get(f"sp_save_problem_{sid}"):
-            show_save_problem("The starting profile", STARTING_PROFILES_SQL)
-
-        st.markdown("---")
-        st.markdown("**🖨️ Print a summary**")
-        st.caption("Summary, strengths, interests, what helps and what doesn't, the themes as ticked above, "
-                   "and the suggested first trials, with space for team notes. Save any changes first so "
-                   "the printout matches what's stored.")
-        _print_prof = {**profile, "tags": edited}
-        _fn = f"StartingProfile_{str(student['name']).replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}"
-        _pc1, _pc2 = st.columns(2)
-        try:
-            _pc1.download_button("📄 Starting Profile summary (Word)",
-                                 generate_starting_profile_docx(student, _print_prof),
-                                 file_name=_fn + ".docx", use_container_width=True, key=f"sp_dl_docx_{sid}",
-                                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-        except Exception as _e:
-            _pc1.warning(f"Couldn't prepare the Word version: {_e}")
-        try:
-            _pc2.download_button("🖨️ Print-ready version (HTML)", starting_profile_print_html(student, _print_prof),
-                                 file_name=_fn + ".html", mime="text/html", use_container_width=True,
-                                 key=f"sp_dl_html_{sid}")
-        except Exception as _e:
-            _pc2.warning(f"Couldn't prepare the print version: {_e}")
-
-
-import time as _time_mod
-
-
-def _is_transient_db_error(e) -> bool:
-    msg = str(e).lower()
-    return (isinstance(e, (BlockingIOError, ConnectionError, TimeoutError, OSError))
-            or any(x in msg for x in ("temporarily unavailable", "timed out", "timeout", "connection", "reset by peer",
-                                      "eof", "disconnected", "errno 11", "502", "503", "504")))
-
-
-def _db_retry(fn, tries: int = 4, base: float = 0.5):
-    """Run a database call, retrying brief network hiccups (e.g. [Errno 11]
-    'Resource temporarily unavailable') with a short back-off before giving up."""
-    for i in range(tries):
-        try:
-            return fn()
-        except Exception as e:
-            if i == tries - 1 or not _is_transient_db_error(e):
-                raise
-            _time_mod.sleep(base * (2 ** i))
-
-
-def _reload_into_session(key: str, loader):
-    """Refresh a cached list from the database, but never replace good data
-    with an empty list when the database could not be reached."""
-    st.session_state.pop("_load_failed", None)
-    data = loader()
-    if st.session_state.pop("_load_failed", False):
-        st.warning("Couldn't refresh from the database just now, so the previous data is still showing. Please try again in a moment.")
-        return
-    st.session_state[key] = data
-
+def _clean_student_name(row):
+    """Build display name; ignore placeholder last names like '-' so 'BH' stays 'BH'."""
+    fn=str(row.get('first_name') or '').strip()
+    ln=str(row.get('last_name') or '').strip()
+    if ln in ('-','–','—','.','n/a','N/A'): ln=''
+    if fn: return f"{fn} {ln}".strip()
+    return str(row.get('name') or 'Unknown').strip().rstrip('-').strip() or 'Unknown'
 
 def load_students_from_db():
     if not supabase:
         return MOCK_STUDENTS
     try:
-        response = _db_retry(lambda: supabase.table('students').select('*').execute())
+        response = supabase.table('students').select('*').execute()
         students = []
         for row in response.data:
             students.append({
                 "id": str(row['id']),
-                "name": f"{row.get('first_name', '')} {row.get('last_name', '')}".strip() if row.get('first_name') else row.get('name', 'Unknown'),
+                "name": _clean_student_name(row),
                 "first_name": row.get('first_name', ''),
                 "last_name": row.get('last_name', ''),
                 "edid": row.get('edid', ''),
@@ -5464,13 +1439,10 @@ def load_students_from_db():
             })
         return students
     except Exception as e:
-        st.session_state["_load_failed"] = True
         st.error(f"Error loading students: {e}")
         return []
 
 def save_student_to_db(student):
-    if _viewer_write_blocked("save student details"):
-        return False
     if not supabase:
         return False
     try:
@@ -5496,8 +1468,6 @@ def save_student_to_db(student):
         return False
 
 def delete_student_from_db(student_id):
-    if _viewer_write_blocked("delete a student"):
-        return False
     if not supabase:
         return False
     try:
@@ -5511,7 +1481,7 @@ def load_staff_from_db():
     if not supabase:
         return MOCK_STAFF
     try:
-        response = _db_retry(lambda: supabase.table('staff').select('*').execute())
+        response = supabase.table('staff').select('*').execute()
         staff = []
         for row in response.data:
             staff.append({
@@ -5530,12 +1500,9 @@ def load_staff_from_db():
         return staff
     except Exception as e:
         print(f"[load_staff_from_db error]: {e}")  # log to Render logs, not UI
-        st.session_state["_load_failed"] = True
         return []
 
 def save_staff_to_db(staff_member):
-    if _viewer_write_blocked("save staff details"):
-        return False
     if not supabase:
         return False
     try:
@@ -5572,8 +1539,6 @@ def save_staff_to_db(staff_member):
         return False
 
 def delete_staff_from_db(staff_id):
-    if _viewer_write_blocked("delete a staff member"):
-        return False
     if not supabase:
         return False
     try:
@@ -5590,7 +1555,7 @@ def load_incidents_from_db(student_id=None):
         query = supabase.table('incidents').select('*')
         if student_id:
             query = query.eq('student_id', student_id)
-        response = _db_retry(lambda: query.execute())
+        response = query.execute()
         incidents = []
         for row in response.data:
             incidents.append({
@@ -5614,13 +1579,10 @@ def load_incidents_from_db(student_id=None):
             })
         return incidents
     except Exception as e:
-        st.session_state["_load_failed"] = True
         st.error(f"Error loading incidents: {e}")
         return []
 
 def save_incident_to_db(incident):
-    if _viewer_write_blocked("save an incident"):
-        return False
     if not supabase:
         return False
     try:
@@ -5662,7 +1624,7 @@ def load_critical_incidents_from_db(student_id=None):
         query = supabase.table('critical_incidents').select('*')
         if student_id:
             query = query.eq('student_id', student_id)
-        response = _db_retry(lambda: query.execute())
+        response = query.execute()
         critical = []
         for row in response.data:
             critical.append({
@@ -5687,13 +1649,10 @@ def load_critical_incidents_from_db(student_id=None):
             })
         return critical
     except Exception as e:
-        st.session_state["_load_failed"] = True
         st.error(f"Error loading critical incidents: {e}")
         return []
 
 def save_critical_incident_to_db(critical):
-    if _viewer_write_blocked("save a critical incident"):
-        return False
     if not supabase:
         return False
     try:
@@ -5960,27 +1919,14 @@ def init_state():
     if "logged_in" not in ss: ss.logged_in = False
     if "current_user" not in ss: ss.current_user = None
     if "current_page" not in ss: ss.current_page = "login"
-    def _init_load(key, loader, fallback):
-        # A failed load must NOT be cached as "no data": that made incidents look
-        # lost until the session was restarted. Stop with a retry button instead.
-        if key in ss:
-            return
-        if not supabase:
-            ss[key] = fallback() if callable(fallback) else fallback
-            return
-        ss.pop("_load_failed", None)
-        data = loader()
-        if ss.pop("_load_failed", False):
-            st.error("The database couldn't be reached just now (this is usually a brief network hiccup). "
-                     "Nothing has been lost. Please try again.")
-            if st.button("🔄 Try again", key=f"retry_load_{key}"):
-                st.rerun()
-            st.stop()
-        ss[key] = data
-    _init_load("students", load_students_from_db, MOCK_STUDENTS)
-    _init_load("staff", load_staff_from_db, MOCK_STAFF)
-    _init_load("incidents", load_incidents_from_db, lambda: generate_mock_incidents(70))
-    _init_load("critical_incidents", load_critical_incidents_from_db, [])
+    if "students" not in ss:
+        ss.students = load_students_from_db() if supabase else MOCK_STUDENTS
+    if "staff" not in ss:
+        ss.staff = load_staff_from_db() if supabase else MOCK_STAFF
+    if "incidents" not in ss:
+        ss.incidents = load_incidents_from_db() if supabase else generate_mock_incidents(70)
+    if "critical_incidents" not in ss:
+        ss.critical_incidents = load_critical_incidents_from_db() if supabase else []
     if "selected_program" not in ss: ss.selected_program = "JP"
     if "selected_student_id" not in ss: ss.selected_student_id = None
     if "current_incident_id" not in ss: ss.current_incident_id = None
@@ -5992,10 +1938,6 @@ def init_state():
     if "last_saved_incident" not in ss: ss.last_saved_incident = None
 
 def login_user(email: str, password: str) -> bool:
-    # Any real named login clears a leftover view-only bridge flag — a
-    # staff member who was just viewing via Student Snapshot and then
-    # properly signs in gets full access, not a stuck read-only session.
-    st.session_state.pop("_viewer_session", None)
     email = (email or "").strip().lower()
     password = (password or "").strip()
     if not email or not password:
@@ -6044,149 +1986,6 @@ def login_user(email: str, password: str) -> bool:
             st.session_state.current_page = "landing"
             return True
     return False
-
-# ── Persistent sign-in ────────────────────────────────────────────────────
-# Streamlit drops st.session_state whenever the browser connection drops
-# (laptop sleep, idle tab, wifi change, refresh). To stop that logging staff out
-# and losing their place, a signed, expiring token is kept in the page URL
-# (?s=...) together with the current page (?p=) and student (?sid=). On a fresh
-# session the token is verified and the user is put straight back where they were.
-AUTH_TTL_SECONDS = 10 * 60 * 60      # stay signed in for 10 hours of the same browser tab
-AUTH_REFRESH_SECONDS = 15 * 60       # re-issue the token when this much time has passed
-
-
-def _auth_secret() -> bytes:
-    import os, hashlib
-    sec = ""
-    try:
-        sec = st.secrets.get("auth_secret", "") or ""
-    except Exception:
-        sec = ""
-    sec = sec or os.environ.get("BEHAVIOUR_AUTH_SECRET", "")
-    if not sec:
-        # Fallback: derived from existing private settings so no new setup is required.
-        parts = []
-        try:
-            parts.append(str(st.secrets.get("admin", {}).get("password", "")))
-            parts.append(str(st.secrets.get("supabase", {}).get("key", "")))
-        except Exception:
-            pass
-        parts.append(os.environ.get("BEHAVIOUR_ADMIN_PASSWORD", ""))
-        sec = "clc-lbu|" + "|".join(parts)
-    return hashlib.sha256(sec.encode("utf-8")).digest()
-
-
-def make_auth_token(user: dict) -> str:
-    import base64, hmac, hashlib, json, time
-    payload = {"id": str(user.get("id", "")), "role": user.get("role", ""),
-               "exp": int(time.time()) + AUTH_TTL_SECONDS, "iat": int(time.time())}
-    body = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode().rstrip("=")
-    sig = hmac.new(_auth_secret(), body.encode(), hashlib.sha256).hexdigest()[:32]
-    return f"{body}.{sig}"
-
-
-def read_auth_token(token: str):
-    import base64, hmac, hashlib, json, time
-    try:
-        body, sig = (token or "").split(".", 1)
-        good = hmac.new(_auth_secret(), body.encode(), hashlib.sha256).hexdigest()[:32]
-        if not hmac.compare_digest(sig, good):
-            return None
-        data = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)).decode())
-        if int(data.get("exp", 0)) < time.time():
-            return None
-        return data
-    except Exception:
-        return None
-
-
-def _qp_get(key: str) -> str:
-    try:
-        v = st.query_params.get(key, "")
-        return v[0] if isinstance(v, list) else (v or "")
-    except Exception:
-        try:
-            return st.experimental_get_query_params().get(key, [""])[0]
-        except Exception:
-            return ""
-
-
-def _qp_set(**items):
-    """Set/clear URL params (empty/None clears) without touching others, only when changed."""
-    try:
-        qp = st.query_params
-        for k, v in items.items():
-            if v:
-                if qp.get(k, "") != str(v):
-                    qp[k] = str(v)
-            elif k in qp:
-                del qp[k]
-    except Exception:
-        pass
-
-
-def restore_login_from_url() -> bool:
-    ss = st.session_state
-    data = read_auth_token(_qp_get("s"))
-    if not data:
-        return False
-    uid = data.get("id")
-    user = None
-    if uid == "admin_bypass":
-        import os
-        try:
-            em = st.secrets.get("admin", {}).get("email", "") or os.environ.get("BEHAVIOUR_ADMIN_EMAIL", "")
-        except Exception:
-            em = os.environ.get("BEHAVIOUR_ADMIN_EMAIL", "")
-        if em:
-            user = {"id": "admin_bypass", "name": "Admin", "email": em, "role": "ADM"}
-    elif uid == "_viewer":
-        # A view-only bridge session (see _try_viewer_bridge) — reconstruct
-        # the same read-only identity on a reconnect/refresh, never upgrade it.
-        user = dict(_VIEWER_USER)
-    else:
-        user = next((s for s in ss.get("staff", []) if str(s.get("id")) == str(uid)), None)
-    if not user:
-        return False
-    ss.logged_in = True
-    ss.current_user = user
-    if uid == "_viewer":
-        ss["_viewer_session"] = True
-    p = _qp_get("p")
-    if uid == "_viewer":
-        ss.current_page = p if p in _VIEWER_SAFE_PAGES else "landing"
-    else:
-        ss.current_page = p if (p in VALID_PAGES and p != "login") else "landing"
-    sid = _qp_get("sid")
-    if sid and any(str(s.get("id")) == sid for s in ss.get("students", [])):
-        match = next(s for s in ss.students if str(s.get("id")) == sid)
-        ss.selected_student_id = match["id"]
-    ss["_auth_issued"] = float(data.get("iat", 0))
-    return True
-
-
-def persist_login_to_url():
-    import time
-    ss = st.session_state
-    if not ss.get("logged_in") or not ss.get("current_user"):
-        return
-    issued = ss.get("_auth_issued", 0) or 0
-    if not _qp_get("s") or time.time() - issued > AUTH_REFRESH_SECONDS:
-        _qp_set(s=make_auth_token(ss.current_user))
-        ss["_auth_issued"] = time.time()
-    _qp_set(p=ss.get("current_page") if ss.get("current_page") != "landing" else "",
-            sid=str(ss.get("selected_student_id") or ""))
-
-
-def do_logout():
-    ss = st.session_state
-    ss.logged_in = False
-    ss.current_user = None
-    ss.current_page = "login"
-    ss.pop("_auth_issued", None)
-    ss.pop("_viewer_session", None)
-    _qp_set(s="", p="", sid="")
-
 
 def go_to(page: str, **kwargs):
     if page not in VALID_PAGES: return
@@ -6293,7 +2092,8 @@ def render_landing_page():
     with col_logout:
         st.markdown("<div style='height:1.2rem'></div>", unsafe_allow_html=True)
         if st.button("Sign Out", key="logout_btn_landing"):
-            do_logout()
+            st.session_state.logged_in = False
+            st.session_state.current_page = "login"
             st.rerun()
     if st.session_state.current_user.get("role") == "ADM":
         st.markdown("---")
@@ -6412,13 +2212,8 @@ def render_program_students_page():
                     go_to("student_dashboard", selected_student_id=stu["id"])
                 if st.button("📝 Log", key=f"log_{stu['id']}", use_container_width=True):
                     go_to("incident_log", selected_student_id=stu["id"])
-                if st.button("🌡️ Micro", key=f"micro_{stu['id']}", use_container_width=True,
-                             help="Log an early-warning sign (micro behaviour)"):
-                    go_to("micro_log", selected_student_id=stu["id"])
                 if st.button("📈 Analysis", key=f"ana_{stu['id']}", use_container_width=True):
                     go_to("student_analysis", selected_student_id=stu["id"])
-                if st.button("📋 Plan", key=f"plan_{stu['id']}", use_container_width=True):
-                    go_to("support_plan", selected_student_id=stu["id"])
                 if st.session_state.get("is_admin") or (st.session_state.get("current_user") or {}).get("role") == "ADM":
                     if st.button("📦 Archive", key=f"archive_prog_{stu['id']}", use_container_width=True):
                         stu['archived'] = True
@@ -6427,7 +2222,6 @@ def render_program_students_page():
                                 supabase.table('students').update({'archived': True}).eq('id', stu['id']).execute()
                             except Exception as e:
                                 st.error(f"Archive failed: {e}")
-                        generate_and_archive_behaviour_summary(stu)
                         st.rerun()
 
 
@@ -6438,7 +2232,7 @@ def render_incident_log_page():
         st.error("No student selected")
         return
     st.markdown(f"## 📝 Incident Log — {student['name']}")
-    col1, col2, col3 = st.columns([3, 1, 1])
+    col1, col2 = st.columns([3, 1])
     with col1:
         if st.button("⬅ Back to Students", key="back_log_top"):
             # Clear prefill state when navigating away
@@ -6450,9 +2244,6 @@ def render_incident_log_page():
             st.session_state.incident_prefill = None
             st.session_state.last_saved_incident = None
             go_to("landing")
-    with col3:
-        if st.button("📋 Support Plan", key="sp_from_log"):
-            go_to("support_plan", selected_student_id=student_id)
     show_severity_guide()
     if st.session_state.show_critical_prompt:
         inc_info = st.session_state.get("last_incident_info", {})
@@ -7042,813 +2833,7 @@ def render_leader_approve_critical_page():
             st.error("❌ Failed to save approval to database")
 
 
-def _parse_dates(series):
-    """Robust date parsing for mixed formats (e.g. '2026-09-10', '2026-09-10T09:15:00',
-    '...+00:00', with/without microseconds). pandas otherwise infers ONE format from the
-    first row and silently turns every row in a different format into NaT, which made
-    valid incidents disappear from the analysis."""
-    try:
-        out = pd.to_datetime(series, utc=True, errors="coerce", format="mixed")
-    except (TypeError, ValueError):
-        out = pd.to_datetime(series, utc=True, errors="coerce")
-    return out.dt.tz_localize(None)
-
-
-def render_demand_avoidance_section(full_df):
-    sig = demand_avoidance_signal(full_df)
-    if sig["flag"]:
-        st.info(f"{sig['n']} of {sig['total']} incidents ({sig['pct']*100:.0f}%) were linked to demands, "
-                "instructions, transitions or refusal/avoidance. That pattern fits a demand-avoidant "
-                "presentation. This is a prompt for team discussion, not a diagnosis, and the approach "
-                "below helps whether or not a diagnosis (e.g. ODD or PDA profile) exists.")
-    else:
-        st.caption("Not strongly indicated by this student's data, but these approaches are useful for any "
-                   "student who reacts to being told what to do.")
-    with st.expander("Demand-avoidant presentations — low-demand, perceived-choice approach", expanded=sig["flag"]):
-        st.markdown("**Core idea:** for these students, direct demands can feel like a loss of control, which "
-                    "triggers the threat response. Lower the demand, share control, and let the student say yes "
-                    "on their own terms. This is Regulate-before-Reason in practice.")
-        for item in DEMAND_AVOIDANCE_STRATEGIES:
-            st.markdown(f"- **{item['domain']}:** {item['strategy']}")
-        st.markdown("**Perceived choice: reframing the language**")
-        st.caption("Both options must be acceptable to you. The choice is in the how, when, where or with whom, not whether.")
-        for _instead, _try in PERCEIVED_CHOICE_PHRASES:
-            st.markdown(f"- Instead of *\"{_instead}\"* try *\"{_try}\"*")
-
-
-# ============================================
-# TRANSITION IMPACT — before vs after starting to split time between sites
-# ============================================
-# Reads this student's Transition Timetable from the students-register
-# Supabase project via transition_utils (the same shared module Student
-# Snapshot uses — lives in a different project than this tool's own
-# incidents/critical_incidents data, hence the separate client). Splits
-# this student's existing full_df (already loaded for the page) on the
-# first date their timetable has them away from CLC at all, and compares
-# incident rate/severity either side of that date. Shows nothing if the
-# Transition Timetables tool isn't deployed, or this student has no
-# timetable on file, or that timetable has no days away from CLC yet.
-def _transition_weeks_from(view: dict) -> list:
-    """Mirrors Student Snapshot's _loads()+tt_weeks(): accept weeks stored
-    as a JSON string or already a list/dict, then sort if tu can."""
-    raw = view.get("weeks")
-    if raw is None:
-        weeks = []
-    elif isinstance(raw, (list, dict)):
-        weeks = raw
-    else:
-        try:
-            weeks = json.loads(raw)
-        except Exception:
-            weeks = []
-    return weeks or []
-
-
-def render_transition_impact_section(student, full_df):
-    try:
-        import transition_utils as tu
-    except Exception:
-        return  # Transition Timetables tool not deployed on this portal
-
-    ini = _student_archive_initials(student)
-    if not ini:
-        return
-
-    try:
-        _tclient = tu.get_students_client()
-        _rows = (_tclient.table(tu.TABLE_TIMETABLES).select("*")
-                 .eq("student_initials", ini).order("updated_at", desc=True).execute().data or [])
-    except Exception:
-        return  # students-register project unreachable — stay quiet rather than alarm staff
-    if not _rows:
-        return  # no Transition Timetable on file for this student — most students
-                 # won't have one, so staying silent here is the right default.
-
-    # From this point on, a Transition Timetable DOES exist for this student,
-    # so staff would reasonably expect to see this section. Rather than
-    # silently disappearing (which looks identical to "this feature doesn't
-    # exist" from the staff side), explain in one line why there's nothing
-    # to compare yet.
-    tt = None
-    for _want in ("published", "active", "draft", "complete"):
-        tt = next((r for r in _rows if r.get("status") == _want), None)
-        if tt:
-            break
-    tt = tt or _rows[0]
-
-    try:
-        view = tu.live_view(tt) if tu.is_live(tt) else tt
-    except Exception:
-        view = tt
-    weeks = _transition_weeks_from(view)
-    try:
-        weeks = tu.sort_weeks(weeks)
-    except Exception:
-        pass
-    if not weeks:
-        st.markdown("### 🚌 Before vs After Starting to Split Time Between Sites")
-        st.caption(f"{ini} has a Transition Timetable on file, but it doesn't have any weeks set up in it yet "
-                   "— nothing to compare until it does.")
-        st.markdown("---")
-        return
-
-    split_date = None
-    for _wk in weeks:
-        for _d in (_wk.get("days") or []):
-            _loc = _d.get("loc")
-            if _loc and _loc != "CLC" and _d.get("date"):
-                try:
-                    _dd = date.fromisoformat(str(_d["date"])[:10])
-                except Exception:
-                    continue
-                if split_date is None or _dd < split_date:
-                    split_date = _dd
-    if split_date is None:
-        st.markdown("### 🚌 Before vs After Starting to Split Time Between Sites")
-        st.caption(f"{ini} has a Transition Timetable on file, but no day away from CLC has been scheduled "
-                   "in it yet — nothing to compare until a day at the home school is added.")
-        st.markdown("---")
-        return  # timetable on file, but no day away from CLC recorded yet
-
-    today = date.today()
-    pl_start = None
-    if student.get("placement_start"):
-        try:
-            pl_start = date.fromisoformat(str(student["placement_start"])[:10])
-        except Exception:
-            pl_start = None
-    before_start = pl_start if (pl_start and pl_start < split_date) else (split_date - timedelta(days=70))
-
-    def _school_days(a, b):
-        n, d = 0, a
-        while d <= b:
-            if d.weekday() < 5:
-                n += 1
-            d += timedelta(days=1)
-        return n
-
-    days_before = _school_days(before_start, split_date - timedelta(days=1))
-    days_after = _school_days(split_date, today)
-    if days_before < 5 or days_after < 5:
-        st.markdown("### 🚌 Before vs After Starting to Split Time Between Sites")
-        st.caption(
-            f"{ini}'s Transition Timetable has them away from CLC from **{split_date.strftime('%-d %b %Y')}**, "
-            f"but there's not yet a full school week of incident/attendance data on both sides to compare "
-            f"({days_before} school day(s) recorded before, {days_after} since) — check back once there's at "
-            "least a week either side."
-        )
-        st.markdown("---")
-        return  # not enough school time either side yet for a meaningful comparison
-
-    st.markdown("### 🚌 Before vs After Starting to Split Time Between Sites")
-    _status_note = {"published": "published", "active": "active", "draft": "draft (not yet published)",
-                     "complete": "completed"}.get(tt.get("status"), tt.get("status") or "on file")
-    st.caption(
-        f"{ini}'s Transition Timetable ({_status_note}) first has them away from CLC from "
-        f"**{split_date.strftime('%-d %b %Y')}**. Comparing incidents before that date to incidents since, "
-        "as a rate per school week so the two periods are comparable even though they're different lengths."
-    )
-
-    dp = full_df["date_parsed"].dt.date
-    before_df = full_df[(dp >= before_start) & (dp < split_date)]
-    after_df = full_df[(dp >= split_date) & (dp <= today)]
-    wk_before, wk_after = days_before / 5, days_after / 5
-
-    n_crit_before = int((before_df["incident_type"] == "Critical").sum()) if "incident_type" in before_df.columns else 0
-    n_crit_after = int((after_df["incident_type"] == "Critical").sum()) if "incident_type" in after_df.columns else 0
-    rate_before, rate_after = len(before_df) / wk_before, len(after_df) / wk_after
-    sev_before = before_df["severity"].mean() if len(before_df) else None
-    sev_after = after_df["severity"].mean() if len(after_df) else None
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.metric("Incidents / school week", f"{rate_after:.1f}",
-                   delta=f"{rate_after - rate_before:+.1f} vs {rate_before:.1f} before", delta_color="inverse")
-    with c2:
-        if sev_before is not None and sev_after is not None:
-            st.metric("Average severity", f"{sev_after:.1f}",
-                       delta=f"{sev_after - sev_before:+.1f} vs {sev_before:.1f} before", delta_color="inverse")
-        else:
-            st.metric("Average severity", f"{sev_after:.1f}" if sev_after is not None else "—")
-    with c3:
-        st.metric("Critical incidents / week", f"{n_crit_after / wk_after:.2f}",
-                   delta=f"{(n_crit_after / wk_after) - (n_crit_before / wk_before):+.2f} vs before",
-                   delta_color="inverse")
-
-    _wk_b = before_df.groupby(before_df["date_parsed"].dt.to_period("W").apply(lambda p: p.start_time)).size()
-    _wk_a = after_df.groupby(after_df["date_parsed"].dt.to_period("W").apply(lambda p: p.start_time)).size()
-    fig = go.Figure()
-    fig.add_bar(x=list(_wk_b.index), y=list(_wk_b.values), name="Before", marker_color="#6b7c7c")
-    fig.add_bar(x=list(_wk_a.index), y=list(_wk_a.values), name="After (two sites)", marker_color="#C8760A")
-    # add_vline() with a plain datetime.date on a date-typed bar axis hits a
-    # known plotly bug (its annotation-position averaging code chokes on
-    # mixed int/date types -> "unsupported operand type(s) for +: 'int' and
-    # 'datetime.date'"). add_shape()+add_annotation() does the same thing
-    # without going through that buggy code path.
-    _split_x = pd.Timestamp(split_date)
-    fig.add_shape(type="line", x0=_split_x, x1=_split_x, y0=0, y1=1, yref="paper",
-                  line=dict(dash="dash", color="#c0392b"))
-    fig.add_annotation(x=_split_x, y=1, yref="paper", yanchor="bottom", showarrow=False,
-                        text="Transition begins", font=dict(color="#c0392b", size=11))
-    fig.update_layout(title=dict(text="Incidents per week", font=dict(size=14)), height=280,
-                       margin=dict(l=10, r=10, t=40, b=10),
-                       legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
-    st.plotly_chart(fig, use_container_width=True)
-
-    if rate_before == 0:
-        _verdict = "No incidents in the comparable period before the transition began." if rate_after == 0 else \
-                   "No incidents before the transition began, but incidents since — worth a closer look."
-    elif rate_after > rate_before * 1.15:
-        _verdict = f"Incident rate is up {((rate_after / rate_before) - 1) * 100:.0f}% since starting to split time between sites."
-    elif rate_after < rate_before * 0.85:
-        _verdict = f"Incident rate is down {(1 - (rate_after / rate_before)) * 100:.0f}% since starting to split time between sites."
-    else:
-        _verdict = "Incident rate is broadly similar before and after — managing the two sites doesn't look like the main driver here."
-    st.markdown(f"**{_verdict}** ({len(before_df)} incidents / {wk_before:.0f} school weeks before vs "
-                f"{len(after_df)} / {wk_after:.0f} school weeks after.)")
-
-    # ── Attendance before vs after the same split date ─────────────────────
-    # Reuses the student's existing attendance model (the same one behind
-    # the Attendance tab) rather than anything incident-specific, so this
-    # reads the actual recorded schedule/exceptions for this student.
-    try:
-        _att_state = attendance_state(student.get("id"))
-        if _att_state.get("schedule") or _att_state.get("exceptions"):
-            _sm_before = attendance_summary(_att_state, before_start, split_date - timedelta(days=1))
-            _sm_after = attendance_summary(_att_state, split_date, today)
-            if _sm_before["expected"] and _sm_after["expected"]:
-                _pct_before = _sm_before["attended"] / _sm_before["expected"] * 100
-                _pct_after = _sm_after["attended"] / _sm_after["expected"] * 100
-                st.markdown("**🗓️ Attendance before vs after the transition began**")
-                a1, a2, a3 = st.columns(3)
-                with a1:
-                    st.metric("Attendance rate", f"{_pct_after:.0f}%",
-                              delta=f"{_pct_after - _pct_before:+.0f} pts vs {_pct_before:.0f}% before")
-                with a2:
-                    st.metric("Absent days / school week", f"{_sm_after['absent_days'] / wk_after:.2f}",
-                              delta=f"{(_sm_after['absent_days'] / wk_after) - (_sm_before['absent_days'] / wk_before):+.2f} vs before",
-                              delta_color="inverse")
-                with a3:
-                    st.metric("Early finishes / school week", f"{_sm_after['early_days'] / wk_after:.2f}",
-                              delta=f"{(_sm_after['early_days'] / wk_after) - (_sm_before['early_days'] / wk_before):+.2f} vs before",
-                              delta_color="inverse")
-                if _pct_after < _pct_before - 5:
-                    _att_verdict = (f"Attendance has dropped {_pct_before - _pct_after:.0f} percentage points "
-                                     "since starting to split time between sites.")
-                elif _pct_after > _pct_before + 5:
-                    _att_verdict = (f"Attendance has improved {_pct_after - _pct_before:.0f} percentage points "
-                                     "since starting to split time between sites.")
-                else:
-                    _att_verdict = ("Attendance rate is broadly similar before and after — managing the two "
-                                     "sites doesn't look like it's affecting attendance.")
-                st.markdown(f"*{_att_verdict}* ({_sm_before['attended']}/{_sm_before['expected']} sessions "
-                            f"before vs {_sm_after['attended']}/{_sm_after['expected']} after.)")
-            else:
-                st.caption("Not enough attendance recorded either side of the transition date yet for a comparison.")
-    except Exception:
-        pass  # attendance model unavailable for this student — stay quiet rather than alarm staff
-
-    st.markdown("---")
-
-
-# ============================================
-# SCREEN CAPTURE -> PRINTABLE HTML
-# ============================================
-# The Analysis page is built from Streamlit calls (markdown, charts, metrics,
-# info boxes...). While it renders, these thin wrappers record each call, in
-# order, in addition to drawing it. The recording is then turned into a single
-# print-ready page (A4, charts included, "Understanding this chart" notes and
-# all) so the printed version is literally what is on screen. Interactive
-# controls (buttons, forms, inputs) are not recorded.
-import html as _html_mod
-
-_SCREEN = {"on": False, "paused": False, "rec": []}
-
-
-def _scr_add(kind, *payload):
-    if _SCREEN["on"] and not _SCREEN["paused"]:
-        _SCREEN["rec"].append((kind, *payload))
-
-
-def screen_capture_start():
-    _SCREEN.update(on=True, paused=False, rec=[])
-    _orig = {n: getattr(st, n) for n in ("markdown", "caption", "write", "info", "warning", "success", "error",
-                                         "metric", "plotly_chart", "dataframe", "table", "code", "subheader",
-                                         "header", "divider", "expander")}
-    _SCREEN["orig"] = _orig
-
-    def _mk(name, fn):
-        def wrapper(*a, **k):
-            try:
-                fn(*a, **k)
-            except Exception:
-                pass
-            return _orig[name](*a, **k)
-        return wrapper
-
-    def _markdown(body="", *a, **k):
-        t = str(body)
-        if "<style" in t or "<script" in t:
-            return
-        if t.lstrip().startswith("### 👁️ View, Edit"):
-            _SCREEN["paused"] = True
-        _scr_add("md", t, bool(k.get("unsafe_allow_html", False)))
-
-    st.markdown = _mk("markdown", _markdown)
-    st.caption = _mk("caption", lambda body="", *a, **k: _scr_add("caption", str(body)))
-    st.write = _mk("write", lambda *a, **k: [_scr_add("md", x, False) for x in a if isinstance(x, str)])
-    for _n in ("info", "warning", "success", "error"):
-        st.__dict__[_n] = _mk(_n, (lambda nn: (lambda body="", *a, **k: _scr_add("alert", nn, str(body))))(_n))
-    st.metric = _mk("metric", lambda label="", value="", delta=None, *a, **k: _scr_add("metric", str(label), str(value), None if delta is None else str(delta)))
-    st.plotly_chart = _mk("plotly_chart", lambda fig=None, *a, **k: _scr_add("fig", fig))
-    st.dataframe = _mk("dataframe", lambda data=None, *a, **k: _scr_add("df", data))
-    st.table = _mk("table", lambda data=None, *a, **k: _scr_add("df", data))
-    st.code = _mk("code", lambda body="", *a, **k: _scr_add("code", str(body)))
-    st.subheader = _mk("subheader", lambda body="", *a, **k: _scr_add("md", f"### {body}", False))
-    st.header = _mk("header", lambda body="", *a, **k: _scr_add("md", f"## {body}", False))
-    st.divider = _mk("divider", lambda *a, **k: _scr_add("md", "---", False))
-    st.expander = _mk("expander", lambda label="", *a, **k: _scr_add("md", f"#### {label}", False))
-
-
-def screen_capture_stop():
-    _orig = _SCREEN.get("orig") or {}
-    for n, f in _orig.items():
-        try:
-            if n in st.__dict__:
-                del st.__dict__[n]
-            setattr(st, n, f)
-        except Exception:
-            pass
-    _SCREEN["on"] = False
-
-
-def _inline_md(t: str) -> str:
-    t = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", t)
-    t = re.sub(r"(?<![\*\w])\*(?!\s)(.+?)(?<!\s)\*(?![\*\w])", r"<i>\1</i>", t)
-    t = re.sub(r"`([^`]+)`", r"<code>\1</code>", t)
-    t = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r'<a href="\2">\1</a>', t)
-    return t
-
-
-def _md_to_html(text: str, allow_html: bool) -> str:
-    """Small markdown subset: headings, bullets, numbered lists, tables, rules, bold/italic/code."""
-    if not allow_html:
-        text = _html_mod.escape(text, quote=False)
-    out, para, in_ul, in_ol, tbl = [], [], False, False, []
-
-    def flush_para():
-        nonlocal para
-        if para:
-            out.append("<p>" + "<br>".join(_inline_md(x) for x in para) + "</p>")
-            para = []
-
-    def close_lists():
-        nonlocal in_ul, in_ol
-        if in_ul: out.append("</ul>"); in_ul = False
-        if in_ol: out.append("</ol>"); in_ol = False
-
-    def flush_tbl():
-        nonlocal tbl
-        if tbl:
-            rows = [r for r in tbl if not re.match(r"^\s*\|?\s*:?-{2,}", r)]
-            html_rows = []
-            for i, r in enumerate(rows):
-                cells = [c.strip() for c in r.strip().strip("|").split("|")]
-                tag = "th" if i == 0 else "td"
-                html_rows.append("<tr>" + "".join(f"<{tag}>{_inline_md(c)}</{tag}>" for c in cells) + "</tr>")
-            out.append("<table class='md'>" + "".join(html_rows) + "</table>")
-            tbl = []
-
-    for line in text.split("\n"):
-        st_ = line.strip()
-        if st_.startswith("|") and st_.endswith("|"):
-            flush_para(); close_lists(); tbl.append(st_); continue
-        flush_tbl()
-        if not st_:
-            flush_para(); close_lists(); continue
-        m = re.match(r"^(#{1,6})\s+(.*)$", st_)
-        if m:
-            flush_para(); close_lists()
-            lvl = max(len(m.group(1)), 2)
-            out.append(f"<h{lvl}>{_inline_md(m.group(2))}</h{lvl}>"); continue
-        if re.match(r"^-{3,}$|^\*{3,}$", st_):
-            flush_para(); close_lists(); out.append("<hr>"); continue
-        m = re.match(r"^[-*•]\s+(.*)$", st_)
-        if m:
-            flush_para()
-            if in_ol: out.append("</ol>"); in_ol = False
-            if not in_ul: out.append("<ul>"); in_ul = True
-            out.append(f"<li>{_inline_md(m.group(1))}</li>"); continue
-        m = re.match(r"^\d+[.)]\s+(.*)$", st_)
-        if m:
-            flush_para()
-            if in_ul: out.append("</ul>"); in_ul = False
-            if not in_ol: out.append("<ol>"); in_ol = True
-            out.append(f"<li>{_inline_md(m.group(1))}</li>"); continue
-        if st_.startswith("<") and allow_html:
-            flush_para(); close_lists(); out.append(line); continue
-        close_lists(); para.append(st_)
-    flush_para(); close_lists(); flush_tbl()
-    return "\n".join(out)
-
-
-def build_print_html(student, full_df, records, supports_trialled="", supports_success="",
-                     before_after=None, trials=None, bsem_items=None) -> bytes:
-    """Assemble the recorded screen into one printable HTML document."""
-    import plotly.graph_objects as _go
-    from plotly.offline import get_plotlyjs
-    esc = lambda v: _html_mod.escape(_tr_text(v, "—"))
-    body, metrics = [], []
-
-    def flush_metrics():
-        if metrics:
-            body.append("<div class='metrics'>" + "".join(
-                f"<div class='metric'><div class='ml'>{_html_mod.escape(l)}</div><div class='mv'>{_html_mod.escape(v)}</div>"
-                + (f"<div class='md_'>{_html_mod.escape(d)}</div>" if d else "") + "</div>" for l, v, d in metrics) + "</div>")
-            metrics.clear()
-
-    fig_n = 0
-    for rec in records:
-        kind = rec[0]
-        if kind == "metric":
-            metrics.append((rec[1], rec[2], rec[3])); continue
-        flush_metrics()
-        if kind == "md":
-            body.append(f"<div class='blk'>{_md_to_html(rec[1], rec[2])}</div>")
-        elif kind == "caption":
-            body.append(f"<p class='cap'>{_inline_md(_html_mod.escape(rec[1], quote=False))}</p>")
-        elif kind == "alert":
-            body.append(f"<div class='alert {rec[1]}'>{_md_to_html(rec[2], False)}</div>")
-        elif kind == "code":
-            body.append(f"<pre>{_html_mod.escape(rec[1])}</pre>")
-        elif kind == "df":
-            try:
-                d = rec[1]
-                d = d.data if hasattr(d, "data") and hasattr(d, "to_html") else d
-                body.append("<div class='tbl'>" + pd.DataFrame(d).to_html(index=False, border=0, classes="data", na_rep="—") + "</div>")
-            except Exception:
-                pass
-        elif kind == "fig":
-            try:
-                f = _go.Figure(rec[1])
-                f.update_layout(template="plotly_white", paper_bgcolor="white", width=None, autosize=True)
-                fig_n += 1
-                body.append("<div class='fig'>" + f.to_html(full_html=False, include_plotlyjs=False,
-                            config={"displayModeBar": False, "responsive": True}, div_id=f"fig{fig_n}") + "</div>")
-            except Exception:
-                pass
-        elif kind == "bsem":
-            for it in rec[1]:
-                why = _tr_text(it.get("why")); how = _tr_text(it.get("how"))
-                body.append(f"<div class='card'><b>{esc(it.get('domain'))}</b> — {esc(it.get('strategy'))}"
-                            + (f"<p><b>Why it fits:</b> {esc(why)}</p>" if why and not why.startswith("[DEBUG]") else "")
-                            + (f"<p><b>How to put it in place:</b> {esc(how)}</p>" if how and not how.startswith("[DEBUG]") else "")
-                            + "</div>")
-        elif kind == "wot":
-            for z in WOT_ZONES:
-                zd = rec[1].get(z["id"])
-                if not zd:
-                    continue
-                cols = "".join(f"<td><b>{h}</b><ul>" + "".join(f"<li>{esc(x)}</li>" for x in (items or ["— none logged —"])) + "</ul></td>"
-                               for h, items in (("Context", zd["context"]), ("Behaviour", zd["behaviour"]), ("Interventions", zd["interventions"])))
-                _rows_html = f"<tr>{cols}</tr>" if zd["n"] else ""
-                _mz = zd.get("micro")
-                if _mz:
-                    _mcols = "".join(f"<td><b>{h}</b><ul>" + "".join(f"<li>{esc(x)}</li>" for x in (_mz[k] or ["—"])) + "</ul></td>"
-                                     for h, k in MICRO_WOT_COLS)
-                    _rows_html += (f"<tr><td colspan='3' style='color:{z['color']};font-weight:700;'>"
-                                   f"Micro behaviours — coping signs ({_mz['n']} entries)</td></tr><tr>{_mcols}</tr>")
-                body.append(f"<table class='wot' style='border-color:{z['color']}'><tr><th colspan='3' style='background:{z['color']}'>"
-                            f"{esc(z['label'])} — {esc(_wot_zone_heading(zd))}</th></tr>{_rows_html}</table>")
-    flush_metrics()
-
-    # ── appended: supports trialled, register, meeting notes ──
-    if (supports_trialled or "").strip() or (supports_success or "").strip():
-        body.append("<h3 class='pb'>Supports Trialled</h3><table class='md'><tr><th>Supports / strategies trialled</th><th>How successful?</th></tr>"
-                    f"<tr><td>{esc(supports_trialled)}</td><td>{esc(supports_success)}</td></tr></table>")
-        if before_after and not before_after.get("insufficient"):
-            b = before_after
-            chg = "" if b.get("pct_rate_change") is None else (
-                f" ({abs(b['pct_rate_change']):.0f}% {'fewer' if b['pct_rate_change'] < 0 else 'more'} incidents per week since the trial date)")
-            body.append(f"<p>Before ({b['weeks_before']:.1f} wks): {b['rate_before']:.1f}/week. After ({b['weeks_after']:.1f} wks): "
-                        f"{b['rate_after']:.1f}/week{chg}. Preliminary read.</p>")
-    rows = []
-    for _, r in full_df.sort_values("date_parsed").iterrows():
-        desc = _tr_text(r.get("description"))
-        if not desc and isinstance(r.get("ABCH_primary"), dict):
-            desc = _tr_text(r["ABCH_primary"].get("behaviour"))
-        sev = pd.to_numeric(r.get("severity"), errors="coerce")
-        iv = r.get("intervention")
-        iv = ", ".join(str(x) for x in iv if x) if isinstance(iv, (list, tuple)) else _tr_text(iv)
-        rows.append("<tr>" + "".join(f"<td>{esc(c)}</td>" for c in [
-            r["date_parsed"].strftime("%d/%m/%y"), _tr_text(r.get("time"))[:5], "C" if r.get("incident_type") == "Critical" else "Q",
-            _tr_text(r.get("location")), _tr_text(r.get("behaviour_type")), _tr_text(r.get("antecedent")),
-            "—" if pd.isna(sev) else int(sev), iv or "—", desc or "—"]) + "</tr>")
-    body.append(f"<h3 class='pb'>Incident Register — all {len(full_df)} dated incidents</h3><p class='cap'>Oldest first. Q = Quick log, C = Critical (ABCH).</p>"
-                "<table class='data reg'><tr><th>Date</th><th>Time</th><th>Type</th><th>Location</th><th>Behaviour</th><th>Antecedent</th><th>Sev</th>"
-                "<th>Interventions</th><th>Notes</th></tr>" + "".join(rows) + "</table>")
-    body.append("<h3 class='pb'>Meeting Notes & Agreed Actions</h3><div class='lines'>Date of meeting: ____________   Present: ______________________________</div>"
-                "<div class='notes'>Notes</div><table class='data act'><tr><th>Agreed action</th><th>Who</th><th>By when</th></tr>"
-                + "<tr><td></td><td></td><td></td></tr>" * 6 + "</table>")
-
-    dp = full_df["date_parsed"]
-    cover = (f"<div class='cover'><h1>Full Analysis — {_html_mod.escape(student['name'])}</h1>"
-             f"<p>Cowandilla Learning Centre · LBU {_html_mod.escape(str(student.get('program','')))} Program · printed {datetime.now().strftime('%d %B %Y')}<br>"
-             f"Data period {dp.min().strftime('%d/%m/%Y')} – {dp.max().strftime('%d/%m/%Y')} · {len(full_df)} dated incidents</p></div>")
-    css = """
-    @page { size: A4; margin: 14mm 13mm 16mm; @bottom-center { content: "CONFIDENTIAL — Page " counter(page); font: 8pt Arial; color:#666 } }
-    * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    body { font: 10.5pt/1.45 Arial, Helvetica, sans-serif; color:#1f2937; margin:0 auto; max-width:190mm; padding:10px; }
-    .bar { position: sticky; top:0; background:#134e4a; color:#fff; padding:8px 12px; margin-bottom:12px; border-radius:6px; display:flex; justify-content:space-between; align-items:center; }
-    .bar button { background:#fff; color:#134e4a; border:0; padding:6px 14px; border-radius:6px; font-weight:700; cursor:pointer; }
-    .cover { background:#1A7A6E; color:#fff; padding:14px 18px; border-radius:8px; margin-bottom:10px; } .cover h1 { margin:0 0 4px; font-size:20pt; } .cover p { margin:0; color:#fef3c7; }
-    h2 { font-size:15pt; color:#134e4a; margin:14px 0 4px; break-after: avoid; } h3 { background:#2E4057; color:#fff; padding:5px 9px; border-radius:4px; font-size:12pt; margin:16px 0 6px; break-after: avoid; }
-    h4 { font-size:11pt; color:#2E4057; margin:10px 0 3px; break-after: avoid; border-bottom:1px solid #cbd5e1; } h5,h6 { margin:8px 0 2px; break-after: avoid; }
-    p { margin:4px 0; orphans:3; widows:3; } .cap { color:#475569; font-style:italic; font-size:9.5pt; }
-    .blk, .fig, .card, .alert, table, pre, .metrics, .lines, .notes { break-inside: avoid; } .pb { break-before: page; }
-    .blk > div { break-inside: avoid; }
-    .fig { margin:6px 0; border:1px solid #e2e8f0; border-radius:6px; padding:4px; overflow:hidden; } .fig .plotly-graph-div { width:100% !important; }
-    .alert { border-left:4px solid #3b82f6; background:#eff6ff; padding:6px 10px; margin:6px 0; border-radius:4px; } .alert.warning { border-color:#f59e0b; background:#fffbeb; }
-    .alert.success { border-color:#10b981; background:#ecfdf5; } .alert.error { border-color:#ef4444; background:#fef2f2; }
-    .metrics { display:flex; flex-wrap:wrap; gap:8px; margin:6px 0; } .metric { flex:1 1 90px; border:1px solid #cbd5e1; border-radius:6px; padding:6px 8px; background:#f8fafc; }
-    .ml { font-size:8.5pt; color:#64748b; } .mv { font-size:15pt; font-weight:700; } .md_ { font-size:8.5pt; color:#047857; }
-    .card { border:1px solid #cbd5e1; border-left:4px solid #1A7A6E; padding:6px 10px; margin:6px 0; border-radius:4px; background:#fafafa; }
-    pre { background:#f1f5f9; padding:6px 8px; border-radius:4px; white-space:pre-wrap; font-size:9.5pt; }
-    table { width:100%; border-collapse:collapse; margin:6px 0; font-size:9.5pt; } th, td { border:1px solid #cbd5e1; padding:4px 6px; vertical-align:top; text-align:left; }
-    th { background:#2E4057; color:#fff; } tr:nth-child(even) td { background:#f8fafc; } table.wot { border:2px solid; margin:8px 0; } table.wot td { background:#fff !important; } table.wot ul { margin:2px 0; padding-left:16px; }
-    table.reg { font-size:8pt; } table.reg th, table.reg td { padding:3px 4px; } thead { display: table-header-group; } tr { break-inside: avoid; }
-    .lines { margin:10px 0; } .notes { border:1px solid #94a3b8; min-height:90mm; padding:6px; margin:8px 0; font-weight:700; } .act td { height:14mm; } ul { margin:3px 0; padding-left:20px; }
-    @media print { .bar { display:none; } body { padding:0; max-width:none; } }
-    """
-    js = ("""<script>
-    function _rs(w){document.querySelectorAll('.js-plotly-plot').forEach(function(d){try{Plotly.relayout(d,{width:w})}catch(e){}})}
-    window.addEventListener('beforeprint',function(){_rs(690)});
-    window.addEventListener('afterprint',function(){document.querySelectorAll('.js-plotly-plot').forEach(function(d){try{Plotly.relayout(d,{autosize:true,width:null});Plotly.Plots.resize(d)}catch(e){}})});
-    </script>""")
-    doc = ("<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
-           f"<title>Full Analysis — {_html_mod.escape(student['name'])}</title><style>{css}</style>"
-           f"<script>{get_plotlyjs()}</script></head><body>"
-           "<div class='bar'><span>Print-ready analysis. Press Print, then choose your printer or Save as PDF.</span>"
-           "<button onclick='window.print()'>🖨️ Print</button></div>"
-           + cover + "\n".join(body) + js + "</body></html>")
-    return doc.encode("utf-8")
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# SHARED INCIDENT DATA + STATS — used by the Analysis page itself AND by
-# generate_and_archive_behaviour_summary() below (the auto-archive-on-student-
-# archive path), so a report generated outside the Analysis page always shows
-# identical numbers to what staff would see on that page.
-# ══════════════════════════════════════════════════════════════════════════
-def build_student_full_df(student_id):
-    """Builds the combined regular + critical incident dataframe for one
-    student: normalises location/session, maps ABCH free-text behaviour to
-    a canonical clinical label, and recomputes session from precise time
-    boundaries. Returns (full_df, dropped_nat) — full_df is empty if this
-    student has no incident data on file at all."""
-    quick = [i for i in st.session_state.incidents if i["student_id"] == student_id]
-    crit = [c for c in st.session_state.critical_incidents if c["student_id"] == student_id]
-    if not quick and not crit:
-        return pd.DataFrame(), 0
-
-    quick_df = pd.DataFrame(quick) if quick else pd.DataFrame()
-    crit_df = pd.DataFrame(crit) if crit else pd.DataFrame()
-
-    if not quick_df.empty:
-        quick_df["incident_type"] = "Quick"
-        quick_df["date_parsed"] = _parse_dates(quick_df["date"])
-        if "location" in quick_df.columns:
-            quick_df["location"] = quick_df["location"].apply(normalise_location)
-        if "intervention" in quick_df.columns:
-            quick_df["intervention_str"] = quick_df["intervention"].apply(lambda x: ", ".join(x) if isinstance(x, list) else str(x))
-
-    if not crit_df.empty:
-        crit_df["incident_type"] = "Critical"
-        _crit_dates_a = crit_df["created_at"] if "created_at" in crit_df.columns else pd.Series(
-            [datetime.now().isoformat()] * len(crit_df), index=crit_df.index
-        )
-        crit_df["date_parsed"] = _parse_dates(_crit_dates_a)
-        crit_df["severity"] = crit_df["severity"].fillna(5).astype(int) if "severity" in crit_df.columns else 5
-        crit_df["antecedent"] = crit_df["ABCH_primary"].apply(lambda d: d.get("context","") if isinstance(d, dict) else "")
-        # Keyword map: ABCH free-text → canonical clinical behaviour label
-        _CRIT_BEH_KEYWORDS = [
-            # (keyword list, canonical label) — checked in order; first match wins
-            (["self-harm","self harm","hurt himself","hurt herself","scratch","bite himself",
-              "bite herself","bang head","banged head","hit himself","hit herself"],
-             "Self-injurious behaviour"),
-            (["threw","throw","thrown","hurled","launched","flung","pushed chair",
-              "knocked over","flipped","tipped","toppled","pushed desk","flipped table",
-              "knocked chair"],
-             "Throwing objects"),
-            (["destroyed","broke","smashed","kicked wall","punched wall","ripped","torn",
-              "property damage","damaged"],
-             "Property destruction"),
-            (["hit peer","hit a peer","hit student","punch peer","punched peer",
-              "kicked peer","kicked a student","shoved peer","pushed peer","bit peer",
-              "grabbed peer","scratched peer","attacked peer","spat at peer"],
-             "Physical aggression toward peer"),
-            (["hit staff","hit teacher","hit adult","punch staff","punched teacher",
-              "kicked staff","kicked teacher","kicked adult","shoved staff","pushed staff",
-              "bit staff","grabbed staff","scratched staff","spat at staff","spat at teacher",
-              "hit the teacher","struck","swung at"],
-             "Physical aggression toward adult"),
-            (["growl","growled","snarl","snarled","scream at","screamed at","yell at",
-              "yelled at","swore at","sworn at","sworn towards","sworn toward",
-              "verbal abuse","verbally abused","name call","called names","insulted",
-              "threatened","said he would","said she would","told them he would",
-              "told them she would"],
-             "Verbal aggression toward peer"),
-            (["swore at teacher","swore at staff","swore at adult","yelled at teacher",
-              "yelled at staff","yelled at adult","screamed at teacher","screamed at staff",
-              "verbal abuse toward staff","abused staff","abused teacher","abused adult",
-              "threatened staff","threatened teacher","threatened adult"],
-             "Verbal aggression toward adult"),
-            (["ran from","ran out","left the room","left class","left the class",
-              "walked out","walked away","fled","ran away","elopement","eloped",
-              "absconded","left the building","left the school","left school grounds"],
-             "Unsanctioned departure (elopement)"),
-            (["refus","refused","refusing","won't","will not","not going to",
-              "declined to","passive","non-complian","non complian","wouldn't"],
-             "Task refusal / passive non-compliance"),
-            (["shut down","shutdown","withdrew","withdrawal","stopped responding",
-              "stopped talking","silent","mute","unresponsive","disengaged",
-              "curled up","head down","under desk"],
-             "Shutdown / complete withdrawal"),
-            (["noise","noises","sound","sounds","humming","clicking","tapping",
-              "inappropriate sound","disruptive sound","loud noise"],
-             "Inappropriate vocalisation / noises"),
-            (["verbal refus","said no","said 'no'","stated he would not",
-              "stated she would not","verbally refus"],
-             "Verbal refusal of instruction"),
-        ]
-
-        def _clean_crit_beh(d):
-            """Map ABCH free-text behaviour to a canonical clinical label."""
-            raw = d.get("behaviour","") if isinstance(d, dict) else ""
-            if not raw or not raw.strip():
-                return "Behaviour (see ABCH form)"
-            raw_lower = raw.lower()
-            for known in BEHAVIOUR_TYPES:
-                if not known.startswith("---") and known.lower() == raw_lower.strip():
-                    return known
-            for keywords, label in _CRIT_BEH_KEYWORDS:
-                if any(kw in raw_lower for kw in keywords):
-                    return label
-            for known in BEHAVIOUR_TYPES:
-                if not known.startswith("---") and known.lower() in raw_lower:
-                    return known
-            short = raw.strip()[:50].replace("\n"," ")
-            return f"{short}…" if len(raw.strip()) > 50 else short
-        crit_df["behaviour_type"] = crit_df["ABCH_primary"].apply(_clean_crit_beh)
-        crit_df["time"] = crit_df["ABCH_primary"].apply(lambda d: d.get("time", "09:00:00") if isinstance(d, dict) else "09:00:00")
-        for _col in ["location", "session"]:
-            if _col not in crit_df.columns:
-                crit_df[_col] = crit_df["ABCH_primary"].apply(lambda d: d.get(_col, "") if isinstance(d, dict) else "")
-        if "location" in crit_df.columns:
-            crit_df["location"] = crit_df["location"].apply(normalise_location)
-
-    full_df = pd.concat([quick_df, crit_df], ignore_index=True).sort_values("date_parsed")
-    _dropped_nat = int(full_df["date_parsed"].isna().sum()) if "date_parsed" in full_df.columns else 0
-    if _dropped_nat > 0:
-        full_df = full_df.dropna(subset=["date_parsed"])
-    if "time" not in full_df.columns:
-        full_df["time"] = "09:00:00"
-    else:
-        full_df["time"] = full_df["time"].fillna("09:00:00")
-    full_df["hour"] = pd.to_datetime(full_df["time"], format="%H:%M:%S", errors="coerce").dt.hour.fillna(9).astype(int)
-    full_df["day_of_week"] = full_df["date_parsed"].dt.day_name()
-
-    def _session_precise(t_str):
-        try:
-            parts = str(t_str).split(":")
-            tm = int(parts[0]) * 60 + int(parts[1])
-            if tm < 11 * 60: return "Morning"
-            elif tm <= 13 * 60 + 30: return "Middle"
-            else: return "Afternoon"
-        except:
-            return "Morning"
-    full_df["session"] = full_df["time"].apply(_session_precise)
-    return full_df, _dropped_nat
-
-
-def compute_analysis_stats(full_df):
-    """Same derived stats shown on the Analysis page: top behaviour/
-    antecedent/location/session and the risk score/level. Shared so the
-    auto-archived report always matches what staff see on that page."""
-    if len(full_df) == 0:
-        return "Unknown", "Unknown", "Unknown", "Unknown", 0, "LOW"
-    top_beh = full_df["behaviour_type"].mode()[0]
-    top_ant = full_df["antecedent"].mode()[0]
-    top_loc = full_df["location"].mode()[0]
-    top_session = full_df["session"].mode()[0]
-    recent = full_df.tail(7)
-    risk_score = min(100, int(
-        (len(recent) / 7 * 10) +
-        (recent["severity"].mean() * 8) +
-        (len(full_df[full_df["incident_type"] == "Critical"]) / len(full_df) * 50)
-    ))
-    risk_level = "LOW" if risk_score < 30 else "MODERATE" if risk_score < 60 else "HIGH"
-    return top_beh, top_ant, top_loc, top_session, risk_score, risk_level
-
-
-def generate_and_archive_behaviour_summary(student) -> bool:
-    """Generates the same Behaviour Summary Word report as the manual
-    '📄 Behaviour Summary (Word)' download on the Analysis page, and pushes
-    it straight to the Document Archive. Called when a student is archived
-    in this tool, so their behaviour documentation always lands in the
-    Document Archive at that moment — matching how the Communication Log
-    already auto-exports on student archive.
-
-    Does NOT call archive_once() — that helper only sets a session flag
-    and toasts on success, it never tells the caller whether the archive
-    actually happened, which previously let this function report success
-    even when archive_document() had failed. Calls archive_document()
-    directly instead and only reports success when it actually returns an
-    inserted record. The result is queued as a one-shot banner
-    (`st.session_state["_archive_notice"]`) rendered in main() on the next
-    run, since every call site here does `st.rerun()` immediately after —
-    a message shown before that rerun would otherwise just flash and
-    vanish. Never raises: on any failure the student archive itself has
-    already happened by the time this runs, so it only queues a warning
-    and returns False."""
-    if not _ARCHIVE_AVAILABLE:
-        return False
-    student_id = student.get("id")
-    if not student_id:
-        return False
-    try:
-        full_df, _ = build_student_full_df(student_id)
-        if full_df.empty:
-            return False  # nothing recorded for this student — nothing to archive
-        top_beh, top_ant, top_loc, top_session, risk_score, risk_level = compute_analysis_stats(full_df)
-        _supports_trialled = st.session_state.get(f"supports_trialled_{student_id}", "")
-        _supports_success = st.session_state.get(f"supports_success_{student_id}", "")
-        _trial_date = st.session_state.get(f"supports_trial_date_{student_id}")
-        _before_after = compute_before_after(full_df, _trial_date) if _trial_date else None
-        docx_file = generate_behaviour_analysis_plan_docx(
-            student, full_df, top_ant, top_beh, top_loc, top_session, risk_score, risk_level,
-            supports_trialled=_supports_trialled, supports_success=_supports_success,
-            before_after=_before_after)
-        if not docx_file:
-            st.session_state["_archive_notice"] = {
-                "kind": "warning",
-                "msg": "The student was archived, but the Behaviour Summary document "
-                       "couldn't be generated, so nothing was saved to the Document Archive.",
-            }
-            return False
-        _bs_date = datetime.now().strftime("%Y%m%d")
-        _bs_initials = _student_archive_initials(student)
-        _bs_creator = (
-            st.session_state.current_user.get("email")
-            or st.session_state.current_user.get("name", "unknown")
-        ) if st.session_state.get("current_user") else "unknown"
-        _guard_flag = f"_archived_behreport_archive_{student_id}_{_bs_date}"
-        if st.session_state.get(_guard_flag):
-            return True  # already archived earlier this session — don't duplicate
-        rec = archive_document(
-            source_tool="Behaviour Support Tool",
-            doc_type="Behaviour Report",
-            title=f"Behaviour Summary — {_bs_initials}",
-            file_bytes=docx_file.getvalue(),
-            filename=f"BehaviourSummary_{_bs_initials}_{_bs_date}.docx",
-            student_initials=_bs_initials,
-            created_by=_bs_creator,
-            notes="Auto-archived when the student was archived.",
-        )
-        if rec:
-            st.session_state[_guard_flag] = True
-            st.session_state["_archive_notice"] = {
-                "kind": "success",
-                "msg": f"📁 Behaviour Summary for {_bs_initials} saved to the Document Archive.",
-            }
-            return True
-        st.session_state["_archive_notice"] = {
-            "kind": "warning",
-            "msg": f"The student was archived, but the Behaviour Summary for {_bs_initials} "
-                   f"could NOT be saved to the Document Archive (the error, if any, should have "
-                   f"shown just above the Archive button). Please re-check the Document Archive "
-                   f"and re-save manually from the student's Analysis page if it's missing.",
-        }
-        return False
-    except Exception as e:
-        st.session_state["_archive_notice"] = {
-            "kind": "warning",
-            "msg": f"The student was archived, but the Behaviour Summary couldn't be saved to "
-                   f"the Document Archive: {e}",
-        }
-        return False
-
-
 def render_student_analysis_page():
-    """Draws the Analysis page, recording what is shown so a printable copy can be built."""
-    screen_capture_start()
-    try:
-        _render_student_analysis_page_inner()
-    finally:
-        screen_capture_stop()
-
-
-def _render_student_analysis_page_inner():
     student_id = st.session_state.get("selected_student_id")
     student = get_student(student_id)
     if not student:
@@ -7857,85 +2842,48 @@ def _render_student_analysis_page_inner():
     st.markdown(f"## 📊 Behaviour Summary — {student['name']}")
     st.caption("Evidence-based analysis prepared by Learning and Behaviour Unit")
 
-    # A historical critical incident saved from the AI extraction further down
-    # this same page sets this flag and reruns — show the confirmation right
-    # here, since that's the page the save actually happens on. (Previously
-    # only render_student_dashboard() checked for this flag, but the save's
-    # st.rerun() stays on THIS page, so that check never fired and staff got
-    # no confirmation the save had worked.)
-    if st.session_state.get("hist_incident_just_saved"):
-        _saved_total = st.session_state.pop("hist_incident_just_saved")
-        st.success(f"✅ Historical incident saved — {student['name']} now has **{_saved_total}** incident(s) on record.")
-
     if student.get('placement_start'):
         try:
             start_dt = datetime.fromisoformat(student['placement_start'])
-            has_end = bool(student.get('placement_end'))
-            end_dt = datetime.fromisoformat(student['placement_end']) if has_end else None
-            # Extensions push the true end date later — use the latest of the
-            # original end date and any extension's "to" date.
-            _exts_for_metrics = load_placement_extensions_from_db(student_id)
-            _extended = False
-            if _exts_for_metrics:
-                try:
-                    _latest_ext = max(datetime.fromisoformat(e["to"]) for e in _exts_for_metrics if e.get("to"))
-                    if not end_dt or _latest_ext > end_dt:
-                        end_dt = _latest_ext
-                        has_end = True
-                        _extended = True
-                except Exception:
-                    pass
-            today = datetime.utcnow()
-            # Days enrolled so far — today, capped at the placement end date
-            # once it's passed (so this doesn't keep climbing after the
-            # placement has actually finished).
-            _reference_end = min(today, end_dt) if end_dt else today
-            days_enrolled = max((_reference_end.date() - start_dt.date()).days, 0)
-
+            end_dt = datetime.fromisoformat(student['placement_end']) if student.get('placement_end') else datetime.utcnow()
+            days_enrolled = (end_dt.date() - start_dt.date()).days
             st.markdown("---")
             pcol1, pcol2, pcol3 = st.columns(3)
             with pcol1: st.metric("Placement Start", start_dt.strftime('%d/%m/%Y'))
             with pcol2:
-                if has_end:
-                    st.metric("Extended End" if _extended else "Placement End", end_dt.strftime('%d/%m/%Y'))
+                if student.get('placement_end'):
+                    st.metric("Placement End", datetime.fromisoformat(student['placement_end']).strftime('%d/%m/%Y'))
                 else:
                     st.metric("Status", "Ongoing")
             with pcol3: st.metric("Days Enrolled", days_enrolled)
-
-            if has_end:
-                total_placement_days = max((end_dt.date() - start_dt.date()).days, 0)
-                days_remaining = max((end_dt.date() - today.date()).days, 0)
-                pcol4, pcol5 = st.columns(2)
-                with pcol4:
-                    st.metric("Days Remaining", days_remaining)
-                with pcol5:
-                    st.metric("Total Placement (days)", total_placement_days)
             st.markdown("---")
         except: pass
 
-    col1, col2, col3 = st.columns([3, 1, 1])
+    col1, col2 = st.columns([3, 1])
     with col1:
         if st.button("⬅ Back to Students", key="back_analysis_top"):
-            if student.get("archived", False):
-                go_to("admin_portal")
-            else:
-                go_to("program_students", selected_program=student["program"])
+            go_to("program_students", selected_program=student["program"])
     with col2:
         if st.button("🏠 Program Landing", key="home_analysis"):
             go_to("landing")
-    with col3:
-        if st.button("📋 Support Plan", key="sp_from_analysis"):
-            go_to("support_plan", selected_student_id=student_id)
 
-    # ── Attendance: weekly schedule + exceptions (legacy fields derived for older code) ──
-    _att_state = attendance_state(student_id)
-    _abs_key = f"absent_dates_{student_id}"
-    _abs_stored = sorted({e["date"] for e in _att_state["exceptions"] if e.get("type") == "Absent"})
-    st.session_state[_abs_key] = _abs_stored
-    _att_cur = attendance_current_days(_att_state)
-    _pt_days = [ATT_DAYS_FULL[i] for i, dn in enumerate(ATT_DAYS) if _att_cur.get(dn)]
-    _pt_sessions = ["Full day"] if all(set(_att_cur.get(dn, [])) == set(ATT_SESSIONS) for dn in ATT_DAYS) else ["See weekly schedule"]
-    _pt_notes = _att_state.get("notes", "")
+    # ── Part-time schedule context ───────────────────────────────────────────
+    # ── Load saved attendance from Supabase on first render ─────────────────
+    _att_cache_key = f"att_loaded_{student_id}"
+    if _att_cache_key not in st.session_state:
+        _att_from_db = load_attendance_from_db(student_id)
+        if _att_from_db:
+            st.session_state[f"absent_dates_{student_id}"]  = _att_from_db.get("absent_dates", [])
+            st.session_state[f"pt_days_{student_id}"]       = _att_from_db.get("pt_days", ["Monday","Tuesday","Wednesday","Thursday","Friday"])
+            st.session_state[f"pt_sess_{student_id}"]       = _att_from_db.get("pt_sessions", ["Full day"])
+            st.session_state[f"pt_notes_{student_id}"]      = _att_from_db.get("pt_notes", "")
+        st.session_state[_att_cache_key] = True
+
+    _abs_key   = f"absent_dates_{student_id}"
+    _abs_stored = st.session_state.get(_abs_key, [])
+    _pt_days    = st.session_state.get(f"pt_days_{student_id}", ["Monday","Tuesday","Wednesday","Thursday","Friday"])
+    _pt_sessions = st.session_state.get(f"pt_sess_{student_id}", ["Full day"])
+    _pt_notes   = st.session_state.get(f"pt_notes_{student_id}", "")
 
     # ══ Placement Timeline ═══════════════════════════════════════════════════
     with st.expander("📌 Placement Timeline & Extensions", expanded=False):
@@ -7947,7 +2895,8 @@ def _render_student_analysis_page_inner():
         )
         _pl_start_raw = student.get("placement_start")
         _pl_end_raw   = student.get("placement_end")
-        _pl_exts      = load_placement_extensions_from_db(student_id)
+        _ext_key_an   = f"placement_extensions_{student_id}"
+        _pl_exts      = st.session_state.get(_ext_key_an, [])
 
         _pl_c1, _pl_c2, _pl_c3 = st.columns(3)
         with _pl_c1:
@@ -8018,17 +2967,16 @@ def _render_student_analysis_page_inner():
                 )
             if st.button("➕ Add extension", key=f"an_ext_add_{student_id}", use_container_width=True):
                 if _an_ef and _an_et and _an_er.strip():
-                    if save_placement_extension_to_db(student_id, _an_ef.isoformat(), _an_et.isoformat(), _an_er.strip()):
-                        st.success(f"✅ Extension added: {_an_ef.strftime('%-d %b')} – {_an_et.strftime('%-d %b %Y')}")
-                        st.rerun()
+                    _pl_exts = _pl_exts + [{"from": _an_ef.isoformat(), "to": _an_et.isoformat(), "reason": _an_er.strip()}]
+                    st.session_state[_ext_key_an] = _pl_exts
+                    st.success(f"✅ Extension added: {_an_ef.strftime('%-d %b')} – {_an_et.strftime('%-d %b %Y')}")
+                    st.rerun()
                 else:
                     st.error("Please complete all three fields.")
 
         st.session_state[f"pl_start_an_{student_id}"] = _pl_start_raw
         st.session_state[f"pl_end_an_{student_id}"]   = _pl_end_raw
 
-
-    render_starting_profile(student)
 
     # ══ Sensory Overview Upload ════════════════════════════════════════════════
     with st.expander("🧠 Sensory Overview — upload to enrich analysis (optional)", expanded=False):
@@ -8113,7 +3061,9 @@ def _render_student_analysis_page_inner():
                     if GROQ_KEY:
                         with st.spinner("AI extracting sensory themes — this takes a few seconds..."):
                             try:
+                                from groq import Groq as _GQ
                                 import json as _sjs
+                                _gc = _GQ(api_key=GROQ_KEY)
                                 _so_prompt = (
                                     "You are an occupational therapist and behaviour support specialist. "
                                     f"Extract a structured sensory profile from this document for student: {student['name']}. "
@@ -8127,7 +3077,12 @@ def _render_student_analysis_page_inner():
                                     '"summary":"2-3 sentence clinical summary"}'
                                     f" Document: {_so_raw[:4000]}"
                                 )
-                                _so_json = groq_ai_call(_so_prompt, max_tokens=1500, temperature=0.1)
+                                _so_resp = _gc.chat.completions.create(
+                                    model="llama-3.3-70b-versatile",
+                                    messages=[{"role": "user", "content": _so_prompt}],
+                                    max_tokens=1500, temperature=0.1
+                                )
+                                _so_json = _so_resp.choices[0].message.content.strip()
                                 _so_json = _so_json.replace("```json", "").replace("```", "").strip()
                                 _so_parsed = _sjs.loads(_so_json)
                                 st.session_state[_so_key] = _so_parsed
@@ -8212,88 +3167,245 @@ def _render_student_analysis_page_inner():
                         del st.session_state[_k]
                 st.rerun()
 
-    with st.expander("⏱️ Attendance — weekly schedule & day-to-day changes (saved automatically)", expanded=False):
-        render_attendance_tracking(student_id)
+    with st.expander("⏱️ Attendance & Absence Tracking — saved automatically", expanded=False):
+        st.caption(
+            "Record attendance pattern and specific absent dates. "
+            "Data is saved automatically to the database. "
+            "Absent days appear on the frequency chart and are used in the pattern analysis below."
+        )
+
+        _att_tab1, _att_tab2 = st.tabs(["📅 Regular Schedule", "🗓️ Absent Dates"])
+
+        with _att_tab1:
+            _pt_days_new = st.multiselect(
+                "Days the student regularly attends",
+                ["Monday","Tuesday","Wednesday","Thursday","Friday"],
+                default=_pt_days,
+                key=f"pt_days_w_{student_id}"
+            )
+            _pt_sess_new = st.multiselect(
+                "Sessions attended",
+                ["Full day","Morning only","Middle of day only","Afternoon only","Morning + Middle","Middle + Afternoon"],
+                default=_pt_sessions,
+                key=f"pt_sess_w_{student_id}"
+            )
+            _pt_notes_new = st.text_area(
+                "Schedule notes",
+                value=_pt_notes,
+                placeholder="e.g. Attends Tue–Thu, mornings only. Transition to full days planned Term 2.",
+                height=65, key=f"pt_notes_w_{student_id}"
+            )
+            if st.button("💾 Save schedule", key=f"pt_save_{student_id}", type="primary", use_container_width=True):
+                st.session_state[f"pt_days_{student_id}"]  = _pt_days_new
+                st.session_state[f"pt_sess_{student_id}"]  = _pt_sess_new
+                st.session_state[f"pt_notes_{student_id}"] = _pt_notes_new
+                _pt_days = _pt_days_new; _pt_sessions = _pt_sess_new; _pt_notes = _pt_notes_new
+                save_attendance_to_db(student_id, _abs_stored, _pt_days_new, _pt_sess_new, _pt_notes_new)
+                st.success("✅ Schedule saved.")
+
+        with _att_tab2:
+            st.caption(
+                "Add dates when the student was absent. "
+                "Each date is saved immediately. Saved dates appear on the frequency chart."
+            )
+            _abs_col1, _abs_col2 = st.columns([2, 1])
+            with _abs_col1:
+                _abs_new = st.date_input(
+                    "Date to add",
+                    value=None, key=f"abs_date_input_{student_id}"
+                )
+            with _abs_col2:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("➕ Add & save", key=f"abs_add_{student_id}",
+                             type="primary", use_container_width=True):
+                    if _abs_new and str(_abs_new) not in _abs_stored:
+                        _abs_stored = sorted(_abs_stored + [str(_abs_new)])
+                        st.session_state[_abs_key] = _abs_stored
+                        save_attendance_to_db(student_id, _abs_stored, _pt_days, _pt_sessions, _pt_notes)
+                        st.rerun()
+
+            if _abs_stored:
+                st.markdown(f"**{len(_abs_stored)} absent date(s) recorded:**")
+                _abs_display_cols = st.columns(4)
+                for _i, _d in enumerate(sorted(_abs_stored)):
+                    with _abs_display_cols[_i % 4]:
+                        if st.button(f"❌ {_d}", key=f"abs_rm_{student_id}_{_i}", use_container_width=True):
+                            _abs_stored = [x for x in _abs_stored if x != _d]
+                            st.session_state[_abs_key] = _abs_stored
+                            save_attendance_to_db(student_id, _abs_stored, _pt_days, _pt_sessions, _pt_notes)
+                            st.rerun()
+            else:
+                st.info("No absent dates recorded yet — add dates above.")
 
     # ── Active attendance summary (always visible below expander) ─────────
-    _has_sched = bool(_att_state["schedule"])
-    _n_early = sum(1 for e in _att_state["exceptions"] if e.get("type") == "Finished early")
-    if _has_sched or _att_state["exceptions"]:
+    _parttime_active = len(_pt_days) < 5 or (len(_pt_sessions) > 0 and "Full day" not in _pt_sessions)
+    _absent_dates    = _abs_stored
+    if _parttime_active or _absent_dates:
         _att_html = (
             "<div style='background:#eff6ff;border-left:4px solid #3b82f6;border-radius:8px;"
             "padding:.65rem 1rem;margin:.4rem 0;font-size:.84rem;color:#1e293b;'>"
             "<b>⏱️ Attendance context active</b><br>"
         )
-        if _has_sched:
-            _att_html += ("<b>This week's pattern:</b> " + " · ".join(f"{dn} {_att_sess_text(_att_cur.get(dn, []))}" for dn in ATT_DAYS)
-                          + ". Zero-incident days may reflect days not attended.<br>")
-        if _abs_stored:
-            _att_html += f"<b>Absent days recorded: {len(_abs_stored)}</b>, marked on the frequency chart below.<br>"
-        if _n_early:
-            _att_html += f"<b>Days finished early: {_n_early}</b>, shown in the Attendance Context section below.<br>"
+        if _parttime_active:
+            _att_html += (
+                f"<b>Part-time schedule:</b> attends {len(_pt_days)}/5 days "
+                f"({", ".join(_pt_days[:3])}{"..." if len(_pt_days) > 3 else ""}). "
+                "Sessions: " + (", ".join(_pt_sessions) if _pt_sessions else "not specified") + ". "
+                "Zero-incident days may reflect absence. Time-of-day analysis reflects attended sessions only.<br>"
+            )
+        if _absent_dates:
+            _att_html += (
+                f"<b>Absent dates recorded: {len(_absent_dates)}</b> — "
+                "marked on the frequency chart below. "
+                "Zero-incident days on these dates reflect absence, not regulation.<br>"
+            )
         if _pt_notes:
             _att_html += f"<i>Note: {_pt_notes}</i>"
         _att_html += "</div>"
         st.markdown(_att_html, unsafe_allow_html=True)
 
-    full_df, _dropped_nat = build_student_full_df(student_id)
-    if full_df.empty:
-        st.info("No incident data available yet. Suggestions from the Starting Profile can still be trialled from day one.")
-        render_strategy_trials(student, pd.DataFrame())
-        st.markdown("---")
-        _render_micro_section_uncaptured(student, pd.DataFrame())
-        if get_micro_wot(student_id):
-            st.markdown("---")
-            st.markdown("### 🪟 Window of Tolerance — Draft from This Student's Data")
-            render_window_of_tolerance_table(pd.DataFrame(), student_id=student_id)
-            render_wot_builder_sync(student, pd.DataFrame())
+    quick = [i for i in st.session_state.incidents if i["student_id"] == student_id]
+    crit = [c for c in st.session_state.critical_incidents if c["student_id"] == student_id]
+
+    if not quick and not crit:
+        st.info("No incident data available yet.")
         if st.button("↩️ Back", key="back_no_data"):
             go_to("program_students", selected_program=student["program"])
         return
 
+    quick_df = pd.DataFrame(quick) if quick else pd.DataFrame()
+    crit_df = pd.DataFrame(crit) if crit else pd.DataFrame()
+
+    if not quick_df.empty:
+        quick_df["incident_type"] = "Quick"
+        quick_df["date_parsed"] = pd.to_datetime(
+            quick_df["date"], utc=True, errors="coerce"
+        ).dt.tz_localize(None)
+        if "location" in quick_df.columns:
+            quick_df["location"] = quick_df["location"].apply(normalise_location)
+        if "intervention" in quick_df.columns:
+            quick_df["intervention_str"] = quick_df["intervention"].apply(lambda x: ", ".join(x) if isinstance(x, list) else str(x))
+
+    if not crit_df.empty:
+        crit_df["incident_type"] = "Critical"
+        _crit_dates_a = crit_df["created_at"] if "created_at" in crit_df.columns else pd.Series(
+            [datetime.now().isoformat()] * len(crit_df), index=crit_df.index
+        )
+        crit_df["date_parsed"] = pd.to_datetime(
+            _crit_dates_a, utc=True, errors="coerce"
+        ).dt.tz_localize(None)
+        crit_df["severity"] = crit_df["severity"].fillna(5).astype(int) if "severity" in crit_df.columns else 5
+        crit_df["antecedent"] = crit_df["ABCH_primary"].apply(lambda d: d.get("context","") if isinstance(d, dict) else "")
+        # Keyword map: ABCH free-text → canonical clinical behaviour label
+        _CRIT_BEH_KEYWORDS = [
+            # (keyword list, canonical label) — checked in order; first match wins
+            (["self-harm","self harm","hurt himself","hurt herself","scratch","bite himself",
+              "bite herself","bang head","banged head","hit himself","hit herself"],
+             "Self-injurious behaviour"),
+            (["threw","throw","thrown","hurled","launched","flung","pushed chair",
+              "knocked over","flipped","tipped","toppled","pushed desk","flipped table",
+              "knocked chair"],
+             "Throwing objects"),
+            (["destroyed","broke","smashed","kicked wall","punched wall","ripped","torn",
+              "property damage","damaged"],
+             "Property destruction"),
+            (["hit peer","hit a peer","hit student","punch peer","punched peer",
+              "kicked peer","kicked a student","shoved peer","pushed peer","bit peer",
+              "grabbed peer","scratched peer","attacked peer","spat at peer"],
+             "Physical aggression toward peer"),
+            (["hit staff","hit teacher","hit adult","punch staff","punched teacher",
+              "kicked staff","kicked teacher","kicked adult","shoved staff","pushed staff",
+              "bit staff","grabbed staff","scratched staff","spat at staff","spat at teacher",
+              "hit the teacher","struck","swung at"],
+             "Physical aggression toward adult"),
+            (["growl","growled","snarl","snarled","scream at","screamed at","yell at",
+              "yelled at","swore at","sworn at","sworn towards","sworn toward",
+              "verbal abuse","verbally abused","name call","called names","insulted",
+              "threatened","said he would","said she would","told them he would",
+              "told them she would"],
+             "Verbal aggression toward peer"),
+            (["swore at teacher","swore at staff","swore at adult","yelled at teacher",
+              "yelled at staff","yelled at adult","screamed at teacher","screamed at staff",
+              "verbal abuse toward staff","abused staff","abused teacher","abused adult",
+              "threatened staff","threatened teacher","threatened adult"],
+             "Verbal aggression toward adult"),
+            (["ran from","ran out","left the room","left class","left the class",
+              "walked out","walked away","fled","ran away","elopement","eloped",
+              "absconded","left the building","left the school","left school grounds"],
+             "Unsanctioned departure (elopement)"),
+            (["refus","refused","refusing","won't","will not","not going to",
+              "declined to","passive","non-complian","non complian","wouldn't"],
+             "Task refusal / passive non-compliance"),
+            (["shut down","shutdown","withdrew","withdrawal","stopped responding",
+              "stopped talking","silent","mute","unresponsive","disengaged",
+              "curled up","head down","under desk"],
+             "Shutdown / complete withdrawal"),
+            (["noise","noises","sound","sounds","humming","clicking","tapping",
+              "inappropriate sound","disruptive sound","loud noise"],
+             "Inappropriate vocalisation / noises"),
+            (["verbal refus","said no","said 'no'","stated he would not",
+              "stated she would not","verbally refus"],
+             "Verbal refusal of instruction"),
+        ]
+
+        def _clean_crit_beh(d):
+            """Map ABCH free-text behaviour to a canonical clinical label."""
+            raw = d.get("behaviour","") if isinstance(d, dict) else ""
+            if not raw or not raw.strip():
+                return "Behaviour (see ABCH form)"
+            raw_lower = raw.lower()
+            # 1. Direct match against known BEHAVIOUR_TYPES
+            for known in BEHAVIOUR_TYPES:
+                if not known.startswith("---") and known.lower() == raw_lower.strip():
+                    return known
+            # 2. Keyword map — first match wins
+            for keywords, label in _CRIT_BEH_KEYWORDS:
+                if any(kw in raw_lower for kw in keywords):
+                    return label
+            # 3. Partial known-type match
+            for known in BEHAVIOUR_TYPES:
+                if not known.startswith("---") and known.lower() in raw_lower:
+                    return known
+            # 4. Fallback — use truncated description tagged as narrative
+            short = raw.strip()[:50].replace("\n"," ")
+            return f"{short}…" if len(raw.strip()) > 50 else short
+        crit_df["behaviour_type"] = crit_df["ABCH_primary"].apply(_clean_crit_beh)
+        crit_df["time"] = crit_df["ABCH_primary"].apply(lambda d: d.get("time", "09:00:00") if isinstance(d, dict) else "09:00:00")
+        for _col in ["location", "session"]:
+            if _col not in crit_df.columns:
+                crit_df[_col] = crit_df["ABCH_primary"].apply(lambda d: d.get(_col, "") if isinstance(d, dict) else "")
+
+    full_df = pd.concat([quick_df, crit_df], ignore_index=True).sort_values("date_parsed")
+    if "time" not in full_df.columns:
+        full_df["time"] = "09:00:00"
+    else:
+        full_df["time"] = full_df["time"].fillna("09:00:00")
+    full_df["hour"] = pd.to_datetime(full_df["time"], format="%H:%M:%S", errors="coerce").dt.hour.fillna(9).astype(int)
+    full_df["day_of_week"] = full_df["date_parsed"].dt.day_name()
+    # Always recompute session using precise time boundaries
+    def _session_precise(t_str):
+        try:
+            parts = str(t_str).split(":")
+            tm = int(parts[0]) * 60 + int(parts[1])
+            if tm < 11 * 60: return "Morning"
+            elif tm <= 13 * 60 + 30: return "Middle"
+            else: return "Afternoon"
+        except:
+            return "Morning"
+    full_df["session"] = full_df["time"].apply(_session_precise)
+
     quick_only_df = full_df[full_df['incident_type'] == 'Quick'].copy() if 'Quick' in full_df['incident_type'].values else pd.DataFrame()
     crit_only_df = full_df[full_df['incident_type'] == 'Critical'].copy() if 'Critical' in full_df['incident_type'].values else pd.DataFrame()
 
-    _view_mode = st.radio(
-        "View", ["🔎 Snapshot", "📄 Full Analysis"], horizontal=True, index=1,
-        key=f"analysis_view_mode_{student_id}",
-    )
-    if _view_mode == "🔎 Snapshot":
-        render_analysis_snapshot(student, full_df, student_id)
-        return
-
     st.markdown("### 📈 Executive Summary")
-    if _dropped_nat > 0:
-        _raw_total = len(full_df) + _dropped_nat
-        st.warning(
-            f"⚠️ **This student has {_raw_total} incident(s) on file in total, but {_dropped_nat} "
-            f"have no valid date recorded**, so they're excluded from every chart and metric below "
-            f"(all of it is organised by date). That's why this page may show a lower number than "
-            f"other screens — it's not a missing/deleted record, it's a missing date. "
-            f"To fix: scroll down to **👁️ View, Edit & Print an Incident** on this page. Undated "
-            f"records are flagged **⚠️ NO DATE**. Pick one, set the correct date, and press "
-            f"**Save Changes** to bring it into this analysis (or use **🗑️ Delete an Incident** "
-            f"if it's a duplicate)."
-        )
     col1, col2, col3, col4, col5 = st.columns(5)
-    with col1:
-        st.metric("Total (dated)" if _dropped_nat > 0 else "Total", len(full_df))
+    with col1: st.metric("Total", len(full_df))
     with col2: st.metric("Critical", len(full_df[full_df["incident_type"] == "Critical"]))
     with col3: st.metric("Avg Severity", f"{full_df['severity'].mean():.1f}")
     with col4:
         days = max((full_df["date_parsed"].max() - full_df["date_parsed"].min()).days, 1)
         st.metric("Days Span", days)
     with col5: st.metric("Per Day", f"{len(full_df) / days:.1f}")
-    _ah = attendance_headline(student_id, full_df)
-    if _ah:
-        a1, a2, a3, a4 = st.columns(4)
-        a1.metric("Sessions attended", f"{_ah['sm']['attended']} of {_ah['sm']['expected']}", f"{_ah['pct']}% of planned", delta_color="off")
-        a2.metric("Days absent", len(_ah["absent_dates"]))
-        a3.metric("Early finishes / day ends", _ah["sm"]["early_days"])
-        a4.metric("Incidents per 10 sessions", f"{_ah['per10']:.1f}")
-        _ad = dict(_ah["lines"]).get("Days absent", "")
-        st.caption("Attendance: " + (f"absent {_ad.split(' — ', 1)[1]}. " if _ah["absent_dates"] else "no days absent recorded. ")
-                   + "Full attendance detail and the week-by-week table are under Attendance Context below.")
     st.markdown("---")
 
     st.markdown("### 📅 Daily Incident Frequency")
@@ -8305,8 +3417,6 @@ def _render_student_analysis_page_inner():
         quick_only_df.assign(_type="Regular") if not quick_only_df.empty else pd.DataFrame(),
         crit_only_df.assign(_type="Critical") if not crit_only_df.empty else pd.DataFrame(),
     ], ignore_index=True)
-    if not _all_daily.empty:
-        _all_daily = _all_daily.dropna(subset=["date_parsed"])
 
     fig1 = go.Figure()
     if not _all_daily.empty:
@@ -8371,17 +3481,6 @@ def _render_student_analysis_page_inner():
                     yshift=4
                 )
 
-    # Overlay day-end markers (planned early finishes) on the daily chart
-    try:
-        _de_state = attendance_state(student_id)
-        for _de in [e for e in _de_state["exceptions"] if e.get("type") == "Finished early"]:
-            _de_lbl = date.fromisoformat(_de["date"]).strftime("%a %-d %b")
-            if _de_lbl in label_order:
-                fig1.add_annotation(x=_de_lbl, y=0.6, text="day end", showarrow=False, yanchor="bottom",
-                                    font=dict(size=9, color="#b45309"), bgcolor="#fef3c7")
-    except Exception:
-        pass
-
     # Overlay absent day markers on the chart
     _absent_dates_chart = st.session_state.get(f"absent_dates_{student_id}", [])
     if _absent_dates_chart and not _all_daily.empty:
@@ -8427,13 +3526,9 @@ def _render_student_analysis_page_inner():
     st.plotly_chart(fig1, use_container_width=True)
     # ── Daily frequency insight ───────────────────────────────────────────
     if not full_df.empty:
-        _fi_start_d = full_df["date_parsed"].min().date()
-        _fi_end_d   = full_df["date_parsed"].max().date()
-        _fi_total_days = sum(
-            1 for _n in range((_fi_end_d - _fi_start_d).days + 1)
-            if (_fi_start_d + timedelta(days=_n)).weekday() < 5
-        )  # school days only — weekends excluded
+        _fi_total_days  = (full_df["date_parsed"].max() - full_df["date_parsed"].min()).days + 1
         _fi_incident_days = full_df["date_parsed"].dt.date.nunique()
+        _fi_zero_days   = _fi_total_days - _fi_incident_days
         _fi_day_counts  = full_df.groupby(full_df["date_parsed"].dt.date).size()
         _fi_max_day     = int(_fi_day_counts.max())
         _fi_avg_per_day = len(full_df) / max(_fi_incident_days, 1)
@@ -8442,31 +3537,41 @@ def _render_student_analysis_page_inner():
         _fi_dates_sorted = sorted(_fi_day_counts.index)
         _fi_consec = 0
         if len(_fi_dates_sorted) >= 2:
+            import datetime as _fdt
             for _dx in range(1, len(_fi_dates_sorted)):
                 if (_fi_dates_sorted[_dx] - _fi_dates_sorted[_dx-1]).days == 1:
                     _fi_consec += 1
         _fi_insight = (
-            f"<b>{_fi_incident_days} of {_fi_total_days} school days</b> had at least one incident, "
-            f"averaging <b>{_fi_avg_per_day:.1f} per active day</b> (highest single day: {_fi_max_day}). "
+            f"<b>{_fi_incident_days} of {_fi_total_days} school days</b> had at least one incident "
+            f"({_fi_zero_days} day(s) incident-free). "
+            f"When incidents occurred, the average was <b>{_fi_avg_per_day:.1f} per day</b> "
+            f"(highest single day: {_fi_max_day}). "
         )
-        if _fi_high_days >= 1:
+        if _fi_high_days >= 2:
             _fi_insight += (
-                f"<b>{_fi_high_days} spike day(s)</b> had 3 or more incidents — worth reviewing what was "
-                "different about staffing, timetable, or demands that day. "
+                f"<b>{_fi_high_days} day(s) had 3 or more incidents</b> — these are high-demand days "
+                "that warrant retrospective review: what was different about the environment, "
+                "staffing, timetable, or demands on those days? "
             )
         if _fi_consec >= 2:
             _fi_insight += (
-                f"<b>{_fi_consec} instance(s) of consecutive high-incident days</b> — may point to "
-                "insufficient recovery time between events, or a sustained stressor (transition, "
-                "staffing change, curriculum demand) across multiple days."
+                f"There are <b>{_fi_consec} instance(s) of consecutive incident days</b>. "
+                "Consecutive high-incident days are a significant indicator — they suggest the student "
+                "did not have sufficient recovery time between events, or that a systemic stressor "
+                "(e.g. a transition, staffing change, or curriculum demand) was sustained across multiple days. "
+                "Proactive regulation support at the start of each day is strongly indicated. "
             )
+        _fi_insight += (
+            f"Incident-free days ({_fi_zero_days}) are equally important data — "
+            "what proactive conditions, routines, or environmental factors were in place on those days? "
+            "Replicating those conditions on high-risk days is one of the most effective preventive strategies."
+        )
         st.markdown(
             f"<div style='background:#f8fafc;border-left:4px solid #1A7A7A;border-radius:8px;"
             f"padding:.75rem 1.1rem;margin:.5rem 0;font-size:.84rem;color:#1e293b;line-height:1.65;'>"
             f"<b>📊 Understanding this chart:</b><br>{_fi_insight}</div>",
             unsafe_allow_html=True
         )
-    render_attendance_context(student, full_df)
     # ══ Absence–Incident Pattern Analysis ═══════════════════════════════════
     _absent_dates_analysis = st.session_state.get(f"absent_dates_{student_id}", [])
     if _absent_dates_analysis and not full_df.empty:
@@ -8557,7 +3662,7 @@ def _render_student_analysis_page_inner():
                     f"padding:.75rem 1.1rem;margin:.4rem 0;font-size:.84rem;color:#1e293b;line-height:1.65;'>"
                     f"<b>⚠️ Absences following escalation:</b> "
                     f"<b>{len(_post_escalation_abs)} instance(s)</b> where a recorded absence followed "
-                    "a high-severity incident (severity 4–5) within 1–2 days. "
+                    "a high-severity incident (Level 4–5) within 1–2 days. "
                     "<br><br>"
                     "Post-escalation absences are a significant clinical indicator. They may reflect: "
                     "the student being too dysregulated to return, a family decision to keep the student home "
@@ -8621,7 +3726,7 @@ def _render_student_analysis_page_inner():
     # ── Placement phase analysis ──────────────────────────────────────────────
     _pl_start_str = st.session_state.get(f"pl_start_an_{student_id}") or student.get("placement_start")
     _pl_end_str   = st.session_state.get(f"pl_end_an_{student_id}")   or student.get("placement_end")
-    _pl_exts_an   = load_placement_extensions_from_db(student_id)
+    _pl_exts_an   = st.session_state.get(f"placement_extensions_{student_id}", [])
     if _pl_start_str and not full_df.empty:
         import datetime as _pldt
         _pl_s = datetime.fromisoformat(_pl_start_str).date()
@@ -8734,7 +3839,7 @@ def _render_student_analysis_page_inner():
     _MIN_N      = 4
     _MIN_TREND  = 3
     _CRIT_SEV   = 3.0
-    _SEV_LABELS = ["severity 1 Minor", "severity 2 Low", "severity 3 Moderate", "severity 4 Serious", "severity 5 Critical"]
+    _SEV_LABELS = ["L1 Minor", "L2 Low", "L3 Moderate", "L4 Serious", "L5 Critical"]
 
     all_behaviours = full_df["behaviour_type"].value_counts().head(8).index.tolist()
     all_behaviours = [
@@ -8887,14 +3992,14 @@ def _render_student_analysis_page_inner():
         st.caption(
             "Incident distribution by severity. All logged behaviours occur in the Coping zone or beyond — "
             "if a student is within their Window of Tolerance (green), no incidents are being logged. "
-            "🟡 Yellow (severity 1–2) = Coping — behaviour present but student managing  ·  "
-            "🟠 Orange (severity 3) = Coping, approaching edge  ·  "
-            "🔴 Red (severity 4–5) = Outside window — significant dysregulation. "
+            "🟡 Yellow (L1–2) = Coping — behaviour present but student managing  ·  "
+            "🟠 Orange (L3) = Coping, approaching edge  ·  "
+            "🔴 Red (L4–5) = Outside window — significant dysregulation. "
             "Critical incident status alone does not place a student outside their window."
         )
         # WoT zone colour map
         # Clinical framework: if incident logged, student NOT in green.
-        # Yellow = Coping (severity 1–3), Red = Outside window (severity 4–5)
+        # Yellow = Coping (L1-L3), Red = Outside window (L4-L5)
         _WOT_COLS = {
             1: "#eab308",   # yellow — coping (low level behaviour)
             2: "#eab308",   # yellow — coping
@@ -8903,11 +4008,11 @@ def _render_student_analysis_page_inner():
             5: "#7f1d1d",   # dark red — crisis
         }
         _WOT_NAMES = {
-            1: "severity 1 — Coping",
-            2: "severity 2 — Coping",
-            3: "severity 3 — Coping, approaching edge",
-            4: "severity 4 — Outside window",
-            5: "severity 5 — Crisis",
+            1: "L1 — Coping",
+            2: "L2 — Coping",
+            3: "L3 — Coping, approaching edge",
+            4: "L4 — Outside window",
+            5: "L5 — Crisis",
         }
         # Build count matrix: behaviour × severity level
         _sev_matrix = {}  # {beh: {sv: count}}
@@ -8990,7 +4095,7 @@ def _render_student_analysis_page_inner():
             _pb_l5_n = sum(_sev_matrix[b][5] for b in all_behaviours)
             _pb_insight = (
                 f"<b>{_pb_coping_pct}% of all incidents ({_pb_coping_n}/{_n_total}) occurred within the Coping zone</b> "
-                f"(severity 1–3: low-level {_pb_l1_n}, escalating {_pb_l2_n}, approaching edge {_pb_l3_n}). "
+                f"(L1–L3: low-level {_pb_l1_n}, escalating {_pb_l2_n}, approaching edge {_pb_l3_n}). "
                 "This is clinically significant — it means the student is exhibiting behaviour as a way of "
                 "managing or communicating distress, rather than being fully dysregulated. "
                 "The Coping zone is where staff intervention is most effective: "
@@ -9016,7 +4121,7 @@ def _render_student_analysis_page_inner():
                 )
             _pb_insight += (
                 "The mean severity diamond markers show the average level for each behaviour type. "
-                "Where the mean approaches severity 3 or above, consider whether current antecedent strategies "
+                "Where the mean approaches L3 or above, consider whether current antecedent strategies "
                 "are sufficiently proactive — the student may need wider-window supports before that behaviour emerges."
             )
             st.markdown(
@@ -9047,12 +4152,12 @@ def _render_student_analysis_page_inner():
                     rt = [str(n) if n > 0 else "" for n in rz]
                     _heat_z.append(rz); _heat_text.append(rt)
                 # Severity spread — grouped bar chart, coloured by WoT zone
-                # Green (severity 1–2) = coping/within window, Amber (severity 3) = elevated,
-                # Red (severity 4–5) = outside window. Count drives bar length, not colour.
+                # Green (L1-2) = coping/within window, Amber (L3) = elevated,
+                # Red (L4-5) = outside window. Count drives bar length, not colour.
                 # WoT colour scheme (per CLC-LBU framework):
-                # Green  = Within window (severity 1–2) — student regulated and engaged
-                # Yellow = Coping (severity 3)          — managing but approaching edge
-                # Red    = Outside window (severity 4–5) — dysregulated / crisis
+                # Green  = Within window (L1-2) — student regulated and engaged
+                # Yellow = Coping (L3)          — managing but approaching edge
+                # Red    = Outside window (L4-5) — dysregulated / crisis
                 _SEV_COLOURS_WOT = {
                     1: "#22c55e",  # green  — within window
                     2: "#22c55e",  # green  — within window
@@ -9061,11 +4166,11 @@ def _render_student_analysis_page_inner():
                     5: "#7f1d1d",  # dark red — crisis zone
                 }
                 _sev_names_wot = {
-                    1: "severity 1 Within window (regulated)",
-                    2: "severity 2 Within window (low concern)",
-                    3: "severity 3 Coping (approaching edge)",
-                    4: "severity 4 Outside window (serious)",
-                    5: "severity 5 Outside window (crisis)",
+                    1: "L1 Within window (regulated)",
+                    2: "L2 Within window (low concern)",
+                    3: "L3 Coping (approaching edge)",
+                    4: "L4 Outside window (serious)",
+                    5: "L5 Outside window (crisis)",
                 }
                 fig_b2 = go.Figure()
                 for sv in [1, 2, 3, 4, 5]:
@@ -9101,9 +4206,9 @@ def _render_student_analysis_page_inner():
                 )
                 st.plotly_chart(fig_b2, use_container_width=True)
                 st.caption(
-                    "🟢 Green (severity 1–2) = Within window — student is regulated and engaged effectively  ·  "
-                    "🟡 Yellow (severity 3) = Coping — managing, but approaching the edge of the window  ·  "
-                    "🔴 Red (severity 4–5) = Outside window — dysregulated / crisis zone. "
+                    "🟢 Green (L1–2) = Within window — student is regulated and engaged effectively  ·  "
+                    "🟡 Yellow (L3) = Coping — managing, but approaching the edge of the window  ·  "
+                    "🔴 Red (L4–5) = Outside window — dysregulated / crisis zone. "
                     "Green bars are a positive indicator: the student is within their Window of Tolerance."
                 )
 
@@ -9124,13 +4229,13 @@ def _render_student_analysis_page_inner():
                     "Behaviour": beh, "Total (n)": total, "Regular": total-crit, "Critical": crit,
                     "Escalation %": f"{pct:.0f}%", "Mean Sev": f"{sev_m:.1f}",
                     "Sev StDev": f"{std:.1f}" if std > 0 else "—",
-                    "Escalation Tier": f"{risk_icon} {risk_lbl}",
+                    "Risk Level": f"{risk_icon} {risk_lbl}",
                 })
             else:
                 _risk_rows.append({
                     "Behaviour": beh, "Total (n)": total, "Regular": total-crit, "Critical": crit,
                     "Escalation %": "⚠️ Insufficient", "Mean Sev": f"{sev_m:.1f}" if total > 0 else "—",
-                    "Sev StDev": "—", "Escalation Tier": "⚪ Limited data",
+                    "Sev StDev": "—", "Risk Level": "⚪ Limited data",
                 })
         if _risk_rows:
             st.dataframe(
@@ -9143,7 +4248,7 @@ def _render_student_analysis_page_inner():
                     "Escalation %": st.column_config.TextColumn("Escalation %", width="medium"),
                     "Mean Sev":     st.column_config.TextColumn("Mean Sev", width="small"),
                     "Sev StDev":    st.column_config.TextColumn("Sev StDev", help="Higher = more variable severity; lower = more consistent", width="small"),
-                    "Escalation Tier": st.column_config.TextColumn("Escalation Tier", width="medium"),
+                    "Risk Level":   st.column_config.TextColumn("Risk Level", width="medium"),
                 }
             )
             st.caption(
@@ -9152,8 +4257,8 @@ def _render_student_analysis_page_inner():
                 "not a data error, just means more observations are needed before a reliable rate can be calculated  ·  "
                 "Sev StDev: spread of severity scores (higher = more variable)"
             )
-            _pch = [r for r in _risk_rows if r.get("Escalation Tier","").startswith("🔴")]
-            _pcm = [r for r in _risk_rows if r.get("Escalation Tier","").startswith("🟡")]
+            _pch = [r for r in _risk_rows if r.get("Risk Level","").startswith("🔴")]
+            _pcm = [r for r in _risk_rows if r.get("Risk Level","").startswith("🟡")]
             _pcp = []
             if _pch: _pcp.append(f"{len(_pch)} behaviour(s) carry high escalation risk "
                 f"({", ".join(get_clinical_behaviour(r['Behaviour']) for r in _pch[:2])}). "
@@ -9821,10 +4926,10 @@ def _render_student_analysis_page_inner():
     # Logged incidents = student is not in green. All start from Coping (yellow).
     # Critical incident alone does NOT mean outside window.
     fig4.add_hrect(y0=0, y1=3.5, fillcolor="#fef9c3", opacity=0.25,
-                   annotation_text="Coping zone (severity 1–3) — behaviour present, student managing", annotation_position="top left", line_width=0)
+                   annotation_text="Coping zone (L1–L3) — behaviour present, student managing", annotation_position="top left", line_width=0)
     fig4.add_hrect(y0=3.5, y1=5.5, fillcolor="#fee2e2", opacity=0.25,
-                   annotation_text="Outside window (severity 4–5) — significant dysregulation", annotation_position="top left", line_width=0)
-    # WoT for incidents: yellow=coping (severity 1–3), red=outside window (severity 4–5)
+                   annotation_text="Outside window (L4–L5) — significant dysregulation", annotation_position="top left", line_width=0)
+    # WoT for incidents: yellow=coping (L1-3), red=outside window (L4-5)
     sev_colours = {1: '#eab308', 2: '#eab308', 3: '#f97316', 4: '#ef4444', 5: '#7f1d1d'}
     for sev_level in [1, 2, 3, 4, 5]:
         sev_data = full_df[full_df['severity'] == sev_level]
@@ -9846,8 +4951,8 @@ def _render_student_analysis_page_inner():
         yaxis=dict(
             range=[0, 5.5], tickmode='array',
             tickvals=[1, 2, 3, 4, 5],
-            ticktext=['severity 1<br>Coping', 'severity 2<br>Coping', 'severity 3<br>Approaching<br>edge',
-                      'severity 4<br>Outside<br>window', 'severity 5<br>Crisis'],
+            ticktext=['L1<br>Coping', 'L2<br>Coping', 'L3<br>Approaching<br>edge',
+                      'L4<br>Outside<br>window', 'L5<br>Crisis'],
             gridcolor='#e2e8f0', showline=True, linewidth=2, linecolor='#cbd5e1'
         ),
         xaxis=dict(showline=True, linewidth=2, linecolor='#cbd5e1', gridcolor='#e2e8f0', tickformat='%a %d/%m'),
@@ -9908,8 +5013,8 @@ def _render_student_analysis_page_inner():
             f"{_traj_advice[_traj_dir]}<br><br>"
             "<b>Reading the chart:</b> Each dot represents one incident, positioned on the date it occurred "
             "and the severity level recorded. The dashed trend line shows the overall direction. "
-            "Yellow zone = Coping (severity 1–3, behaviour present but student managing). "
-            "Red zone = Outside window (severity 4–5, significant dysregulation). "
+            "Yellow zone = Coping (L1–L3, behaviour present but student managing). "
+            "Red zone = Outside window (L4–L5, significant dysregulation). "
             "Any dot in the red zone marks an episode that required intensive de-escalation "
             "and post-incident relational repair before the student could re-engage with learning.</div>",
             unsafe_allow_html=True
@@ -10056,8 +5161,19 @@ def _render_student_analysis_page_inner():
     st.markdown("---")
 
     # ── Derived metrics (used in multiple sections below) ─────────────────────
-    top_beh, top_ant, top_loc, top_session, risk_score, risk_level = compute_analysis_stats(full_df)
+    top_beh     = full_df["behaviour_type"].mode()[0] if len(full_df) > 0 else "Unknown"
+    top_ant     = full_df["antecedent"].mode()[0] if len(full_df) > 0 else "Unknown"
+    top_loc     = full_df["location"].mode()[0] if len(full_df) > 0 else "Unknown"
+    top_session = full_df["session"].mode()[0] if len(full_df) > 0 else "Unknown"
     top_beh_clinical = get_clinical_behaviour(top_beh)
+
+    recent = full_df.tail(7)
+    risk_score = min(100, int(
+        (len(recent) / 7 * 10) +
+        (recent["severity"].mean() * 8) +
+        (len(full_df[full_df["incident_type"] == "Critical"]) / len(full_df) * 50)
+    ))
+    risk_level = "LOW" if risk_score < 30 else "MODERATE" if risk_score < 60 else "HIGH"
     risk_color = "#10b981" if risk_level == "LOW" else "#f59e0b" if risk_level == "MODERATE" else "#ef4444"
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -10096,30 +5212,13 @@ def _render_student_analysis_page_inner():
         )
     _card(dc1, "Behavioural Function",    detail.get("Behavioural Function","—"),    "#eff6ff","#3b82f6","#1d4ed8")
     _card(dc2, "BSEM Domain Priority",    detail.get("BSEM Domain Priority","—"),    "#fef9c3","#eab308","#a16207")
-    _card(dc3, "Incidents Logged",        f"{len(full_df)} total",                    "#f1f5f9","#64748b","#475569")
+    _card(dc3, "Risk Level",              f"{risk_level} ({risk_score}/100)",         f"{risk_color}22",risk_color,risk_color)
 
     st.markdown("<div style='height:.4rem'></div>", unsafe_allow_html=True)
     dc4, dc5, dc6 = st.columns(3)
     _card(dc4, "Behaviour Label",  top_beh_clinical,                          "#f0fdf4","#22c55e","#15803d")
     _card(dc5, "Primary Antecedent",        detail.get("Primary Antecedent","—"),       "#fdf4ff","#8b5cf6","#7c3aed")
     _card(dc6, "Risk Indicator",            detail.get("Risk Indicator","—"),           "#fff7ed","#f97316","#c2410c")
-
-    st.markdown("<div style='height:.5rem'></div>", unsafe_allow_html=True)
-    _considerations = build_considerations(full_df, top_ant, top_loc, top_session)
-    with st.expander("🤔 Considerations — before settling on this hypothesis"):
-        st.caption(
-            "Alternative or structural explanations worth ruling out before treating the "
-            "pattern above as purely behavioural. Worth reading with SMART's core reminder in "
-            "mind: behaviour is communication from the nervous system, not a considered choice "
-            "in the moment — regulate and relate before reasoning about it."
-        )
-        for _c in _considerations:
-            st.markdown(f"- {_c}")
-
-    st.markdown("---")
-    st.markdown("### 🪟 Window of Tolerance — Draft from This Student's Data")
-    render_window_of_tolerance_table(full_df, student_id=student_id)
-    render_wot_builder_sync(student, full_df)
 
     st.markdown("---")
 
@@ -10129,7 +5228,19 @@ def _render_student_analysis_page_inner():
     st.markdown("### 📂 Antecedent Category Analysis")
     st.caption("Incidents grouped by antecedent category to identify the primary trigger domain.")
 
-    full_df["_ant_cat"] = full_df["antecedent"].apply(categorize_antecedent)
+    def _cat(ant):
+        a = str(ant).lower()
+        if a.startswith("---"): return None
+        if "peer" in a: return "Peer"
+        if "transition" in a: return "Transition"
+        if "instruction" in a or "demand" in a or "following" in a: return "Instructions"
+        if any(w in a for w in ["engagement","task","wait","routine","interrupt","finish",
+                                  "literacy","maths","learning","work independently","difficult"]): return "Engagement"
+        if any(w in a for w in ["sensory","noise","loud","bright","crowded","medication",
+                                  "hungry","thirsty","movement break"]): return "Sensory"
+        return "Other"
+
+    full_df["_ant_cat"] = full_df["antecedent"].apply(_cat)
     quick_cat  = full_df[full_df.get("incident_type", "Quick") == "Quick"]["_ant_cat"].dropna() if "incident_type" in full_df.columns else full_df["_ant_cat"].dropna()
     crit_cat   = full_df[full_df.get("incident_type", "Quick") == "Critical"]["_ant_cat"].dropna() if "incident_type" in full_df.columns else pd.Series(dtype=str)
 
@@ -10173,8 +5284,6 @@ def _render_student_analysis_page_inner():
         st.caption(f"📌 **{top_cat}** is the dominant antecedent category ({top_cat_pct}% of all incidents) — "
                    f"this is the highest-priority domain for proactive, antecedent-stage intervention.")
 
-    render_combined_patterns(full_df)
-
     # Hypothesis function bar
     st.markdown("#### 🎯 Behavioural Function Distribution")
     if "hypothesis_function" in full_df.columns:
@@ -10201,55 +5310,11 @@ def _render_student_analysis_page_inner():
 
     st.markdown("---")
 
-    # ── Derive sensory-overview flags used by the Teaching Lens section below ──
-    # (fixes NameError: these were referenced but never computed)
-    _n_sensory_ants   = int((full_df["_ant_cat"] == "Sensory").sum()) if "_ant_cat" in full_df.columns else 0
-    _sensory_prominent = len(full_df) > 0 and (_n_sensory_ants / len(full_df)) >= 0.2
-    _has_sensory  = bool(_so_data)
-    _so_recs       = _so_data.get("recommendations", []) if _so_data else []
-    _so_seeking    = _so_data.get("sensory_seeking", []) if _so_data else []
-    _so_avoiding   = _so_data.get("sensory_avoiding", []) if _so_data else []
-    _so_strategies = _so_data.get("regulation_strategies", []) if _so_data else []
-    _so_triggers   = _so_data.get("triggers", []) if _so_data else []
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # SUPPORTS FOR TRANSITION TO A MAINSTREAM SETTING
-    # ══════════════════════════════════════════════════════════════════════════
-    st.markdown(
-        "<div style='background:linear-gradient(135deg,#1A7A7A 0%,#134e4e 100%);"
-        "border-radius:14px;padding:1.1rem 1.4rem;margin-bottom:0.7rem;"
-        "box-shadow:0 4px 14px rgba(19,78,78,0.25);'>"
-        "<span style='color:white;font-size:1.15rem;font-weight:700;'>🎒 Supports for Transition to a Mainstream Setting</span><br>"
-        "<span style='color:#d1fae5;font-size:0.85rem;'>BSEM-informed strategies (Body · Relationship · Stamina · Engagement · Character), "
-        "matched to this student's actual pattern, framed for handover to a receiving school. "
-        "Click a strategy for why it fits and how to implement it.</span></div>",
-        unsafe_allow_html=True,
-    )
-    st.caption("SMART's core reminder: regulate before you reason — these strategies work by supporting "
-               "regulation ahead of demand, not by correcting after the fact.")
-    _bsem_key = f"bsem_analysis_{student_id}"
-    _bsem_sig = f"{top_beh}|{top_ant}|{top_loc}|{top_session}"
-    if (st.session_state.get(f"{_bsem_key}_sig") != _bsem_sig
-            or st.button("🔄 Regenerate", key=f"{_bsem_key}_regen")):
-        with st.spinner("Drawing up BSEM-aligned recommendations..."):
-            st.session_state[_bsem_key] = build_bsem_recommendations(
-                full_df, top_beh, top_ant, top_loc, top_session,
-                student["name"], context="analysis")
-            st.session_state[f"{_bsem_key}_sig"] = _bsem_sig
-    _bsem_items = st.session_state.get(_bsem_key, [])
-    if _bsem_items:
-        render_bsem_recommendations(_bsem_items, key_prefix=_bsem_key)
-    else:
-        st.info("Not enough antecedent data yet to generate recommendations.")
-    st.markdown("---")
-
     # ══════════════════════════════════════════════════════════════════════════
     # TEACHING LENS
     # ══════════════════════════════════════════════════════════════════════════
     st.markdown("### 🎓 Teaching Lens — Recommendations")
-    st.caption("Strategies for educators to embed within the learning environment and curriculum delivery. "
-               "Framed on SMART's core principle: a dysregulated (Regulate-stage) brain can't yet learn or reason — "
-               "these strategies work by keeping the student regulated before demand increases, not after.")
+    st.caption("Strategies for educators to embed within the learning environment and curriculum delivery.")
 
     tc1, tc2 = st.columns(2)
     with tc1:
@@ -10310,9 +5375,7 @@ def _render_student_analysis_page_inner():
     # SUPPORT LENS
     # ══════════════════════════════════════════════════════════════════════════
     st.markdown("### 🤝 Support Lens — Recommendations")
-    st.caption("Therapeutic and behavioural support strategies for the care team, allied health, and leadership. "
-               "Sequenced on SMART's Regulate → Relate → Reason principle — co-regulation and safety come first; "
-               "debrief, repair, and skill-teaching only once the student is genuinely calm.")
+    st.caption("Therapeutic and behavioural support strategies for the care team, allied health, and leadership.")
 
     sc1, sc2 = st.columns(2)
     with sc1:
@@ -10332,7 +5395,7 @@ def _render_student_analysis_page_inner():
             f"<li><strong>Sensory diet</strong> incorporated before the {top_session} session — movement break, heavy work activity, or proprioceptive input to prepare the nervous system</li>"
             "<li><strong>Co-regulation with a key adult</strong> — calm, attuned, predictable adult presence; CPI Supportive Stance (low, slow, sideways) as the default posture</li>"
             f"<li>Develop a personalised <strong>Window of Tolerance profile</strong> for {student['name']} — document early warning signs, escalation cues, and effective de-escalation strategies</li>"
-            "<li><strong>Teach and embed regulation tools</strong> during calm states; cue their use proactively at early warning signs — before escalation occurs</li>"
+            "<li><strong>Teach and embed regulation tools</strong> during calm states; cue their use proactively at Yellow/Level 2 — before escalation to Level 3+</li>"
             "<li>Monitor <strong>medication timing</strong> if relevant and note correlations with incident frequency</li>"
             + _sc1_seeking_items + _sc1_strat_items +
             "</ul></div>",
@@ -10349,7 +5412,7 @@ def _render_student_analysis_page_inner():
             "<li><strong>Pre-correction</strong> immediately before known high-risk contexts — brief, calm reminder of expectations and available supports prior to entering the trigger environment</li>"
             f"<li><strong>Functional Communication Training (FCT)</strong> — teach an efficient, socially appropriate replacement behaviour that serves the same function as {top_beh_clinical.lower()}, explicitly and systematically</li>"
             "<li><strong>Structured peer interaction protocols</strong> — pre-assign groupings and roles where peer triggers are identified; avoid unstructured proximity</li>"
-            "<li>Develop a <strong>Crisis Safety Plan</strong> with Critical Incident protocols, designated staff roles, de-escalation sequence, and post-incident restorative repair procedure</li>"
+            "<li>Develop a <strong>Crisis Safety Plan</strong> with Level 3+ protocols, designated staff roles, de-escalation sequence, and post-incident restorative repair procedure</li>"
             "</ul></div>",
             unsafe_allow_html=True
         )
@@ -10365,7 +5428,7 @@ def _render_student_analysis_page_inner():
             "<ul style='margin:0;padding-left:1.2rem;font-size:.84rem;color:#1e293b;line-height:1.85;'>"
             "<li><strong>Restore the relationship before re-engaging</strong> with academic demands — never return to learning tasks while the student remains dysregulated</li>"
             "<li>Conduct a <strong>brief, non-punitive restorative conversation</strong> once fully regulated — focus on what happened, who was affected, and how to repair</li>"
-            "<li>Complete a structured <strong>staff debrief</strong> after every Critical Incident — review antecedents, early warning signs, and response effectiveness</li>"
+            "<li>Complete a structured <strong>staff debrief</strong> after every Level 3+ incident — review antecedents, early warning signs, and response effectiveness</li>"
             "<li>Maintain <strong>proactive, strengths-focused communication</strong> with parent/carer — not solely incident-driven contact</li>"
             "</ul></div>",
             unsafe_allow_html=True
@@ -10458,176 +5521,6 @@ def _render_student_analysis_page_inner():
         )
 
     st.markdown("---")
-    render_strategy_trials(student, full_df)
-    st.markdown("---")
-
-    st.markdown("### 🧭 Demand-Avoidant Presentations — Perceived Choice Approach")
-    render_demand_avoidance_section(full_df)
-    st.markdown("---")
-
-    render_transition_impact_section(student, full_df)
-
-    _render_micro_section_uncaptured(student, full_df)
-    st.markdown("---")
-
-    st.markdown("### 👁️ View, Edit & Print an Incident")
-    st.caption("Look up any single incident for this student, correct details (e.g. a wrong date), and print or download a summary.")
-
-    _ve_reg  = [i for i in st.session_state.incidents if i["student_id"] == student_id]
-    _ve_crit = [c for c in st.session_state.critical_incidents if c["student_id"] == student_id]
-    _ve_combined = []
-    for i in _ve_reg:
-        _rdate = i.get("date", "")
-        _flag = "⚠️ NO DATE  " if not _rdate else ""
-        _ve_combined.append({
-            "id": i["id"], "type": "regular", "date": _rdate,
-            "label": f"{_flag}[REGULAR]  {_rdate or '(none)'}  {i.get('time','')[:5]}  |  "
-                     f"{i.get('behaviour_type','—')}  |  Severity {i.get('severity','?')}",
-        })
-    for c in _ve_crit:
-        _primary_lbl = c.get("ABCH_primary", {}) if isinstance(c.get("ABCH_primary"), dict) else {}
-        _created = (c.get("created_at", "") or "")[:10]
-        _flag = "⚠️ NO DATE  " if not _created else ""
-        _ve_combined.append({
-            "id": c["id"], "type": "critical", "date": _created,
-            "label": f"{_flag}[CRITICAL]  {_created or '(none)'}  {_primary_lbl.get('time','')[:5]}  |  "
-                     f"{_primary_lbl.get('behaviour','Behaviour not recorded')[:50]}",
-        })
-
-    if not _ve_combined:
-        st.info("No incidents on record for this student yet.")
-    else:
-        _ve_sorted = sorted(_ve_combined, key=lambda x: x["date"], reverse=True)
-        _ve_options = {item["label"]: item for item in _ve_sorted}
-        _ve_selected_label = st.selectbox(
-            f"Select incident to view/edit ({len(_ve_combined)} total)",
-            list(_ve_options.keys()), key="view_edit_incident_select",
-        )
-        _ve_item = _ve_options[_ve_selected_label]
-        _ve_id, _ve_type = _ve_item["id"], _ve_item["type"]
-        _ve_record = next((i for i in _ve_reg if i["id"] == _ve_id), None) if _ve_type == "regular" \
-            else next((c for c in _ve_crit if c["id"] == _ve_id), None)
-
-        _ve_print_data = {}
-
-        if _ve_record and _ve_type == "regular":
-            _beh_opts = [b for b in BEHAVIOUR_TYPES if not b.startswith("---")]
-            _ant_opts = [a for a in ANTECEDENTS if not a.startswith("---")]
-            with st.form(f"edit_reg_{_ve_id}"):
-                ec1, ec2, ec3 = st.columns(3)
-                with ec1:
-                    _ve_date_val = None
-                    if _ve_record.get("date"):
-                        try: _ve_date_val = datetime.fromisoformat(_ve_record["date"]).date()
-                        except Exception: pass
-                    _e_date = st.date_input("Date", value=_ve_date_val, key=f"e_date_{_ve_id}")
-                    _e_time = st.text_input("Time (HH:MM:SS)", value=_ve_record.get("time","") or "", key=f"e_time_{_ve_id}")
-                with ec2:
-                    _e_loc = st.text_input("Location", value=_ve_record.get("location","") or "", key=f"e_loc_{_ve_id}")
-                    _sess_opts = ["Morning", "Middle", "Afternoon"]
-                    _e_sess = st.selectbox("Session", _sess_opts,
-                        index=_sess_opts.index(_ve_record.get("session")) if _ve_record.get("session") in _sess_opts else 0,
-                        key=f"e_sess_{_ve_id}")
-                with ec3:
-                    _e_sev = st.slider("Severity", 1, 5, int(_ve_record.get("severity") or 3), key=f"e_sev_{_ve_id}")
-                    _e_beh = st.selectbox("Behaviour Type", _beh_opts,
-                        index=_beh_opts.index(_ve_record.get("behaviour_type")) if _ve_record.get("behaviour_type") in _beh_opts else 0,
-                        key=f"e_beh_{_ve_id}")
-                _e_ant = st.selectbox("Antecedent", _ant_opts,
-                    index=_ant_opts.index(_ve_record.get("antecedent")) if _ve_record.get("antecedent") in _ant_opts else 0,
-                    key=f"e_ant_{_ve_id}")
-                _e_desc = st.text_area("Description / Notes", value=_ve_record.get("description","") or "", key=f"e_desc_{_ve_id}")
-                _ve_interv_current = _ve_record.get("intervention")
-                _e_interv = st.text_input(
-                    "Intervention(s) — comma separated",
-                    value=", ".join(_ve_interv_current) if isinstance(_ve_interv_current, list) else (_ve_interv_current or ""),
-                    key=f"e_interv_{_ve_id}",
-                )
-                if st.form_submit_button("💾 Save Changes", type="primary"):
-                    _updated = dict(_ve_record)
-                    _updated.update({
-                        "date": _e_date.isoformat() if _e_date else None,
-                        "time": _e_time, "location": _e_loc, "session": _e_sess,
-                        "severity": _e_sev, "behaviour_type": _e_beh, "antecedent": _e_ant,
-                        "description": _e_desc,
-                        "intervention": [s.strip() for s in _e_interv.split(",") if s.strip()],
-                        "db_exists": True,
-                    })
-                    if save_incident_to_db(_updated):
-                        _reload_into_session("incidents", load_incidents_from_db)
-                        _reload_into_session("critical_incidents", load_critical_incidents_from_db)
-                        st.success("✅ Incident updated.")
-                        st.rerun()
-            _ve_print_data = {
-                "Date": _ve_record.get("date") or "—", "Time": _ve_record.get("time") or "—",
-                "Location": _ve_record.get("location") or "—", "Session": _ve_record.get("session") or "—",
-                "Behaviour Type": _ve_record.get("behaviour_type") or "—",
-                "Antecedent": _ve_record.get("antecedent") or "—",
-                "Severity": _ve_record.get("severity") or "—",
-                "Intervention": ", ".join(_ve_interv_current) if isinstance(_ve_interv_current, list) else (_ve_interv_current or "—"),
-                "Description": _ve_record.get("description") or "—",
-            }
-
-        elif _ve_record and _ve_type == "critical":
-            _primary = _ve_record.get("ABCH_primary", {}) if isinstance(_ve_record.get("ABCH_primary"), dict) else {}
-            with st.form(f"edit_crit_{_ve_id}"):
-                ec1, ec2, ec3 = st.columns(3)
-                with ec1:
-                    _ve_cdate_val = None
-                    if _ve_record.get("created_at"):
-                        try: _ve_cdate_val = datetime.fromisoformat(_ve_record["created_at"][:10]).date()
-                        except Exception: pass
-                    _e_cdate = st.date_input("Date", value=_ve_cdate_val, key=f"e_cdate_{_ve_id}")
-                    _e_ctime = st.text_input("Time", value=_primary.get("time","") or "", key=f"e_ctime_{_ve_id}")
-                with ec2:
-                    _e_cloc = st.text_input("Location", value=_primary.get("location","") or "", key=f"e_cloc_{_ve_id}")
-                    _e_csev = st.slider("Severity", 1, 5, int(_ve_record.get("severity") or 3), key=f"e_csev_{_ve_id}")
-                with ec3:
-                    _e_sapol = st.text_input("SAPOL Reference", value=_ve_record.get("sapol_reference") or "", key=f"e_sapol_{_ve_id}")
-                _e_ctx = st.text_area("Antecedent / Context", value=_primary.get("context","") or "", key=f"e_cctx_{_ve_id}")
-                _e_cbeh = st.text_area("Behaviour", value=_primary.get("behaviour","") or "", key=f"e_cbeh_{_ve_id}")
-                _e_ccons = st.text_area("Consequence / Response", value=_primary.get("consequence","") or "", key=f"e_ccons_{_ve_id}")
-                _e_notes = st.text_area("Admin Summary / Notes", value=_ve_record.get("admin_summary","") or "", key=f"e_cnotes_{_ve_id}")
-                if st.form_submit_button("💾 Save Changes", type="primary"):
-                    if _viewer_write_blocked("edit a critical incident"):
-                        st.stop()
-                    _update_payload = {
-                        "created_at": f"{_e_cdate.isoformat()}T00:00:00" if _e_cdate else None,
-                        "primary_time": _e_ctime, "primary_location": _e_cloc,
-                        "primary_context": _e_ctx, "primary_behaviour": _e_cbeh,
-                        "primary_consequence": _e_ccons, "severity": _e_csev,
-                        "sapol_reference": _e_sapol or None, "admin_summary": _e_notes,
-                    }
-                    try:
-                        supabase.table("critical_incidents").update(_update_payload).eq("id", _ve_id).execute()
-                        _reload_into_session("incidents", load_incidents_from_db)
-                        _reload_into_session("critical_incidents", load_critical_incidents_from_db)
-                        st.success("✅ Critical incident updated.")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Update failed: {e}")
-            _ve_print_data = {
-                "Date": (_ve_record.get("created_at","") or "")[:10] or "—",
-                "Time": _primary.get("time") or "—", "Location": _primary.get("location") or "—",
-                "Antecedent / Context": _primary.get("context") or "—",
-                "Behaviour": _primary.get("behaviour") or "—",
-                "Consequence": _primary.get("consequence") or "—",
-                "Severity": _ve_record.get("severity") or "—",
-                "SAPOL Reference": _ve_record.get("sapol_reference") or "—",
-                "Notes": _ve_record.get("admin_summary") or "—",
-            }
-
-        if _ve_print_data:
-            st.markdown("")
-            _print_buf = generate_single_incident_docx(_ve_print_data, _ve_type, student["name"])
-            st.download_button(
-                "🖨️ Download Printable Summary (Word)", _print_buf,
-                file_name=f"Incident_{student['name'].replace(' ', '_')}_{_ve_item.get('date') or 'nodate'}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                key=f"print_dl_{_ve_id}",
-            )
-
-    st.markdown("---")
     st.markdown("### 🗑️ Delete an Incident")
     st.caption("Remove an incorrectly logged or duplicate incident from this student's full data set. This includes regular incidents AND critical incidents. Deletions are permanent and will affect all charts and analysis.")
 
@@ -10636,22 +5529,19 @@ def _render_student_analysis_page_inner():
 
     combined = []
     for i in reg_incidents:
-        _rdate = i.get("date", "")
-        _no_date_flag = "⚠️ NO DATE  " if not _rdate else ""
         combined.append({
             "id": i["id"],
             "type": "regular",
-            "label": f"{_no_date_flag}[REGULAR]  {_rdate or '(none)'}  {i.get('time','')[:5]}  |  {i.get('behaviour_type','—')}  |  Severity {i.get('severity','?')}  |  {i.get('location','—')}",
-            "date": _rdate,
+            "label": f"[REGULAR]  {i.get('date','?')}  {i.get('time','')[:5]}  |  {i.get('behaviour_type','—')}  |  Severity {i.get('severity','?')}  |  {i.get('location','—')}",
+            "date": i.get("date",""),
         })
     for c in crit_incidents:
         primary = c.get("ABCH_primary", {}) if isinstance(c.get("ABCH_primary"), dict) else {}
         created = (c.get("created_at","") or "")[:10]
-        _no_date_flag = "⚠️ NO DATE  " if not created else ""
         combined.append({
             "id": c["id"],
             "type": "critical",
-            "label": f"{_no_date_flag}[CRITICAL]  {created or '(none)'}  {primary.get('time','')[:5]}  |  {primary.get('behaviour','Behaviour not recorded')[:50]}  |  {primary.get('location','—')}",
+            "label": f"[CRITICAL]  {created}  {primary.get('time','')[:5]}  |  {primary.get('behaviour','Behaviour not recorded')[:50]}  |  {primary.get('location','—')}",
             "date": created,
         })
 
@@ -10724,8 +5614,6 @@ def _render_student_analysis_page_inner():
             with col_final:
                 if st.button("🔴 YES — permanently delete this incident", type="primary",
                              key=f"final_del_{selected_id}", use_container_width=True):
-                    if _viewer_write_blocked("delete an incident"):
-                        st.stop()
                     deleted = False
                     if supabase:
                         try:
@@ -10737,13 +5625,10 @@ def _render_student_analysis_page_inner():
                     else:
                         deleted = True
                     if deleted:
-                        # Explicitly reload fresh from the database rather than
-                        # filtering the in-memory list — guarantees the removed
-                        # incident is actually gone everywhere it's counted
-                        # (program roster, dashboard, analysis), with no
-                        # dependency on an in-memory id-match succeeding.
-                        _reload_into_session("incidents", load_incidents_from_db)
-                        _reload_into_session("critical_incidents", load_critical_incidents_from_db)
+                        if selected_type == "regular":
+                            st.session_state.incidents = [i for i in st.session_state.incidents if i["id"] != selected_id]
+                        else:
+                            st.session_state.critical_incidents = [c for c in st.session_state.critical_incidents if c["id"] != selected_id]
                         for k in [confirm_key, confirm2_key, f"confirm_chk_{selected_id}"]:
                             st.session_state.pop(k, None)
                         st.success("✅ Incident permanently deleted and removed from the data set.")
@@ -10930,36 +5815,6 @@ def _render_student_analysis_page_inner():
                         st.error("❌ Failed to save — please try again.")
 
     st.markdown("---")
-    st.markdown("#### 📝 Supports Trialled (optional — included in the report below)")
-    st.caption("Answers here are included in the Behaviour Summary report automatically.")
-    _st_col1, _st_col2 = st.columns(2)
-    with _st_col1:
-        st.text_area(
-            "What supports/strategies have been trialled with this student?",
-            key=f"supports_trialled_{student_id}", height=90,
-            placeholder="e.g. Quiet entry space before joining the group, movement break before Maths, "
-                        "visual transition schedule...",
-        )
-    with _st_col2:
-        st.text_area(
-            "How successful were they? What worked, what didn't?",
-            key=f"supports_success_{student_id}", height=90,
-            placeholder="e.g. Quiet entry space reduced morning incidents significantly; movement "
-                        "breaks had mixed results...",
-        )
-    st.date_input(
-        "When did this trial start? (optional — enables a before/after comparison below)",
-        value=None, key=f"supports_trial_date_{student_id}",
-    )
-    _supports_trialled = st.session_state.get(f"supports_trialled_{student_id}", "")
-    _supports_success  = st.session_state.get(f"supports_success_{student_id}", "")
-    _trial_date = st.session_state.get(f"supports_trial_date_{student_id}")
-    _before_after = compute_before_after(full_df, _trial_date) if _trial_date else None
-    if _before_after:
-        st.markdown("**📈 Before / After Comparison**")
-        render_before_after(_before_after)
-
-    st.markdown("---")
     st.markdown("### 📄 Export Data & Reports")
     col1, col2 = st.columns(2)
     with col1:
@@ -10970,91 +5825,18 @@ def _render_student_analysis_page_inner():
     with col2:
         with st.spinner("Generating Behaviour Summary..."):
             docx_file = generate_behaviour_analysis_plan_docx(
-                student, full_df, top_ant, top_beh, top_loc, top_session, risk_score, risk_level,
-                supports_trialled=_supports_trialled, supports_success=_supports_success,
-                before_after=_before_after)
+                student, full_df, top_ant, top_beh, top_loc, top_session, risk_score, risk_level)
         if docx_file:
-            _bs_date = datetime.now().strftime("%Y%m%d")
-            _bs_local_name = f"BehaviourSummary_{student['name'].replace(' ', '_')}_{_bs_date}.docx"
-            _dl_kwargs = {}
-            if _ARCHIVE_AVAILABLE:
-                _bs_initials = _student_archive_initials(student)
-                _bs_creator = (
-                    st.session_state.current_user.get("email")
-                    or st.session_state.current_user.get("name", "unknown")
-                ) if st.session_state.get("current_user") else "unknown"
-                _dl_kwargs = dict(
-                    on_click=archive_once,
-                    kwargs=dict(
-                        guard_key=f"behreport_{student_id}_{_bs_date}",
-                        source_tool="Behaviour Support Tool",
-                        doc_type="Behaviour Report",
-                        title=f"Behaviour Summary — {_bs_initials}",
-                        file_bytes=docx_file.getvalue(),
-                        # Archive filename uses initials only — the archive
-                        # never stores full student names (privacy policy
-                        # in archive_utils.py) — separate from the
-                        # full-name filename used for the local download.
-                        filename=f"BehaviourSummary_{_bs_initials}_{_bs_date}.docx",
-                        student_initials=_bs_initials,
-                        created_by=_bs_creator,
-                        notes="Auto-archived on download.",
-                    ),
-                )
             st.download_button("📄 Behaviour Summary (Word)", docx_file,
-                file_name=_bs_local_name,
+                file_name=f"BehaviourSummary_{student['name'].replace(" ", "_")}_{datetime.now().strftime("%Y%m%d")}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True,
-                **_dl_kwargs)
-
-    _prep_print = st.checkbox("🖨️ Prepare print versions (Full Screen + Full Analysis Word)", key=f"prep_print_{student_id}",
-                              help="Built only when ticked, so the page stays quick for everyday use.")
-    st.markdown("#### 🖨️ Print the Whole Screen")
-    st.caption("Prints everything on this page exactly as shown: every chart with its 'Understanding this chart' note, "
-               "tables, recommendations and trials, plus the incident register and a notes page. Open the file, press Print, "
-               "then pick your printer or Save as PDF.")
-    if not _prep_print:
-        st.caption("Tick the box above to prepare the print versions.")
-    try:
-        if not _prep_print:
-            raise StopIteration
-        _screen_html = build_print_html(
-            student, full_df, list(_SCREEN["rec"]), supports_trialled=_supports_trialled,
-            supports_success=_supports_success, before_after=_before_after, trials=None)
-        st.download_button(
-            "🖨️ Print-ready Full Screen (HTML)", _screen_html,
-            file_name=f"FullScreen_{student['name'].replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.html",
-            mime="text/html", use_container_width=True, key=f"dl_fullscreen_{student_id}")
-    except StopIteration:
-        pass
-    except Exception as _e:
-        st.warning(f"Could not prepare the print-ready version: {_e}")
-    st.markdown("#### 📄 Full Analysis — Word version")
-    st.caption("Everything on this page in one printable Word document for meetings: all charts and tables, "
-               "Window of Tolerance, patterns, considerations, Berry Street strategies, a full incident "
-               "register, and a blank page for notes and agreed actions.")
-    with st.spinner("Preparing print pack..."):
-        _pack_file = None if not _prep_print else generate_behaviour_analysis_plan_docx(
-            student, full_df, top_ant, top_beh, top_loc, top_session, risk_score, risk_level,
-            supports_trialled=_supports_trialled, supports_success=_supports_success,
-            before_after=_before_after, full_pack=True,
-            bsem_items=st.session_state.get(f"bsem_analysis_{student_id}", []),
-            trials=load_trials(student_id))
-    if _pack_file:
-        st.download_button(
-            "🖨️ Full Analysis for Printing (Word)", _pack_file,
-            file_name=f"FullAnalysis_{student['name'].replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            use_container_width=True, key=f"dl_fullpack_{student_id}")
+                use_container_width=True)
 
     st.markdown("---")
     col1, col2 = st.columns(2)
     with col1:
         if st.button("⬅ Back to Students", type="primary", key="back_analysis_bottom", use_container_width=True):
-            if student.get("archived", False):
-                go_to("admin_portal")
-            else:
-                go_to("program_students", selected_program=student["program"])
+            go_to("program_students", selected_program=student["program"])
     with col2:
         if st.button("🏠 Program Landing", key="home_analysis_bottom", use_container_width=True):
             go_to("landing")
@@ -11066,29 +5848,16 @@ def render_student_dashboard():
     if not student:
         st.error("No student selected"); return
     st.markdown(f"## 📊 Dashboard — {student['name']}")
-    if st.session_state.get("hist_incident_just_saved"):
-        _saved_total = st.session_state.pop("hist_incident_just_saved")
-        st.success(f"✅ Historical incident saved — {student['name']} now has **{_saved_total}** incident(s) on record.")
-    col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
-    with col5:
-        if st.button("🌡️ Log Micro", key="micro_dash",
-                     help="Log an early-warning sign (micro behaviour)"):
-            go_to("micro_log", selected_student_id=student_id)
+    col1, col2, col3 = st.columns([2, 1, 1])
     with col1:
         if st.button("⬅ Back to Students", key="back_dash"):
-            if student.get("archived", False):
-                go_to("admin_portal")
-            else:
-                go_to("program_students", selected_program=student["program"])
+            go_to("program_students", selected_program=student["program"])
     with col2:
         if st.button("📝 Log Incident", key="log_dash"):
             go_to("incident_log", selected_student_id=student_id)
     with col3:
         if st.button("📈 Full Analysis", key="analysis_dash"):
             go_to("student_analysis", selected_student_id=student_id)
-    with col4:
-        if st.button("📋 Support Plan", key="sp_dash"):
-            go_to("support_plan", selected_student_id=student_id)
     st.markdown("---")
     incidents = [i for i in st.session_state.incidents if i["student_id"] == student_id]
     critical = [c for c in st.session_state.critical_incidents if c["student_id"] == student_id]
@@ -11098,13 +5867,17 @@ def render_student_dashboard():
     crit_df = pd.DataFrame(critical) if critical else pd.DataFrame()
     if not quick_df.empty:
         quick_df["incident_type"] = "Quick"
-        quick_df["date_parsed"] = _parse_dates(quick_df["date"])
+        quick_df["date_parsed"] = pd.to_datetime(
+            quick_df["date"], utc=True, errors="coerce"
+        ).dt.tz_localize(None)
     if not crit_df.empty:
         crit_df["incident_type"] = "Critical"
         _crit_dates = crit_df["created_at"] if "created_at" in crit_df.columns else pd.Series(
             [datetime.now().isoformat()] * len(crit_df), index=crit_df.index
         )
-        crit_df["date_parsed"] = _parse_dates(_crit_dates)
+        crit_df["date_parsed"] = pd.to_datetime(
+            _crit_dates, utc=True, errors="coerce"
+        ).dt.tz_localize(None)
         crit_df["severity"] = crit_df["severity"].fillna(5).astype(int) if "severity" in crit_df.columns else 5
         crit_df["time"] = crit_df["ABCH_primary"].apply(
             lambda d: d.get("time", "09:00:00") if isinstance(d, dict) else "09:00:00"
@@ -11114,51 +5887,12 @@ def render_student_dashboard():
                 crit_df[_col] = crit_df["ABCH_primary"].apply(
                     lambda d: d.get(_col, "") if isinstance(d, dict) else ""
                 ) if "ABCH_primary" in crit_df.columns else ""
-        if "location" in crit_df.columns:
-            crit_df["location"] = crit_df["location"].apply(normalise_location)
     full_df = (
         pd.concat([quick_df, crit_df], ignore_index=True)
         .sort_values("date_parsed", na_position="last")
         if not quick_df.empty or not crit_df.empty
         else pd.DataFrame()
     )
-
-    # ── Filters: applied to everything below (metrics, charts, patterns, recommendations) ──
-    if not full_df.empty:
-        with st.expander("🔎 Filters", expanded=False):
-            _fcol1, _fcol2, _fcol3 = st.columns(3)
-            _min_d = full_df["date_parsed"].min()
-            _max_d = full_df["date_parsed"].max()
-            with _fcol1:
-                _date_range = st.date_input(
-                    "Date range", value=(_min_d.date(), _max_d.date()),
-                    min_value=_min_d.date(), max_value=_max_d.date(),
-                    key=f"dash_filter_dates_{student_id}",
-                )
-            with _fcol2:
-                _beh_opts = sorted(full_df["behaviour_type"].dropna().unique().tolist()) if "behaviour_type" in full_df.columns else []
-                _beh_filter = st.multiselect("Behaviour type", _beh_opts, key=f"dash_filter_beh_{student_id}")
-            with _fcol3:
-                _loc_opts = sorted(full_df["location"].dropna().unique().tolist()) if "location" in full_df.columns else []
-                _loc_filter = st.multiselect("Location", _loc_opts, key=f"dash_filter_loc_{student_id}")
-            if st.button("Clear filters", key=f"dash_filter_clear_{student_id}"):
-                for _k in [f"dash_filter_dates_{student_id}", f"dash_filter_beh_{student_id}", f"dash_filter_loc_{student_id}"]:
-                    st.session_state.pop(_k, None)
-                st.rerun()
-
-        if isinstance(_date_range, tuple) and len(_date_range) == 2:
-            _d_start, _d_end = _date_range
-            full_df = full_df[
-                (full_df["date_parsed"].dt.date >= _d_start) & (full_df["date_parsed"].dt.date <= _d_end)
-            ]
-        if _beh_filter:
-            full_df = full_df[full_df["behaviour_type"].isin(_beh_filter)]
-        if _loc_filter:
-            full_df = full_df[full_df["location"].isin(_loc_filter)]
-        _filters_active = bool(_beh_filter or _loc_filter or (isinstance(_date_range, tuple) and _date_range != (_min_d.date(), _max_d.date())))
-        if _filters_active:
-            st.caption(f"🔎 Filters applied — showing {len(full_df)} incident(s). Everything below reflects this filtered view.")
-
     total_incidents = len(full_df)
     critical_count = len(full_df[full_df.get("incident_type", pd.Series(dtype=str)) == "Critical"]) if "incident_type" in full_df.columns else len(crit_df)
     avg_severity = full_df["severity"].mean() if "severity" in full_df.columns else 0
@@ -11231,16 +5965,8 @@ def render_student_dashboard():
                         title=dict(text="Incidents", font=dict(size=11, color="#334155")),
                     ),
                 )
-                _daily_pts = plotly_chart_with_selection(fig, key=f"dash_daily_chart_{student_id}", use_container_width=True)
-                st.caption("🟥 Red = 3+ incidents that day  ·  🟦 Teal = 1–2 incidents  ·  Click a bar to see that day's incidents.")
-                if _daily_pts:
-                    _sel_idx = _daily_pts[0].get("point_index")
-                    if _sel_idx is not None and 0 <= _sel_idx < len(daily):
-                        _sel_date = daily.iloc[_sel_idx]["_d"]
-                        _day_incidents = full_df[full_df["date_parsed"].dt.date == _sel_date]
-                        with st.expander(f"📋 Incidents on {_sel_date.strftime('%A %d %B')} ({len(_day_incidents)})", expanded=True):
-                            _show_cols = [c for c in ["date_parsed", "time", "behaviour_type", "antecedent", "location", "session", "severity"] if c in _day_incidents.columns]
-                            st.dataframe(_day_incidents[_show_cols], use_container_width=True, hide_index=True)
+                st.plotly_chart(fig, use_container_width=True)
+                st.caption("🟥 Red = 3+ incidents that day  ·  🟦 Teal = 1–2 incidents")
         else:
             st.info("No incident data to display.")
     with col2:
@@ -11282,17 +6008,7 @@ def render_student_dashboard():
                         automargin=True,
                     ),
                 )
-                _beh_pts = plotly_chart_with_selection(fig, key=f"dash_beh_chart_{student_id}", use_container_width=True)
-                st.caption("Click a bar to see incidents of that behaviour.")
-                if _beh_pts:
-                    _sel_idx = _beh_pts[0].get("point_index")
-                    _beh_labels_rev = list(beh_counts.index[::-1])
-                    if _sel_idx is not None and 0 <= _sel_idx < len(_beh_labels_rev):
-                        _sel_beh = _beh_labels_rev[_sel_idx]
-                        _beh_incidents = full_df[full_df["behaviour_type"] == _sel_beh]
-                        with st.expander(f"📋 Incidents — {_sel_beh} ({len(_beh_incidents)})", expanded=True):
-                            _show_cols = [c for c in ["date_parsed", "time", "antecedent", "location", "session", "severity"] if c in _beh_incidents.columns]
-                            st.dataframe(_beh_incidents[_show_cols], use_container_width=True, hide_index=True)
+                st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("No behaviour data recorded yet.")
     st.markdown("---")
@@ -11315,38 +6031,13 @@ def render_student_dashboard():
                 emoji = "🔴" if inc.get("incident_type") == "Critical" else "🟡" if sev >= 3 else "🟢"
                 st.markdown(f"{emoji} **{date_str}** - Sev {sev}")
     st.markdown("---")
-    st.markdown(
-        "<div style='background:linear-gradient(135deg,#1A7A7A 0%,#134e4e 100%);"
-        "border-radius:14px;padding:1.1rem 1.4rem;margin-bottom:0.7rem;"
-        "box-shadow:0 4px 14px rgba(19,78,78,0.25);'>"
-        "<span style='color:white;font-size:1.15rem;font-weight:700;'>💡 Recommendations to Trial</span><br>"
-        "<span style='color:#d1fae5;font-size:0.85rem;'>BSEM-informed strategies matched to this "
-        "student's actual pattern. Click a strategy for why it fits and how to trial it.</span></div>",
-        unsafe_allow_html=True,
-    )
-    st.caption("SMART's core reminder: regulate before you reason — these strategies work by supporting "
-               "regulation ahead of demand, not by correcting after the fact.")
-    _risk_line = {"HIGH": "🔴 **HIGH RISK** — daily check-ins recommended alongside the strategies below.",
-                  "MODERATE": "🟡 **MODERATE RISK** — weekly review alongside the strategies below.",
-                  "LOW": "🟢 **LOW RISK** — maintain current supports."}[risk_level]
-    st.caption(_risk_line)
-    if not full_df.empty:
-        _bsem_key_d = f"bsem_dash_{student_id}"
-        _bsem_sig_d = f"{top_beh}|{top_ant}|{top_loc}|{top_session}"
-        if (st.session_state.get(f"{_bsem_key_d}_sig") != _bsem_sig_d
-                or st.button("🔄 Regenerate", key=f"{_bsem_key_d}_regen")):
-            with st.spinner("Drawing up BSEM-aligned recommendations..."):
-                st.session_state[_bsem_key_d] = build_bsem_recommendations(
-                    full_df, top_beh, top_ant, top_loc, top_session,
-                    student["name"], context="dashboard")
-                st.session_state[f"{_bsem_key_d}_sig"] = _bsem_sig_d
-        _bsem_items_d = st.session_state.get(_bsem_key_d, [])
-        if _bsem_items_d:
-            render_bsem_recommendations(_bsem_items_d, key_prefix=_bsem_key_d)
-        else:
-            st.info("Not enough antecedent data yet to generate recommendations.")
+    st.markdown("### 💡 Quick Recommendations")
+    if risk_level == "HIGH":
+        st.error("**⚠️ HIGH RISK**\n- Schedule urgent case review\n- Update safety plan\n- Daily check-ins")
+    elif risk_level == "MODERATE":
+        st.warning("**⚠️ MODERATE RISK**\n- Weekly review\n- Enhanced monitoring\n- Proactive strategies")
     else:
-        st.info("Log some incidents to generate BSEM-aligned recommendations.")
+        st.success("**✅ LOW RISK**\n- Maintain supports\n- Continue monitoring\n- Celebrate progress")
     st.markdown("---")
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -11357,10 +6048,7 @@ def render_student_dashboard():
             go_to("student_analysis", selected_student_id=student_id)
     with col3:
         if st.button("⬅ Back", use_container_width=True, key="dash_back_btn"):
-            if student.get("archived", False):
-                go_to("admin_portal")
-            else:
-                go_to("program_students", selected_program=student["program"])
+            go_to("program_students", selected_program=student["program"])
 
     # ══════════════════════════════════════════════════════════════════════════
     # PATCH 2: HISTORICAL CRITICAL INCIDENTS — tabbed: Paste / Upload
@@ -11379,31 +6067,28 @@ def render_student_dashboard():
             return
         with st.spinner("AI is reading your document..."):
             try:
+                from groq import Groq as GroqClient
                 import json as _json
-                prompt = (
-                    "You are a behaviour support data analyst for Cowandilla Learning Centre, Learning & Behaviour Unit.\n"
-                    f"The following document describes ONE critical incident involving student: {student_name}.\n"
-                    "Extract the incident as a single JSON object with this exact structure:\n"
-                    '{"date":"YYYY-MM-DD","severity":3,"sapol_reference":"reference number or null",'
-                    '"outcomes":["list","of","outcomes"],'
-                    '"primary":{"time":"time","location":"location","context":"antecedent context",'
-                    '"behaviour":"narrative description of what happened",'
-                    '"behaviour_type":"CANONICAL LABEL — see list below","consequence":"staff response"},'
-                    '"additional_entries":[{"time":"time","location":"location","context":"antecedent",'
-                    '"behaviour":"behaviour narrative","behaviour_type":"canonical label",'
-                    '"consequence":"consequence","hypothesis":""}],'
-                    '"notes":"any other relevant context"}\n\n'
-                    "CANONICAL BEHAVIOUR TYPES — behaviour_type MUST be one of these exact strings:\n"
-                    "Verbal refusal of instruction | Task refusal / passive non-compliance | Shutdown / complete withdrawal | Selective mutism / non-responsiveness | Unsanctioned departure (elopement) | Absconding from school grounds | Hiding or avoiding adult proximity | Inappropriate vocalisation / noises | Disruptive verbal commentary | Interrupting / calling out | Property misuse or interference | Verbal aggression toward peer | Verbal aggression toward adult | Physical aggression toward peer | Physical aggression toward adult | Threatening behaviour | Property destruction | Throwing objects | Self-injurious behaviour | Dysregulated emotional expression | Other (specify in description)\n\n"
-                    "Rules:\n"
-                    "- severity 1-5 (1=minor/coping, 2=low, 3=elevated, 4=serious, 5=crisis); if SAPOL called then at least 4.\n"
-                    "- behaviour_type must exactly match one of the canonical labels above.\n"
-                    "- behaviour is the narrative/description; behaviour_type is the clinical classification.\n"
-                    "- Return ONLY valid JSON, no markdown fences, no extra text.\n"
-                    f"Document: {doc_text}"
-                )
-                raw = groq_ai_call(prompt, max_tokens=3000, temperature=0.1)
-                raw = raw.replace("```json","").replace("```","").strip()
+                client = GroqClient(api_key=GROQ_KEY)
+                prompt = f"""You are a behaviour support data analyst for Cowandilla Learning Centre, Learning & Behaviour Unit.
+The following document describes ONE critical incident involving student: {student_name}.
+Extract the incident as a single JSON object with this exact structure:
+{"date":"YYYY-MM-DD","severity":3,"sapol_reference":"reference number or null","outcomes":["list","of","outcomes"],"primary":{"time":"time","location":"location","context":"antecedent context","behaviour":"narrative description of what happened","behaviour_type":"CANONICAL LABEL — see list below","consequence":"staff response"},"additional_entries":[{"time":"time","location":"location","context":"antecedent","behaviour":"behaviour narrative","behaviour_type":"canonical label","consequence":"consequence","hypothesis":""}],"notes":"any other relevant context"}
+
+CANONICAL BEHAVIOUR TYPES — behaviour_type MUST be one of these exact strings:
+Verbal refusal of instruction | Task refusal / passive non-compliance | Shutdown / complete withdrawal | Selective mutism / non-responsiveness | Unsanctioned departure (elopement) | Absconding from school grounds | Hiding or avoiding adult proximity | Inappropriate vocalisation / noises | Disruptive verbal commentary | Interrupting / calling out | Property misuse or interference | Verbal aggression toward peer | Verbal aggression toward adult | Physical aggression toward peer | Physical aggression toward adult | Threatening behaviour | Property destruction | Throwing objects | Self-injurious behaviour | Dysregulated emotional expression | Other (specify in description)
+
+Rules:
+- severity 1-5 (1=minor/coping, 2=low, 3=elevated, 4=serious, 5=crisis); if SAPOL called then at least 4.
+- behaviour_type must exactly match one of the canonical labels above.
+- behaviour is the narrative/description; behaviour_type is the clinical classification.
+- Return ONLY valid JSON, no markdown fences, no extra text.
+Document: {doc_text}"""
+                response = client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=3000, temperature=0.1)
+                raw = response.choices[0].message.content.strip().replace("```json","").replace("```","").strip()
                 extracted = _json.loads(raw)
                 if isinstance(extracted, list):
                     extracted = extracted[0] if extracted else {}
@@ -11544,8 +6229,6 @@ def render_student_dashboard():
         save_col, clear_col = st.columns(2)
         with save_col:
             if st.button("💾 Save as Critical Incident", type="primary", key="save_ai_extracted", use_container_width=True):
-                if _viewer_write_blocked("save a historical critical incident"):
-                    st.stop()
                 try:
                     outcomes_raw = inc.get("outcomes", "")
                     outcomes_list = [o.strip() for o in outcomes_raw.split(",") if o.strip()] if isinstance(outcomes_raw, str) else outcomes_raw
@@ -11567,19 +6250,11 @@ def render_student_dashboard():
                         "status": "historical", "audit_trail": "[]", "include_audit_in_report": False,
                     }
                     supabase.table("critical_incidents").insert(record).execute()
+                    st.success(f"✅ Saved to {student['name']}'s record!")
                     st.session_state["ai_extracted_incident"] = None
-                    # Explicitly refetch fresh data now, rather than deleting
-                    # the cache and relying on init_state()'s lazy-load guard
-                    # to correctly repopulate it on the next run — this
-                    # guarantees the dashboard reflects the new incident
-                    # immediately, with no dependency on rerun ordering.
-                    _reload_into_session("incidents", load_incidents_from_db)
-                    _reload_into_session("critical_incidents", load_critical_incidents_from_db)
-                    _new_total = (
-                        len([i for i in st.session_state.incidents if i["student_id"] == student_id])
-                        + len([c for c in st.session_state.critical_incidents if c["student_id"] == student_id])
-                    )
-                    st.session_state["hist_incident_just_saved"] = _new_total
+                    for _key in ["critical_incidents", "incidents"]:
+                        if _key in st.session_state:
+                            del st.session_state[_key]
                     st.rerun()
                 except Exception as e:
                     st.error(f"Error saving: {e}")
@@ -11622,7 +6297,6 @@ def render_admin_portal():
                                 s["archived"] = True
                                 try:
                                     supabase.table("students").update({"archived": True}).eq("id", s["id"]).execute()
-                                    generate_and_archive_behaviour_summary(s)
                                     st.session_state.students = load_students_from_db()
                                     st.rerun()
                                 except Exception as e:
@@ -11710,7 +6384,6 @@ def render_admin_portal():
                                     st.success(f"✅ {student['name']} archived")
                                 except Exception as e:
                                     st.error(f"Archive failed: {e}")
-                            generate_and_archive_behaviour_summary(student)
                             st.rerun()
                 if st.session_state.get("editing_student") == student['id']:
                     with st.expander("✏️ Edit Student Details", expanded=True):
@@ -11743,7 +6416,8 @@ def render_admin_portal():
                             "Record any extensions to the original placement. "
                             "Extensions appear in the student's analysis alongside incident patterns."
                         )
-                        _adm_exts = load_placement_extensions_from_db(student['id'])
+                        _adm_ext_key = f"placement_extensions_{student['id']}"
+                        _adm_exts    = st.session_state.get(_adm_ext_key, [])
 
                         with st.form(f"ext_form_{student['id']}"):
                             _ae1, _ae2, _ae3 = st.columns([2, 2, 3])
@@ -11752,21 +6426,22 @@ def render_admin_portal():
                             with _ae3: _adm_er = st.text_input("Reason / context *", placeholder="e.g. Extended — positive progress", key=f"adm_er_{student['id']}")
                             if st.form_submit_button("➕ Add Extension"):
                                 if _adm_ef and _adm_et and _adm_er.strip():
-                                    if save_placement_extension_to_db(student['id'], _adm_ef.isoformat(), _adm_et.isoformat(), _adm_er.strip()):
-                                        st.success(f"✅ Extension added")
-                                        st.rerun()
+                                    _adm_exts = _adm_exts + [{"from": _adm_ef.isoformat(), "to": _adm_et.isoformat(), "reason": _adm_er.strip()}]
+                                    st.session_state[_adm_ext_key] = _adm_exts
+                                    st.success(f"✅ Extension added")
+                                    st.rerun()
                                 else: st.error("Complete all three fields.")
 
                         if _adm_exts:
-                            for _ex in _adm_exts:
+                            for _ei, _ex in enumerate(_adm_exts):
                                 try:
                                     _c1, _c2 = st.columns([5, 1])
                                     with _c1:
                                         st.markdown(f"📌 **{datetime.fromisoformat(_ex['from']).strftime('%-d %b %Y')} – {datetime.fromisoformat(_ex['to']).strftime('%-d %b %Y')}** — {_ex['reason']}")
                                     with _c2:
-                                        if st.button("❌", key=f"rm_ext_{student['id']}_{_ex['id']}"):
-                                            if delete_placement_extension_from_db(_ex['id']):
-                                                st.rerun()
+                                        if st.button("❌", key=f"rm_ext_{student['id']}_{_ei}"):
+                                            st.session_state[_adm_ext_key] = [e for i, e in enumerate(_adm_exts) if i != _ei]
+                                            st.rerun()
                                 except: pass
 
     with tab2:
@@ -11788,14 +6463,9 @@ def render_admin_portal():
                         with col2:
                             if student.get('placement_start'):
                                 st.caption(f"📅 Placement: {datetime.fromisoformat(student['placement_start']).strftime('%d/%m/%Y')} – {datetime.fromisoformat(student['placement_end']).strftime('%d/%m/%Y') if student.get('placement_end') else 'ongoing'}")
-                            incident_count = (
-                                len([i for i in st.session_state.incidents if i['student_id'] == student['id']])
-                                + len([c for c in st.session_state.critical_incidents if c['student_id'] == student['id']])
-                            )
+                            incident_count = len([i for i in st.session_state.incidents if i['student_id'] == student['id']])
                             st.caption(f"📋 {incident_count} incidents on record")
                         with col3:
-                            if st.button("👁️ View Details", key=f"view_archived_{student['id']}", use_container_width=True):
-                                go_to("student_dashboard", selected_student_id=student['id'])
                             if st.button("♻️ Restore", key=f"restore_{student['id']}"):
                                 student['archived'] = False
                                 if supabase:
@@ -11821,12 +6491,6 @@ def render_admin_portal():
                                             except Exception as e:
                                                 st.error(f"Delete failed: {e}")
                                         st.session_state.students = [s for s in st.session_state.students if s['id'] != student['id']]
-                                        # Also refresh incidents/critical_incidents — otherwise this
-                                        # student's now-deleted records linger in the cached lists
-                                        # and inflate site-wide totals elsewhere in the portal.
-                                        if supabase:
-                                            _reload_into_session("incidents", load_incidents_from_db)
-                                            _reload_into_session("critical_incidents", load_critical_incidents_from_db)
                                         st.session_state[f"confirm_delete_{student['id']}"] = False
                                         st.rerun()
                                 with col_no:
@@ -12172,8 +6836,8 @@ def render_admin_portal():
         st.markdown("### 🎚️ Correct Critical Incident Severity")
         st.caption(
             "Fix the severity level on a specific critical incident. "
-            "Remember: a critical incident does not automatically mean severity 4/severity 5 — "
-            "most incidents sit in the Coping zone (severity 1–3)."
+            "Remember: a critical incident does not automatically mean L4/L5 — "
+            "most incidents sit in the Coping zone (L1–L3)."
         )
         _sv_students = {s["id"]: s["name"] for s in st.session_state.students}
         _sv_stu = st.selectbox(
@@ -12346,6 +7010,9 @@ def render_admin_portal():
                             if GROQ_KEY:
                                 with st.spinner(f"AI classifying {len(_ambiguous)} ambiguous record(s)..."):
                                     try:
+                                        from groq import Groq as _GC
+                                        import json as _jmod
+                                        _gc = _GC(api_key=GROQ_KEY)
                                         _canonical_list = [b for b in BEHAVIOUR_TYPES if not b.startswith("---")]
                                         for _amb in _ambiguous:
                                             _ai_prompt = (
@@ -12355,8 +7022,12 @@ def render_admin_portal():
                                                 f"Behaviour description: {_amb['raw'][:300]}\n\n"
                                                 "Labels:\n" + "\n".join(f"- {l}" for l in _canonical_list)
                                             )
-                                            _ai_label = groq_ai_call(_ai_prompt, max_tokens=60, temperature=0)
-                                            _ai_label = _ai_label.strip().strip("-").strip()
+                                            _ai_r = _gc.chat.completions.create(
+                                                model="llama-3.3-70b-versatile",
+                                                messages=[{"role":"user","content":_ai_prompt}],
+                                                max_tokens=60, temperature=0
+                                            )
+                                            _ai_label = _ai_r.choices[0].message.content.strip().strip("-").strip()
                                             if _ai_label in _known_types:
                                                 _amb["suggested"] = _ai_label
                                                 _amb["ai"] = True
@@ -12439,580 +7110,6 @@ def render_admin_portal():
                 st.warning("Enter both email and password to test.")
 
 
-def render_support_plan_page():
-    """Student-lens Behaviour Support Plan — a living document per student.
-    Data-derived sections (Target Behaviours, Possible Function, Known
-    Triggers, Data/Monitoring) are computed live from current incident data
-    every time this page loads. Staff/student-authored sections are saved
-    to the database and are never touched by that live computation."""
-    student_id = st.session_state.get("selected_student_id")
-    student = get_student(student_id)
-    if not student:
-        st.error("No student selected"); return
-
-    st.markdown(f"## 📋 Behaviour Support Plan — {student['name']}")
-    st.caption("Target Behaviours, Possible Function, Known Triggers, and Data/Monitoring update "
-               "automatically from incident data every time this page is opened. Everything else is "
-               "written by staff and/or the student, and is saved separately — it's never overwritten.")
-
-    col_back1, col_back2 = st.columns(2)
-    with col_back1:
-        if st.button("⬅ Back", key="sp_back"):
-            go_to("student_dashboard", selected_student_id=student_id)
-    with col_back2:
-        if st.button("📈 Full Analysis", key="sp_to_analysis"):
-            go_to("student_analysis", selected_student_id=student_id)
-
-    # ── Assemble this student's incident data (same pattern as Dashboard) ──
-    incidents = [i for i in st.session_state.incidents if i["student_id"] == student_id]
-    critical  = [c for c in st.session_state.critical_incidents if c["student_id"] == student_id]
-    quick_df = pd.DataFrame(incidents) if incidents else pd.DataFrame()
-    crit_df  = pd.DataFrame(critical) if critical else pd.DataFrame()
-    if not quick_df.empty:
-        quick_df["incident_type"] = "Quick"
-        quick_df["date_parsed"] = _parse_dates(quick_df["date"])
-    if not crit_df.empty:
-        crit_df["incident_type"] = "Critical"
-        _crit_dates = crit_df["created_at"] if "created_at" in crit_df.columns else pd.Series([None]*len(crit_df))
-        crit_df["date_parsed"] = _parse_dates(_crit_dates)
-        crit_df["severity"] = crit_df["severity"].fillna(5).astype(int) if "severity" in crit_df.columns else 5
-        crit_df["behaviour_type"] = crit_df["ABCH_primary"].apply(
-            lambda d: d.get("behaviour", "") if isinstance(d, dict) else "") if "ABCH_primary" in crit_df.columns else ""
-        crit_df["antecedent"] = crit_df["ABCH_primary"].apply(
-            lambda d: d.get("context", "") if isinstance(d, dict) else "") if "ABCH_primary" in crit_df.columns else ""
-        crit_df["location"] = crit_df["ABCH_primary"].apply(
-            lambda d: d.get("location", "") if isinstance(d, dict) else "") if "ABCH_primary" in crit_df.columns else ""
-        if "location" in crit_df.columns:
-            crit_df["location"] = crit_df["location"].apply(normalise_location)
-    full_df = pd.concat([quick_df, crit_df], ignore_index=True) if not quick_df.empty or not crit_df.empty else pd.DataFrame()
-    if not full_df.empty and "date_parsed" in full_df.columns:
-        full_df = full_df.dropna(subset=["date_parsed"])
-
-    # ── Live, auto-computed sections ────────────────────────────────────
-    _sp_target_behaviours, _sp_function, _sp_triggers, _sp_monitoring, _sp_strategies = [], "", [], "", []
-    if not full_df.empty and "behaviour_type" in full_df.columns:
-        _bcounts = full_df["behaviour_type"].dropna()
-        _bcounts = _bcounts[_bcounts.astype(str).str.strip() != ""].value_counts()
-        _sp_target_behaviours = _bcounts.head(4).index.tolist()
-
-        top_beh     = full_df["behaviour_type"].mode()[0] if len(full_df) else "Unknown"
-        top_ant     = full_df["antecedent"].mode()[0] if "antecedent" in full_df.columns and len(full_df) else "Unknown"
-        top_loc     = full_df["location"].mode()[0] if "location" in full_df.columns and len(full_df) else "Unknown"
-        top_session = full_df["session"].mode()[0] if "session" in full_df.columns and len(full_df) else "Unknown"
-        try:
-            _hyp = generate_strong_clinical_hypothesis(full_df, top_ant, top_beh, top_loc, top_session, student["name"])
-            _sp_function = _hyp.get("detail", {}).get("Behavioural Function") or _hyp.get("summary", "")
-        except Exception:
-            _sp_function = ""
-
-        _cats = _top_categories(full_df, n=3)
-        _sp_triggers = _cats
-
-        _total = len(full_df)
-        _crit_n = len(full_df[full_df.get("incident_type", "Quick") == "Critical"]) if "incident_type" in full_df.columns else 0
-        _sp_monitoring = (
-            f"{_total} incident(s) on record. Most frequent behaviour: {_bcounts.index[0] if len(_bcounts) else '—'} "
-            f"({int(_bcounts.iloc[0])} occurrence(s)). Peak time: {top_session}. Hotspot location: {normalise_location(top_loc)}. "
-            f"{_crit_n} critical incident(s)."
-        )
-        if _cats:
-            _picked = []
-            for cat in _cats[:2]:
-                _picked.extend(BSEM_STRATEGY_LIBRARY.get(cat, [])[:2])
-            _sp_strategies = _picked
-
-    st.markdown("---")
-    st.markdown("#### 🎯 Target Behaviours  *(auto, from incident data)*")
-    if _sp_target_behaviours:
-        for b in _sp_target_behaviours: st.markdown(f"- {b}")
-    else:
-        st.caption("Not enough data yet — log some incidents to populate this section.")
-
-    st.markdown("#### 🔍 Possible Function of the Behaviour  *(auto, from incident data)*")
-    st.markdown(_sp_function or "_Not enough data yet._")
-
-    st.markdown("#### ⚡ Known Triggers / Precipitating Factors  *(auto, from incident data)*")
-    if _sp_triggers:
-        for t in _sp_triggers: st.markdown(f"- {t}")
-    else:
-        st.caption("Not enough data yet.")
-
-    st.markdown("#### 🛡️ Proactive Strategies — suggested starting point  *(auto, from BSEM library)*")
-    if _sp_strategies:
-        for s in _sp_strategies:
-            st.markdown(f"- **[{s['domain']}]** {s['strategy']}")
-    else:
-        st.caption("Not enough data yet to suggest strategies.")
-
-    st.markdown("#### 📊 Data / Monitoring  *(auto, from incident data)*")
-    st.markdown(_sp_monitoring or "_Not enough data yet._")
-
-    st.markdown("---")
-    st.markdown("### ✏️ Staff & Student Sections — written and saved here")
-
-    _plan = load_support_plan_from_db(student_id)
-
-    with st.form("support_plan_form"):
-        st.markdown("**Plan details**")
-        pc1, pc2 = st.columns(2)
-        with pc1:
-            _f_teacher = st.text_input("Class teacher", value=_plan.get("class_teacher","") or "")
-            _f_start = st.date_input("Date commenced", value=(
-                datetime.fromisoformat(_plan["date_commenced"]).date() if _plan.get("date_commenced") else date.today()))
-        with pc2:
-            _f_support = st.text_input("Support staff", value=_plan.get("support_staff","") or "")
-            _f_review = st.date_input("Review date", value=(
-                datetime.fromisoformat(_plan["review_date"]).date() if _plan.get("review_date") else date.today()))
-
-        st.markdown("**Student Profile**")
-        _f_strengths = st.text_area("Strengths", value=_plan.get("strengths","") or "", height=80)
-        _f_interests = st.text_area("Interests", value=_plan.get("interests","") or "", height=80)
-        _f_purpose = st.text_area("Purpose of this plan", value=_plan.get("purpose","") or "", height=80)
-
-        st.markdown("**Early Warning Signs**")
-        _f_ews = st.text_area("What does this look like for this student?", value=_plan.get("early_warning_signs","") or "", height=90, label_visibility="collapsed")
-
-        st.markdown("**Additional Proactive Strategies** *(beyond the suggestions above)*")
-        _f_proactive_add = st.text_area("Additional proactive strategies", value=_plan.get("proactive_strategies_additional","") or "", height=90, label_visibility="collapsed")
-
-        st.markdown("**Teaching Strategies**")
-        _f_teaching = st.text_area("What will be explicitly taught?", value=_plan.get("teaching_strategies","") or "", height=90, label_visibility="collapsed")
-
-        st.markdown("**Response to Early Signs**")
-        st.caption("Regulate first — at this stage the goal is co-regulation, not correction or reasoning.")
-        _f_resp_early = st.text_area("Staff response to early signs", value=_plan.get("response_early_signs","") or "", height=90, label_visibility="collapsed")
-
-        st.markdown("**Response to Escalation**")
-        st.caption("The nervous system is in survival mode here — safety and calm presence, not words or logic, are the intervention.")
-        _f_resp_esc = st.text_area("Staff response to escalation", value=_plan.get("response_escalation","") or "", height=90, label_visibility="collapsed")
-
-        st.markdown("**Safety / Risk Management**")
-        _f_safety = st.text_area("Safety and risk management", value=_plan.get("safety_risk_management","") or "", height=90, label_visibility="collapsed")
-
-        st.markdown("**Post-Incident / Repair**")
-        st.caption("Relate, then reason — reconnect with the student first; a debrief or consequence conversation only lands once they're genuinely calm.")
-        _f_repair = st.text_area("Post-incident and repair process", value=_plan.get("post_incident_repair","") or "", height=90, label_visibility="collapsed")
-
-        st.markdown("**Recovery Time**")
-        st.caption("Roughly how long this student typically needs to regulate/recover — appears in the student-friendly version as 'How long I need.'")
-        _f_recovery = st.text_input("Recovery time", value=_plan.get("recovery_time","") or "", placeholder="e.g. Usually 10-15 minutes in the quiet space", label_visibility="collapsed")
-
-        st.markdown("**Reinforcement**")
-        _f_reinforce = st.text_area("How positive behaviour is reinforced", value=_plan.get("reinforcement","") or "", height=80, label_visibility="collapsed")
-
-        st.markdown("**Adjustments / Supports**")
-        _f_adjustments = st.text_area("Adjustments and supports in place", value=_plan.get("adjustments_supports","") or "", height=80, label_visibility="collapsed")
-
-        st.markdown("**Short-Term Goals**")
-        _f_goals = st.text_area("Short-term goals", value=_plan.get("short_term_goals","") or "", height=80, label_visibility="collapsed")
-
-        st.markdown("**🗣️ Student Voice** — in the student's own words")
-        _f_voice = st.text_area("What the student says about this themselves", value=_plan.get("student_voice","") or "", height=100, label_visibility="collapsed")
-
-        if st.form_submit_button("💾 Save Plan", type="primary", use_container_width=True):
-            _updated_by = (
-                st.session_state.current_user.get("name", "unknown")
-                if st.session_state.get("current_user") else "unknown"
-            )
-            _plan_data = {
-                "class_teacher": _f_teacher, "support_staff": _f_support,
-                "date_commenced": _f_start.isoformat() if _f_start else None,
-                "review_date": _f_review.isoformat() if _f_review else None,
-                "strengths": _f_strengths, "interests": _f_interests, "purpose": _f_purpose,
-                "early_warning_signs": _f_ews, "proactive_strategies_additional": _f_proactive_add,
-                "teaching_strategies": _f_teaching, "response_early_signs": _f_resp_early,
-                "response_escalation": _f_resp_esc, "safety_risk_management": _f_safety,
-                "post_incident_repair": _f_repair, "recovery_time": _f_recovery, "reinforcement": _f_reinforce,
-                "adjustments_supports": _f_adjustments, "short_term_goals": _f_goals,
-                "student_voice": _f_voice,
-            }
-            if save_support_plan_to_db(student_id, _plan_data, updated_by=_updated_by):
-                st.success("✅ Plan saved.")
-                st.rerun()
-
-    if _plan.get("last_updated_by"):
-        st.caption(f"Last updated by {_plan['last_updated_by']}"
-                   + (f" on {_plan['last_updated_at'][:16].replace('T',' ')}" if _plan.get("last_updated_at") else ""))
-
-    st.markdown("---")
-    _dl_col1, _dl_col2 = st.columns(2)
-    with _dl_col1:
-        if st.button("📥 Generate Full Plan (Word)", key="sp_download_btn", use_container_width=True):
-            _sp_docx = generate_support_plan_docx(
-                student, _plan, _sp_target_behaviours, _sp_function, _sp_triggers, _sp_strategies, _sp_monitoring)
-            st.download_button(
-                "📄 Download Behaviour Support Plan (Word)", _sp_docx,
-                file_name=f"BSP_{student['name'].replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                key="sp_download_dl",
-            )
-    with _dl_col2:
-        if st.button("🧒 Generate Student-Friendly Version (Word)", key="sp_kid_btn", use_container_width=True):
-            _sp_kid_docx = generate_student_friendly_plan_docx(student, _plan, _sp_strategies, _sp_triggers)
-            st.download_button(
-                "📄 Download My Plan (Word)", _sp_kid_docx,
-                file_name=f"MyPlan_{student['name'].replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                key="sp_kid_dl",
-            )
-    st.caption("The student-friendly version pulls from the same saved plan, kept short and in plain "
-               "language, and leaves out anything clinical (hypothesis, triggers, escalation/safety "
-               "protocols) that belongs in the staff version only.")
-
-
-def generate_support_plan_docx(student, plan, target_behaviours, function_text, triggers, strategies, monitoring_text):
-    """Word export of the Behaviour Support Plan — combines the live
-    auto-computed sections with whatever staff/student have written and
-    saved, in the DfE-style template structure."""
-    from docx import Document
-    from docx.shared import Pt, Cm
-    doc = Document()
-    sec = doc.sections[0]
-    sec.page_width, sec.page_height = Cm(21), Cm(29.7)
-    sec.left_margin = sec.right_margin = sec.top_margin = sec.bottom_margin = Cm(2)
-
-    doc.add_heading(f"Behaviour Support Plan — {student['name']}", level=1)
-    p = doc.add_paragraph()
-    p.add_run(f"Class teacher: {plan.get('class_teacher','—')}    Support staff: {plan.get('support_staff','—')}")
-    p2 = doc.add_paragraph()
-    p2.add_run(f"Date commenced: {plan.get('date_commenced','—')}    Review date: {plan.get('review_date','—')}")
-
-    def _section(title, body):
-        doc.add_heading(title, level=2)
-        if isinstance(body, list):
-            for item in body:
-                doc.add_paragraph(f"• {item}", style=None)
-        else:
-            doc.add_paragraph(body or "—")
-
-    _section("Strengths", plan.get("strengths"))
-    _section("Interests", plan.get("interests"))
-    _section("Purpose of This Plan", plan.get("purpose"))
-    _section("Target Behaviours (auto — from incident data)", target_behaviours or "Not enough data yet.")
-    _section("Possible Function of the Behaviour (auto — from incident data)", function_text or "Not enough data yet.")
-    _section("Known Triggers / Precipitating Factors (auto — from incident data)", triggers or "Not enough data yet.")
-    _section("Early Warning Signs", plan.get("early_warning_signs"))
-    _section("Proactive Strategies — suggested (auto — from BSEM library)",
-              [f"[{s['domain']}] {s['strategy']}" for s in strategies] if strategies else "Not enough data yet.")
-    _section("Additional Proactive Strategies", plan.get("proactive_strategies_additional"))
-    _section("Teaching Strategies", plan.get("teaching_strategies"))
-    _section("Response to Early Signs", plan.get("response_early_signs"))
-    _section("Response to Escalation", plan.get("response_escalation"))
-    _section("Safety / Risk Management", plan.get("safety_risk_management"))
-    _section("Post-Incident / Repair", plan.get("post_incident_repair"))
-    _section("Reinforcement", plan.get("reinforcement"))
-    _section("Adjustments / Supports", plan.get("adjustments_supports"))
-    _section("Data / Monitoring (auto — from incident data)", monitoring_text or "Not enough data yet.")
-    _section("Short-Term Goals", plan.get("short_term_goals"))
-    _section("Student Voice", plan.get("student_voice"))
-
-    p_footer = doc.add_paragraph()
-    p_footer.add_run(f"\nGenerated from CLC-LBU Behaviour Support Tool — {datetime.now().strftime('%d/%m/%Y %H:%M')}").italic = True
-    buf = BytesIO()
-    doc.save(buf)
-    buf.seek(0)
-    return buf
-
-
-def _first_lines(text: str, max_items: int = 3) -> list[str]:
-    """Break staff-written text into a few short standalone lines,
-    splitting on newlines/semicolons/sentence breaks and capping the
-    count — a deterministic way to keep the student-facing version
-    brief without rewriting anyone's actual words."""
-    if not text or not isinstance(text, str):
-        return []
-    _raw = text.replace("•", "\n").replace(";", "\n")
-    _lines = [l.strip(" -\n\t") for l in re.split(r'\n|(?<=[.!?])\s+', _raw) if l.strip(" -\n\t")]
-    return _lines[:max_items]
-
-
-@st.cache_data(ttl=86400)
-def get_arasaac_symbol_bytes(keyword: str):
-    """Fetch a real ARASAAC pictogram — a free, open-license symbol set
-    built for AAC/visual supports, already used in this portal's Visual
-    Support Tools — for a fixed, well-defined keyword. Returns PNG bytes,
-    or None if the lookup/download fails for any reason. Never raises:
-    a network hiccup just means the plan falls back to its emoji-only
-    look rather than breaking the document. Only used for fixed section
-    concepts (me/help/goal/talk) this code controls — not for arbitrary
-    free text, since a mismatched auto-picked symbol could pair the
-    wrong picture with someone's actual words."""
-    try:
-        search_url = f"https://api.arasaac.org/api/pictograms/en/search/{urllib.parse.quote(keyword)}"
-        resp = requests.get(search_url, timeout=5)
-        if resp.status_code != 200:
-            return None
-        results = resp.json()
-        if not results:
-            return None
-        symbol_id = results[0]["_id"]
-        img_url = f"https://static.arasaac.org/pictograms/{symbol_id}/{symbol_id}_500.png"
-        img_resp = requests.get(img_url, timeout=5)
-        if img_resp.status_code == 200:
-            return img_resp.content
-    except Exception:
-        pass
-    return None
-
-
-CHALLENGE_SIMPLE = {
-    "Peer": "Getting along with other kids",
-    "Transition": "Changing from one thing to another",
-    "Instructions": "Being told what to do",
-    "Engagement": "Schoolwork that feels hard",
-    "Sensory": "Loud noises, bright lights, or busy spaces",
-    "Other": "Unexpected changes",
-}
-
-
-def generate_student_friendly_plan_docx(student, plan, strategies, triggers=None):
-    """A short, plain-language version of the same saved plan, for the
-    student themselves. Deliberately leaves out anything clinical
-    (possible function, escalation/safety protocols) — those stay in the
-    staff version. Content is the same words staff wrote, just trimmed to
-    a few short lines per section rather than rewritten, so nothing
-    appears here that a real person didn't actually say. The one
-    exception is "Things I Find Really Challenging," which translates
-    the auto-detected trigger categories into plain child-friendly words.
-
-    Formatted along Easy Read principles (a widely-used accessible-document
-    standard in the disability sector): one idea per line, a picture
-    anchoring every idea, large plain text, and generous white space.
-    Cards use a light background with a coloured border rather than solid
-    colour blocks, for a gentler look. Uses emoji as the visual anchor
-    since licensed symbol sets (Widgit, Makaton, Boardmaker) aren't
-    something this tool has access to — staff can swap in real symbols
-    afterward since it's an editable Word file."""
-    from docx import Document
-    from docx.shared import Pt, Cm, RGBColor
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.oxml.ns import qn
-    from docx.oxml import OxmlElement
-
-    def _set_bg(cell, hex_color):
-        tcPr = cell._tc.get_or_add_tcPr()
-        shd = OxmlElement('w:shd')
-        shd.set(qn('w:val'), 'clear'); shd.set(qn('w:color'), 'auto'); shd.set(qn('w:fill'), hex_color)
-        tcPr.append(shd)
-
-    def _set_border(cell, hex_color, sz=28):
-        # A visible coloured border on all four sides — the "gentler" look
-        # (light background, colour on the frame) instead of a solid block.
-        tcPr = cell._tc.get_or_add_tcPr()
-        borders = OxmlElement('w:tcBorders')
-        for side in ('top', 'left', 'bottom', 'right'):
-            b = OxmlElement(f'w:{side}')
-            b.set(qn('w:val'), 'single'); b.set(qn('w:sz'), str(sz))
-            b.set(qn('w:space'), '4'); b.set(qn('w:color'), hex_color)
-            borders.append(b)
-        tcPr.append(borders)
-
-    doc = Document()
-    sec = doc.sections[0]
-    sec.page_width, sec.page_height = Cm(21), Cm(29.7)
-    sec.left_margin = sec.right_margin = sec.top_margin = sec.bottom_margin = Cm(1.8)
-
-    # ── Title band — this one stays a solid colour, as the one "banner" moment ──
-    tt = doc.add_table(rows=1, cols=1); tt.autofit = True
-    tt_c = tt.rows[0].cells[0]
-    _set_bg(tt_c, "1A7A6E")
-    _no_border_tcPr = tt_c._tc.get_or_add_tcPr()
-    _nb = OxmlElement('w:tcBorders')
-    for side in ('top', 'left', 'bottom', 'right'):
-        b = OxmlElement(f'w:{side}'); b.set(qn('w:val'), 'nil'); _nb.append(b)
-    _no_border_tcPr.append(_nb)
-    tt_c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-    r1 = tt_c.paragraphs[0].add_run("⭐ My Plan ⭐")
-    r1.font.size = Pt(32); r1.font.bold = True; r1.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
-    p_name = tt_c.add_paragraph(); p_name.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    r2 = p_name.add_run(student["name"])
-    r2.font.size = Pt(20); r2.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
-    doc.add_paragraph("")
-
-    # ── One bordered, light-background card per section ─────────────────
-    _CARD_SYMBOLS = {"about": "me", "challenging": "difficult", "want": "choose",
-                      "need": "help", "long": "time", "voice": "talk"}
-
-    def _hex_to_rgb(hex_color):
-        return RGBColor(int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16))
-
-    def _card(hex_color, icon, heading, lines, italic=False, symbol_keyword=None):
-        if not lines:
-            return
-        tbl = doc.add_table(rows=1, cols=1); tbl.autofit = True
-        cell = tbl.rows[0].cells[0]
-        _set_border(cell, hex_color)
-        _rgb = _hex_to_rgb(hex_color)
-        p_h = cell.paragraphs[0]
-        if symbol_keyword:
-            _sym_bytes = get_arasaac_symbol_bytes(symbol_keyword)
-            if _sym_bytes:
-                p_img = cell.paragraphs[0]
-                p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                p_img.add_run().add_picture(BytesIO(_sym_bytes), width=Cm(2.2))
-                p_h = cell.add_paragraph()
-        rh = p_h.add_run(f"{icon}  {heading}")
-        rh.font.size = Pt(22); rh.font.bold = True; rh.font.color.rgb = _rgb
-        p_h.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        p_h.paragraph_format.space_after = Pt(6)
-        for line in lines:
-            p = cell.add_paragraph()
-            _bullet_icon = "💬" if italic else "⭐"
-            r = p.add_run(line if italic else f"{_bullet_icon}  {line}")
-            r.font.size = Pt(17)
-            r.font.color.rgb = RGBColor(0x1E, 0x29, 0x3B)
-            if italic:
-                r.font.italic = True
-            p.paragraph_format.space_after = Pt(8)
-        doc.add_paragraph("")
-
-    # 1. A little bit about me
-    _about_me = _first_lines(plan.get("strengths"), 3) + _first_lines(plan.get("interests"), 2)
-    _card("3B82F6", "🖐️", "A Little Bit About Me", _about_me, symbol_keyword=_CARD_SYMBOLS["about"])
-
-    # 2. Things I find really challenging — auto, translated into plain words
-    _challenges = []
-    for cat in (triggers or [])[:2]:
-        _plain = CHALLENGE_SIMPLE.get(cat)
-        if _plain:
-            _challenges.append(_plain)
-    _challenges += _first_lines(plan.get("early_warning_signs"), 2)
-    _card("EF4444", "⚡", "Things I Find Really Challenging", _challenges[:4], symbol_keyword=_CARD_SYMBOLS["challenging"])
-
-    # 3. Things I want to do when things are challenging
-    _want_to_do = _first_lines(plan.get("teaching_strategies"), 4)
-    _card("22C55E", "🙋", "Things I Want To Do When Things Are Hard", _want_to_do, symbol_keyword=_CARD_SYMBOLS["want"])
-
-    # 4. Things I need others to do
-    _need_others = (
-        _first_lines(plan.get("proactive_strategies_additional"), 2)
-        + _first_lines(plan.get("adjustments_supports"), 2)
-        + [s["strategy"] for s in (strategies or [])[:2]]
-    )
-    _card("8B5CF6", "🤝", "Things I Need Others To Do", _need_others[:4], symbol_keyword=_CARD_SYMBOLS["need"])
-
-    # 5. How long I need
-    _recovery = _first_lines(plan.get("recovery_time"), 2)
-    _card("F59E0B", "⏳", "How Long I Need", _recovery, symbol_keyword=_CARD_SYMBOLS["long"])
-
-    # 6. In my own words
-    _card("EC4899", "💬", "In My Own Words", _first_lines(plan.get("student_voice"), 4), italic=True, symbol_keyword=_CARD_SYMBOLS["voice"])
-
-    doc.add_paragraph("")
-    p_note = doc.add_paragraph(
-        f"This is a simple version of a bigger plan that {student['name']}'s teachers and support "
-        "staff keep. Ask a trusted adult if you want to know more or talk about anything in it."
-    )
-    p_note.runs[0].font.size = Pt(11)
-    p_note.runs[0].font.italic = True
-
-    buf = BytesIO()
-    doc.save(buf)
-    buf.seek(0)
-    return buf
-
-
-def _micro_can_manage_codes() -> bool:
-    u = st.session_state.get("current_user") or {}
-    return (not st.session_state.get("_viewer_session")) and u.get("role") in ("ADM", "Leader")
-
-
-def _render_micro_section_uncaptured(student, full_df):
-    """Micro Behaviours section on the Analysis page. Decision (Nov 2026):
-    analysis page only — so it's kept OUT of the printable/archived copy by
-    pausing the screen capture, and never touches incident totals or risk."""
-    if not _MICRO_AVAILABLE:
-        st.caption("🌡️ Micro behaviours unavailable — micro_behaviour_utils.py missing from the repo root.")
-        return
-    _prev = _SCREEN.get("paused", False)
-    _SCREEN["paused"] = True
-    try:
-        _viewer = bool(st.session_state.get("_viewer_session"))
-        _u = st.session_state.get("current_user") or {}
-        mbu.render_micro_analysis_section(
-            supabase, student, full_df,
-            student_initials=_student_archive_initials(student),
-            can_edit=not _viewer,
-            can_delete=_micro_can_manage_codes(),
-            editor_name=_u.get("name", ""),
-            write_blocked=_viewer_write_blocked,
-            key=f"mas_{student.get('id')}",
-        )
-    except Exception as _e:
-        st.warning(f"Micro behaviours section couldn't load: {_e}")
-    finally:
-        _SCREEN["paused"] = _prev
-
-
-def render_micro_log_page():
-    """In-app Micro log (logged-in staff). Student preselected from the list."""
-    student_id = st.session_state.get("selected_student_id")
-    student = get_student(student_id) if student_id else None
-    st.markdown("## 🌡️ Log a Micro Behaviour")
-    st.caption("A small change that signals a student is starting to move outside their Window of "
-               "Tolerance. Takes under 30 seconds. Not an incident — it doesn't count towards "
-               "incident totals or the risk score.")
-    if st.button("⬅ Back to Students", key="back_micro"):
-        go_to("program_students", selected_program=(student or {}).get("program", "JP"))
-    if not _MICRO_AVAILABLE:
-        st.error("micro_behaviour_utils.py is missing from the repo root.")
-        return
-    if not supabase:
-        st.error("Database not connected — unable to save.")
-        return
-    _prog = (student or {}).get("program")
-    _stus = [{"id": s["id"], "name": s["name"], "program": s.get("program", "")}
-             for s in st.session_state.students
-             if not s.get("archived", False) and (not _prog or s.get("program") == _prog)]
-    _staff = {str(s["id"]): s["name"] for s in st.session_state.get("staff", []) if s.get("id")}
-    _me = str((st.session_state.get("current_user") or {}).get("id", ""))
-    with st.container(border=True):
-        mbu.render_micro_log(supabase, _stus, _staff, key="ml_app",
-                             preselect_student_id=student_id,
-                             current_staff_id=_me if _me in _staff else None,
-                             write_blocked=lambda: _viewer_write_blocked("log a micro behaviour"))
-    if student and st.button("📈 See this student's micro behaviours on the Analysis page",
-                             key="micro_to_analysis"):
-        go_to("student_analysis", selected_student_id=student["id"])
-    if _micro_can_manage_codes():
-        with st.expander("⚙️ Manage micro behaviour codes (Leadership)"):
-            mbu.render_code_manager(supabase, key="mcm_app")
-
-
-def render_micro_log_standalone():
-    """Micro log without the tool's login, like the Quick Incident Log.
-    Tile URL: /Behaviour_Support?mode=microlog"""
-    st.markdown(
-        "<div style='background:#1A7A7A;border-radius:12px;padding:1rem 1.5rem;margin-bottom:1.25rem;'>"
-        "<div style='color:white;font-size:1.5rem;font-weight:700;'>🌡️ Micro Behaviour Log</div>"
-        "<div style='color:#fef3c7;font-size:.88rem;margin-top:.2rem;'>"
-        "Early-warning signs · Cowandilla Learning Centre — Learning & Behaviour Unit</div></div>",
-        unsafe_allow_html=True)
-    st.caption("Log a small change you've noticed before anything became an incident. "
-               "It builds the student's early-warning picture on their Analysis page.")
-    if not _MICRO_AVAILABLE:
-        st.error("micro_behaviour_utils.py is missing from the repo root.")
-        return
-    if not supabase:
-        st.error("Database not connected — unable to save. Contact the portal administrator.")
-        return
-    try:
-        _rows = supabase.table("students").select("id,first_name,last_name,name,program") \
-            .eq("archived", False).execute().data or []
-        _stus = sorted([{"id": str(r["id"]),
-                         "name": (f"{r.get('first_name','')} {r.get('last_name','')}".strip()
-                                  if r.get("first_name") else r.get("name", "Unknown")),
-                         "program": r.get("program", "")} for r in _rows], key=lambda x: x["name"])
-        _staff = {str(r["id"]): r["name"] for r in
-                  (supabase.table("staff").select("id,name").execute().data or [])}
-    except Exception as _e:
-        st.error(f"Could not load students/staff: {_e}")
-        return
-    with st.container(border=True):
-        mbu.render_micro_log(supabase, _stus, _staff, key="ml_std")
-    st.caption("CLC-LBU Portal · Micro Behaviour Log · For incidents use the Quick Incident Log or ABCH form")
-
-
 def render_quick_incident_log():
     """Standalone quick incident log — no login required."""
     import uuid as _uuid
@@ -13036,37 +7133,6 @@ def render_quick_incident_log():
         st.error("Database not connected — unable to save. Contact the portal administrator.")
         return
 
-    # After a successful save, show a summary + explicit "log another?"
-    # prompt instead of silently resetting straight back to a blank form.
-    _ql_saved = st.session_state.get("ql_just_saved")
-    if _ql_saved:
-        st.markdown(
-            f"<div style='background:#f0fdf4;border:2px solid #22c55e;border-radius:12px;"
-            f"padding:1.1rem 1.5rem;margin-top:.5rem;'>"
-            f"<div style='font-weight:700;color:#15803d;font-size:1rem;margin-bottom:.4rem;'>"
-            f"✅ Incident logged successfully</div>"
-            f"<div style='font-size:.85rem;color:#1e293b;line-height:1.7;'>"
-            f"<b>Student:</b> {_ql_saved['student']}<br>"
-            f"<b>Date/Time:</b> {_ql_saved['datetime']} — {_ql_saved['session']}<br>"
-            f"<b>Location:</b> {_ql_saved['location']}<br>"
-            f"<b>Behaviour:</b> {_ql_saved['behaviour']}<br>"
-            f"<b>Antecedent:</b> {_ql_saved['antecedent']}<br>"
-            f"<b>Severity:</b> <span style='background:{_ql_saved['sev_color']};color:white;"
-            f"padding:.1rem .4rem;border-radius:4px;font-size:.82rem;'>"
-            f"{_ql_saved['sev_label']}</span><br>"
-            f"<b>Logged by:</b> {_ql_saved['logged_by']}"
-            f"</div></div>",
-            unsafe_allow_html=True,
-        )
-        st.caption("Visible immediately in the student's analysis in the Behaviour Support Tool.")
-        st.markdown("<div style='height:.5rem'></div>", unsafe_allow_html=True)
-        if st.button("➕ Log Another Incident", type="primary", use_container_width=True, key="ql_log_another"):
-            st.session_state["ql_just_saved"] = None
-            st.rerun()
-        st.markdown("---")
-        st.caption("CLC-LBU Portal · Quick Incident Log · For critical incidents use the full Behaviour Support Tool")
-        return
-
     # Load students live
     try:
         _stu_resp = supabase.table("students").select("id,first_name,last_name,name,program") \
@@ -13074,8 +7140,7 @@ def render_quick_incident_log():
         _students = []
         for _r in _stu_resp.data:
             _nm = (
-                f"{_r.get('first_name','')} {_r.get('last_name','')}".strip()
-                if _r.get("first_name") else _r.get("name", "Unknown")
+                _clean_student_name(_r)
             )
             _students.append({"id": str(_r["id"]), "name": _nm, "program": _r.get("program","")})
         _students = sorted(_students, key=lambda s: s["name"])
@@ -13085,21 +7150,6 @@ def render_quick_incident_log():
 
     if not _students:
         st.warning("No students found in the database.")
-        return
-
-    # Load staff live (avoids free-text name matching, which can silently
-    # fail to resolve an id and violate the NOT NULL constraint on
-    # incidents.reported_by)
-    try:
-        _staff_resp = supabase.table("staff").select("id,name") \
-            .order("name").execute()
-        _staff_opts = {str(_r["id"]): _r["name"] for _r in _staff_resp.data}
-    except Exception as _e:
-        st.error(f"Could not load staff list: {_e}")
-        return
-
-    if not _staff_opts:
-        st.warning("No staff found in the database.")
         return
 
     _SESSIONS_QL = {
@@ -13116,21 +7166,14 @@ def render_quick_incident_log():
     }
     _SEV_COLS_QL = {1:"#22c55e", 2:"#eab308", 3:"#f97316", 4:"#ef4444", 5:"#7f1d1d"}
 
-    try:
-        _ql_form = st.form("ql_form", clear_on_submit=True, enter_to_submit=False)
-    except TypeError:
-        # Older Streamlit without the enter_to_submit param — falls back to
-        # default behaviour rather than crashing the page.
-        _ql_form = st.form("ql_form", clear_on_submit=True)
-    with _ql_form:
+    with st.form("ql_form", clear_on_submit=True):
         _ql_c1, _ql_c2 = st.columns([3, 2])
         with _ql_c1:
             _stu_opts = {s["id"]: f"{s['name']}  ({s['program']})" for s in _students}
             _sel_id = st.selectbox("👤 Student *", list(_stu_opts.keys()),
                                    format_func=lambda x: _stu_opts[x])
         with _ql_c2:
-            _rep_by_id = st.selectbox("🙋 Your name *", list(_staff_opts.keys()),
-                                       format_func=lambda x: _staff_opts[x])
+            _rep_by = st.text_input("🙋 Your name *", placeholder="e.g. Sarah")
 
         st.markdown("<hr style='margin:.5rem 0;border-color:#e2e8f0;'>", unsafe_allow_html=True)
 
@@ -13189,8 +7232,8 @@ def render_quick_incident_log():
 
     if _submitted:
         _errs = []
-        if not _rep_by_id:
-            _errs.append("Please select your name.")
+        if not _rep_by.strip():
+            _errs.append("Please enter your name.")
         if _antecedent.startswith("---"):
             _errs.append("Please select an antecedent (not a section header).")
         if _behaviour.startswith("---"):
@@ -13202,7 +7245,14 @@ def render_quick_incident_log():
                 st.error(_e)
         else:
             try:
-                _staff_id = _rep_by_id
+                _staff_id = None
+                try:
+                    _sr = supabase.table("staff").select("id").eq(
+                        "name", _rep_by.strip()).limit(1).execute()
+                    if _sr.data:
+                        _staff_id = str(_sr.data[0]["id"])
+                except Exception:
+                    pass
 
                 _data = {
                     "id":               str(_uuid.uuid4()),
@@ -13226,18 +7276,26 @@ def render_quick_incident_log():
                 supabase.table("incidents").insert(_data).execute()
                 _stu_name = _stu_opts[_sel_id].split("  (")[0]
                 _sc2 = _SEV_COLS_QL[_severity]
-                st.session_state["ql_just_saved"] = {
-                    "student": _stu_name,
-                    "datetime": f"{_inc_date.strftime('%-d %b %Y')} at {_inc_time.strftime('%H:%M')}",
-                    "session": _SESSIONS_QL[_sess_lbl],
-                    "location": _location,
-                    "behaviour": _behaviour,
-                    "antecedent": _antecedent,
-                    "sev_color": _sc2,
-                    "sev_label": _SEV_LABELS_QL[_severity],
-                    "logged_by": _staff_opts[_rep_by_id],
-                }
-                st.rerun()
+                st.markdown(
+                    f"<div style='background:#f0fdf4;border:2px solid #22c55e;border-radius:12px;"
+                    f"padding:1.1rem 1.5rem;margin-top:.5rem;'>"
+                    f"<div style='font-weight:700;color:#15803d;font-size:1rem;margin-bottom:.4rem;'>"
+                    f"✅ Incident logged successfully</div>"
+                    f"<div style='font-size:.85rem;color:#1e293b;line-height:1.7;'>"
+                    f"<b>Student:</b> {_stu_name}<br>"
+                    f"<b>Date/Time:</b> {_inc_date.strftime('%-d %b %Y')} at {_inc_time.strftime('%H:%M')}"
+                    f" — {_SESSIONS_QL[_sess_lbl]}<br>"
+                    f"<b>Location:</b> {_location}<br>"
+                    f"<b>Behaviour:</b> {_behaviour}<br>"
+                    f"<b>Antecedent:</b> {_antecedent}<br>"
+                    f"<b>Severity:</b> <span style='background:{_sc2};color:white;"
+                    f"padding:.1rem .4rem;border-radius:4px;font-size:.82rem;'>"
+                    f"{_SEV_LABELS_QL[_severity]}</span><br>"
+                    f"<b>Logged by:</b> {_rep_by.strip()}"
+                    f"</div></div>",
+                    unsafe_allow_html=True,
+                )
+                st.caption("Visible immediately in the student's analysis in the Behaviour Support Tool.")
             except Exception as _e:
                 st.error(f"❌ Save failed: {_e}")
 
@@ -13245,89 +7303,7 @@ def render_quick_incident_log():
     st.caption("CLC-LBU Portal · Quick Incident Log · For critical incidents use the full Behaviour Support Tool")
 
 
-def _inject_modern_css():
-    """One shared, modern visual layer for the whole Behaviour Support
-    tool — rounded cards, soft shadows, smoother buttons/expanders/tabs,
-    tighter typography. Pure CSS targeting Streamlit's own component
-    selectors, so if a selector doesn't match on a given Streamlit
-    version it simply has no effect — it can't break functionality the
-    way a Python API mismatch would."""
-    st.markdown("""
-    <style>
-    /* Typography */
-    h1, h2, h3, h4 {
-        letter-spacing: -0.01em;
-        font-weight: 700 !important;
-    }
-    p, li, .stMarkdown { line-height: 1.55; }
-
-    /* Buttons */
-    div[data-testid="stButton"] button, div[data-testid="stDownloadButton"] button {
-        border-radius: 10px !important;
-        border: 1px solid rgba(0,0,0,0.06) !important;
-        transition: transform 0.08s ease, box-shadow 0.15s ease !important;
-        font-weight: 600 !important;
-    }
-    div[data-testid="stButton"] button:hover, div[data-testid="stDownloadButton"] button:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 4px 10px rgba(0,0,0,0.08);
-    }
-
-    /* Bordered containers (BSEM recommendation cards, etc.) */
-    div[data-testid="stVerticalBlockBorderWrapper"] {
-        border-radius: 12px !important;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-        transition: box-shadow 0.15s ease;
-    }
-    div[data-testid="stVerticalBlockBorderWrapper"]:hover {
-        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-    }
-
-    /* Expanders */
-    div[data-testid="stExpander"] {
-        border-radius: 10px !important;
-        overflow: hidden;
-    }
-    div[data-testid="stExpander"] summary {
-        font-weight: 600 !important;
-    }
-
-    /* Metrics */
-    div[data-testid="stMetric"] {
-        background: #f8fafc;
-        border-radius: 12px;
-        padding: 0.9rem 1rem;
-        border: 1px solid #e2e8f0;
-    }
-    div[data-testid="stMetricValue"] {
-        font-weight: 700 !important;
-    }
-
-    /* Tabs */
-    div[data-testid="stTabs"] button[role="tab"] {
-        border-radius: 8px 8px 0 0 !important;
-        font-weight: 600 !important;
-    }
-
-    /* Dataframes / tables */
-    div[data-testid="stDataFrame"] {
-        border-radius: 10px;
-        overflow: hidden;
-        border: 1px solid #e2e8f0;
-    }
-
-    /* Text inputs / text areas / selects */
-    div[data-testid="stTextArea"] textarea,
-    div[data-testid="stTextInput"] input,
-    div[data-baseweb="select"] > div {
-        border-radius: 8px !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-
 def main():
-    _inject_modern_css()
     # ── Quick Incident Log — no login required ────────────────────────────
     # Accessible at ?mode=quicklog (tile URL: /Behaviour_Support?mode=quicklog)
     try:
@@ -13340,35 +7316,13 @@ def main():
     if _ql_mode == "quicklog":
         render_quick_incident_log()
         return
-    if _ql_mode == "microlog":
-        render_micro_log_standalone()
-        return
 
     init_state()
-    if not st.session_state.logged_in:
-        restore_login_from_url()
-    if not st.session_state.logged_in:
-        _try_viewer_bridge()
     page = st.session_state.current_page
     if not st.session_state.logged_in:
         render_login_page()
         return
-    if st.session_state.get("_viewer_session") and page not in _VIEWER_SAFE_PAGES:
-        # A bridged (view-only) session asked for a page it isn't allowed to
-        # use — e.g. its own current_page changed via a "Log New Incident" /
-        # admin-style button inside an allowed page. Send them to the real
-        # login instead of rendering anything that could write data.
-        st.info("🔒 You're viewing this student via a quick link from Student Snapshot — that only "
-                "covers viewing. Log in with your own email and password to do anything else here.")
-        if st.button("🔓 Log in to Behaviour Support", type="primary"):
-            do_logout()
-            st.rerun()
-        return
-    persist_login_to_url()
-    _archive_notice = st.session_state.pop("_archive_notice", None)
-    if _archive_notice:
-        (st.success if _archive_notice.get("kind") == "success" else st.warning)(_archive_notice["msg"])
-    if page == "landing":                  render_landing_page()
+    if page == "landing":                   render_landing_page()
     elif page == "program_students":        render_program_students_page()
     elif page == "incident_log":            render_incident_log_page()
     elif page == "critical_incident":       render_critical_incident_page()
@@ -13376,8 +7330,6 @@ def main():
     elif page == "leader_approve_critical": render_leader_approve_critical_page()
     elif page == "student_analysis":        render_student_analysis_page()
     elif page == "student_dashboard":       render_student_dashboard()
-    elif page == "support_plan":             render_support_plan_page()
-    elif page == "micro_log":               render_micro_log_page()
     elif page == "admin_portal":            render_admin_portal()
     else:                                   render_landing_page()
 
