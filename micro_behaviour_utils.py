@@ -835,7 +835,8 @@ def wot_coping_from_micro(rows: list[dict], codes: list[dict], limit: int | None
     the rest of their entry; an entry with only 'Either' signs (or an even split)
     is counted in both zones, because it could be heading either way.
     Returns {zone: {"n": entries, "behaviour": [...every sign, with count...],
-    "context": [...], "interventions": [...what settled them...], "both_ways": n}}."""
+    "context": [...], "interventions": [...interventions after which the student
+    returned to task or partly settled...], "both_ways": n}}."""
     from collections import Counter
     lookup = {c["code"]: c for c in starter_codes() + legacy_codes()}
     lookup.update({c["code"]: c for c in (codes or [])})
@@ -864,7 +865,9 @@ def wot_coping_from_micro(rows: list[dict], codes: list[dict], limit: int | None
                                           (r.get("just_before") or "").strip()) if x)
             if ctx:
                 zd["ctx"][ctx] += 1
-            if OUTCOME_SHORT.get(r.get("outcome", "")) == "Settled":
+            # Interventions that worked: the student returned to task (Settled) or partly
+            # settled. Interventions followed by escalation are left out on purpose.
+            if OUTCOME_SHORT.get(r.get("outcome", "")) in ("Settled", "Partly settled"):
                 resp = (r.get("staff_response") or "").strip()
                 if resp:
                     zd["help"][resp] += 1
@@ -1179,9 +1182,9 @@ def render_micro_log(sb, students: list[dict], staff_opts: dict, *, key: str = "
     with s2:
         just_before = st.text_input("⏪ Just before", placeholder="Asked to fix a spelling error",
                                     key=f"{k}_before")
-    # ── Suggested response (appears once behaviour + setting + just before are in) ──
-    st.markdown("**🤝 Response**")
-    OTHER = "Something else (describe)"
+    # ── Suggested interventions (appear once behaviour + setting + just before are in) ──
+    st.markdown("**🤝 Intervention**")
+    OTHER = "Another intervention (describe)"
     sugg_items = []
     if picked and setting.strip() and just_before.strip():
         meta = {c["code"]: c for c in codes}
@@ -1201,7 +1204,7 @@ def render_micro_log(sb, students: list[dict], staff_opts: dict, *, key: str = "
         st.markdown(
             f"<div style='border-left:5px solid {colour};background:#f8fafc;border-radius:0 8px 8px 0;"
             f"padding:.7rem 1rem;margin:.3rem 0 .6rem;'>"
-            f"<div style='font-weight:700;color:{colour};'>💡 Suggested response · CPI stage: {sg['stage_label']}</div>"
+            f"<div style='font-weight:700;color:{colour};'>💡 Suggested interventions · CPI stage: {sg['stage_label']}</div>"
             f"<div style='font-size:.8rem;color:#475569;'>🪟 {WOT_SHORT.get(sg['direction'], '')}: "
             f"just outside the window. The aim is to help the student back into it.</div>"
             f"<div style='font-size:.85rem;color:#334155;margin:.25rem 0 .4rem;'>{sg['stage_note']}</div>"
@@ -1211,14 +1214,14 @@ def render_micro_log(sb, students: list[dict], staff_opts: dict, *, key: str = "
             f"follow the plan and CPI safety procedures.</div></div>",
             unsafe_allow_html=True)
     else:
-        st.caption("Pick the behaviour and fill in **Setting** and **Just before** to see a suggested "
-                   "trauma-informed, CPI-aligned response.")
+        st.caption("Pick the behaviour and fill in **Setting** and **Just before** to see suggested "
+                   "trauma-informed, CPI-aligned interventions.")
     resp_opts = [i["text"] for i in sugg_items] + [OTHER]
-    used = st.radio("What did you do? *", resp_opts, index=None, key=f"{k}_used",
+    used = st.radio("Which intervention did you use? *", resp_opts, index=None, key=f"{k}_used",
                     format_func=lambda x: ("✅ Used: " + x) if x != OTHER else "✏️ " + x)
     response, response_source = "", ""
     if used == OTHER:
-        response = st.text_input("Describe what you did *", placeholder="Offered a 2-minute movement break",
+        response = st.text_input("Describe the intervention you used *", placeholder="Offered a 2-minute movement break",
                                  key=f"{k}_resp")
         response_source = "other"
     elif used:
@@ -1238,9 +1241,9 @@ def render_micro_log(sb, students: list[dict], staff_opts: dict, *, key: str = "
         if "OT00" in picked and not other_text.strip():
             errs.append("Describe the 'Other' behaviour.")
         if not used:
-            errs.append("Choose what you did (a suggestion or something else).")
+            errs.append("Choose the intervention you used (a suggestion or another intervention).")
         elif used == OTHER and not response.strip():
-            errs.append("Describe what you did.")
+            errs.append("Describe the intervention you used.")
         if not outcome:
             errs.append("Choose what happened next.")
         if not staff_id:
@@ -1379,7 +1382,7 @@ def render_micro_analysis_section(sb, student: dict, full_df: pd.DataFrame, *,
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Micro entries", sv["n_entries"])
         m2.metric("Saves (settled)", sv["n_saves"],
-                  help="Entries where the student settled after an early staff response")
+                  help="Entries where the student settled after an early intervention")
         m3.metric("Escalated", sv["n_escalated"])
         pct = f"{round(ru['n_with_runup'] / ru['n_incidents'] * 100)}%" if ru["n_incidents"] else "—"
         m4.metric("Incidents with a logged run-up", pct,
@@ -1456,17 +1459,17 @@ def render_micro_analysis_section(sb, student: dict, full_df: pd.DataFrame, *,
                    "Compare with the Scatter Plot Tracker.")
 
         # Saves
-        st.markdown("**Saves — what staff did when the student settled**")
+        st.markdown("**Saves — interventions that settled the student**")
         _e1 = mdf.drop_duplicates("id")
         _sug = _e1[_e1["response_source"].isin(["Suggested", "Worked before"])]
         if len(_sug):
             _sug_set = int((_sug["outcome_short"] == "Settled").sum())
-            st.caption(f"Suggested responses were used {len(_sug)} time(s); the student settled after "
+            st.caption(f"Suggested interventions were used {len(_sug)} time(s); the student settled after "
                        f"{_sug_set} of them ({round(_sug_set / len(_sug) * 100)}%).")
         if sv["responses"].empty:
-            st.caption("No settled entries with a staff response recorded yet.")
+            st.caption("No settled entries with an intervention recorded yet.")
         else:
-            st.dataframe(sv["responses"].rename(columns={"staff_response": "Staff response",
+            st.dataframe(sv["responses"].rename(columns={"staff_response": "Intervention",
                                                          "times": "Times it worked"}).head(10),
                          hide_index=True, use_container_width=True)
 
@@ -1480,9 +1483,9 @@ def render_micro_analysis_section(sb, student: dict, full_df: pd.DataFrame, *,
             e = e.sort_values("dt", ascending=False)
             show = e.assign(When=e["dt"].dt.strftime("%a %d/%m/%Y %I:%M %p"))[
                 ["When", "codes", "setting", "before", "response", "rtype", "outcome", "by"]].rename(columns={
-                    "rtype": "Response type",
+                    "rtype": "Intervention type",
                     "codes": "Codes", "setting": "Setting", "before": "Just before",
-                    "response": "Staff response", "outcome": "Next", "by": "Logged by"})
+                    "response": "Intervention", "outcome": "Next", "by": "Logged by"})
             st.dataframe(show, hide_index=True, use_container_width=True)
             if can_delete:
                 opts = {r["id"]: f"{r['dt'].strftime('%d/%m %I:%M %p')} · {r['codes']}"
