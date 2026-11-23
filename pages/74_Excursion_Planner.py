@@ -585,6 +585,8 @@ with tab_plan:
         d["site_contact"] = c[0].text_input("Site-based contact person during the excursion *",
                                             d.get("site_contact") or (leaders[0] if leaders else ""),
                                             key=K("sc"), disabled=locked)
+        if not d.get("site_contact_phone") and (d.get("site_contact") or "").strip().lower() == "candice cooper":
+            d["site_contact_phone"] = eu.CANDICE_MOBILE
         d["site_contact_phone"] = c[1].text_input("Their mobile *", d.get("site_contact_phone", ""),
                                                   key=K("scph"), disabled=locked)
         d["call_in"] = st.text_input("Call-in procedure (when you will check in with the site contact)",
