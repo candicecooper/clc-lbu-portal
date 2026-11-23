@@ -71,6 +71,15 @@ def load_staff_dir() -> list[dict]:
 
 
 @st.cache_data(ttl=60, show_spinner=False)
+def load_vehicles() -> list[dict]:
+    try:
+        rows = db().table(eu.T_VEHICLES).select("*").order("name").execute().data or []
+    except Exception:
+        rows = []
+    return rows or [dict(v) for v in eu.DEFAULT_VEHICLES]
+
+
+@st.cache_data(ttl=60, show_spinner=False)
 def load_library() -> tuple[list[dict], bool]:
     """Returns (activities, starter_loaded). Database activities, plus any built-in starter activities
     not yet in the database (so the library is never empty and never loses the starter set)."""
@@ -102,6 +111,7 @@ def load_excursions() -> list[dict]:
 def refresh():
     load_staff_dir.clear()
     load_library.clear()
+    load_vehicles.clear()
 
 
 def save_new_library_activities(d: dict, who: str):
@@ -381,8 +391,29 @@ with tab_plan:
                             index=eu.TRANSPORT_MODES.index(d.get("transport_mode")) if d.get("transport_mode") in eu.TRANSPORT_MODES else 0)
         d["transport_mode"] = mode
         if mode == "Site car / government vehicle":
-            d["vehicle_desc"] = st.text_input("Which vehicle?", d.get("vehicle_desc", ""), key=K("veh"),
-                                              placeholder="e.g. Site car Kia", disabled=locked)
+            fleet = [v for v in load_vehicles() if v.get("active", True)]
+            if fleet:
+                names = [v["name"] for v in fleet]
+                chosen_before = [v.get("name") for v in d.get("vehicles") or [] if v.get("name") in names]
+                picked = st.multiselect("Which site vehicle(s)?", names, default=chosen_before, key=K("veh_pick"),
+                                        disabled=locked)
+                d["vehicles"] = [{"name": v["name"], "rego": v.get("rego") or "", "seats": v.get("seats")}
+                                 for v in fleet if v["name"] in picked]
+                for v in d["vehicles"]:
+                    seats = f" · {v['seats']} seats" if v.get("seats") else ""
+                    st.markdown(
+                        f"<div style='background:#e8f2f2;border-left:4px solid #1A7A7A;padding:6px 12px;border-radius:4px;"
+                        f"margin:2px 0'>🚐 <b>{v['name']}</b> &nbsp;·&nbsp; Rego: <b>{v['rego'] or 'not recorded'}</b>{seats}</div>",
+                        unsafe_allow_html=True)
+                if d["vehicles"]:
+                    d["vehicle_desc"] = ""
+                elif d.get("vehicle_desc"):
+                    st.caption(f"Previously entered: {d['vehicle_desc']} – choose from the list above.")
+            else:
+                d["vehicle_desc"] = st.text_input("Which vehicle? (include the rego)", d.get("vehicle_desc", ""),
+                                                  key=K("veh"), placeholder="e.g. Kia Carnival S123ABC", disabled=locked)
+                st.caption("Tip: Leadership can add the site vehicles and regos in ⚙️ Settings → Vehicles, "
+                           "then staff just pick from a list.")
             st.caption("Only authorised drivers. Seat belts for everyone; headcount getting in and out; check the "
                        "vehicle is empty before locking.")
         elif mode == "Chartered bus":
@@ -719,7 +750,7 @@ with tab_lead:
         st.error("confidential_auth.py not found.")
         st.stop()
 
-    l_lib, l_staff, l_setup = st.tabs(["📚 Edit library", "👥 Staff list", "⚙️ Setup"])
+    l_lib, l_staff, l_veh, l_setup = st.tabs(["📚 Edit library", "👥 Staff list", "🚐 Vehicles", "⚙️ Setup"])
 
     with l_lib:
         missing = [a for a in library if not a.get("id")]
@@ -841,6 +872,46 @@ with tab_lead:
             except Exception as e:
                 st.error(f"Couldn't copy ({e}).")
 
+    with l_veh:
+        st.caption("Site cars / government vehicles staff can choose in the planner. The rego shows when a vehicle is "
+                   "chosen and is printed on the ED169 and risk assessment. Seats (incl. driver) are optional – they "
+                   "turn on a seating check. Untick Active to retire a vehicle.")
+        vdf = pd.DataFrame(load_vehicles(), columns=["id", "name", "rego", "seats", "notes", "active"])
+        vdf["seats"] = pd.to_numeric(vdf["seats"], errors="coerce").astype("Int64")
+        vdf["active"] = vdf["active"].fillna(True).astype(bool)
+        for _c in ("id", "name", "rego", "notes"):
+            vdf[_c] = vdf[_c].astype("string")
+        ved = st.data_editor(vdf, key="veh_ed", num_rows="dynamic", use_container_width=True,
+                             column_config={
+                                 "id": None,
+                                 "name": st.column_config.TextColumn("Vehicle", required=True,
+                                                                     help="e.g. Kia Carnival (site car)"),
+                                 "rego": st.column_config.TextColumn("Rego"),
+                                 "seats": st.column_config.NumberColumn("Seats (incl. driver)", min_value=1, step=1),
+                                 "notes": st.column_config.TextColumn("Notes"),
+                                 "active": st.column_config.CheckboxColumn("Active", default=True)})
+        if st.button("💾 Save vehicles", type="primary"):
+            try:
+                for rr in ved.to_dict("records"):
+                    if not _str(rr.get("name")).strip():
+                        continue
+                    seats = rr.get("seats")
+                    rec = {"name": _str(rr["name"]).strip(), "rego": _str(rr.get("rego")).strip().upper() or None,
+                           "seats": None if seats is None or pd.isna(seats) else int(seats),
+                           "notes": _str(rr.get("notes")).strip() or None,
+                           "active": bool(rr.get("active")) if not pd.isna(rr.get("active")) else True}
+                    if _str(rr.get("id")):
+                        db().table(eu.T_VEHICLES).update(rec).eq("id", rr["id"]).execute()
+                    else:
+                        db().table(eu.T_VEHICLES).insert(rec).execute()
+                refresh()
+                ss.flash = ("ok", "Vehicles saved.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Couldn't save ({e}). If the table is new, run the vehicles SQL in ⚙️ Setup first.")
+
     with l_setup:
         st.markdown("Run this once in **Supabase → SQL editor** (the same project as the Hazard Report):")
         st.code(eu.SETUP_SQL, language="sql")
+        st.markdown("**Already ran the setup SQL before vehicles were added?** Run just this:")
+        st.code(eu.VEHICLES_SQL, language="sql")
