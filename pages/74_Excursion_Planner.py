@@ -274,15 +274,16 @@ with tab_plan:
         queue("save")
 
     with st.expander("📚 Start from a past CLC excursion (pre-fills most sections)", expanded=not ss.ex_id and not d.get("name")):
-        st.caption("Copies the outline, curriculum links, times, vehicle, staff and risk-assessment activities. "
-                   "You then add the date and students, and check everything suits this group.")
+        st.caption("Copies the outline, curriculum links, times, vehicle and risk-assessment activities. Choose your "
+                   "program to also fill in your program's staff. Then add the date and students and check each step.")
         bank_names = [e["bank_name"] for e in eu.EXCURSION_BANK]
-        c = st.columns([4, 1])
-        pick_b = c[0].selectbox("Past excursion", [""] + bank_names, key=K("bankpick"),
+        c = st.columns([3, 1, 1])
+        pick_b = c[0].selectbox("Excursion", [""] + bank_names, key=K("bankpick"),
                                 format_func=lambda x: x or "Choose…")
-        c[1].markdown("<div style='height:1.8rem'></div>", unsafe_allow_html=True)
-        if c[1].button("Use this", use_container_width=True, disabled=not pick_b, key="bank_use_top"):
-            queue("use_bank", pick_b)
+        pick_p = c[1].selectbox("Planning for", ["Any", "JP", "PY", "SY"], key=K("bankprog"))
+        c[2].markdown("<div style='height:1.8rem'></div>", unsafe_allow_html=True)
+        if c[2].button("Use this", use_container_width=True, disabled=not pick_b, key="bank_use_top"):
+            queue("use_bank", pick_b, None if pick_p == "Any" else pick_p)
         if pick_b and (d.get("name") or ss.ex_id):
             st.caption("⚠️ This replaces what's currently in the planner with a new, unsaved excursion.")
 
@@ -644,7 +645,9 @@ with tab_plan:
         elif action == "use_bank":
             entry = next((e for e in eu.EXCURSION_BANK if e["bank_name"] == args[0]), None)
             if entry:
-                start_new(eu.bank_excursion(entry, library))
+                prog = args[1] if len(args) > 1 else None
+                start_new(eu.bank_excursion(entry, library, program=prog, staff_dir=staff_dir,
+                                            saved_rows=load_excursions()))
                 ss.flash = ("ok", f"Pre-filled from '{args[0]}'. Add the date and students, check each step, then 💾 Save.")
         elif action == "add_staff":
             for n in args[0]:
@@ -681,72 +684,89 @@ with tab_plan:
 with tab_list:
     rows = load_excursions()
     c = st.columns([3, 1, 1])
-    q = c[0].text_input("🔍 Search by excursion name or location",
-                        placeholder="e.g. beach, library, Semaphore, Polonia…", key="find_q")
-    f_prog = c[1].multiselect("Program", eu.PROGRAMS, key="find_prog")
-    show_arch = c[2].checkbox("Include archived", key="find_arch")
-
-    def _haystack(r):
-        dd = r.get("data") or {}
-        _h = " ".join(str(x or "") for x in (r.get("name"), r.get("destination"), dd.get("address"),
-                                               dd.get("outline"), r.get("teacher_in_charge"),
-                                               " ".join(a.get("name", "") for a in dd.get("activities", []))))
-        return eu.fold(_h)
-
+    q = c[0].text_input("🔍 Where are you going?  Search by excursion, place or activity",
+                        placeholder="e.g. beach, library, bowling, café, Semaphore…", key="find_q")
+    f_prog = c[1].selectbox("Planning for", ["Any program", "JP", "PY", "SY"], key="find_prog",
+                            help="Choose your program to see where it has been before and pre-fill your program's staff.")
+    prog = None if f_prog == "Any program" else f_prog
+    show_arch = c[2].checkbox("Include archived plans", key="find_arch")
     terms = [t for t in eu.fold(q).split() if t]
-    found = [r for r in rows
-             if (show_arch or r.get("status") != "Archived")
-             and (not f_prog or r.get("program") in f_prog)
-             and all(t in _haystack(r) for t in terms)]
-    # newest excursion date first
-    found.sort(key=lambda r: (r.get("excursion_date") or "", r.get("updated_at") or ""), reverse=True)
-    # ---- 1. CLC excursion bank (always listed; narrowed by search / program) ----
-    bank_hits = [e for e in eu.search_bank(q) if not f_prog or e["data"].get("program") in f_prog]
-    st.markdown(f"##### 📚 CLC excursion bank – {len(bank_hits)} of {len(eu.EXCURSION_BANK)}")
-    st.caption("Past CLC excursions. **Use this** pre-fills a new plan – then add the date and students and check each step.")
+
+    # ---- 1. Excursions (the CLC bank) – place-based, no program or teacher shown ----
+    bank_hits = eu.search_bank(q)
+    hist = {e["bank_name"]: eu.program_history(e, prog, rows) for e in bank_hits} if prog else {}
+    if prog:
+        bank_hits.sort(key=lambda e: hist.get(e["bank_name"]) is None)      # this program's past excursions first
+    st.markdown(f"##### 📍 Excursions – {len(bank_hits)}")
+    if prog:
+        done = sum(1 for v in hist.values() if v)
+        st.caption(f"✓ = {prog} has done this before ({done}). **Use this** fills in {prog} and its staff – "
+                   "then add the date and students and check each step.")
+    else:
+        st.caption("Choose **Planning for** to fill in your program and staff. **Use this** starts a new plan from the "
+                   "excursion – then add the date and students and check each step.")
     if not bank_hits:
-        st.caption("No bank excursions match.")
+        st.caption("No excursions match – start a new one in ✏️ Plan / edit.")
     for e in bank_hits:
         bd = e["data"]
-        with st.expander(f"📚 {e['bank_name']}  ·  {bd.get('program', '')}  ·  "
-                         f"{'Walking' if bd.get('transport_mode') == 'Walking only' else ', '.join(v['name'] for v in bd.get('vehicles', [])) or ''}"):
-            st.markdown(f"**Destination:** {bd.get('destination', '')}{(', ' + bd['address']) if bd.get('address') else ''}  \n"
-                        f"**Times:** {eu.fmt_time(bd.get('depart_time'))} – {eu.fmt_time(bd.get('return_time'))}  \n"
-                        f"**Staff:** {', '.join(x['name'] for x in bd.get('staff', []))} "
-                        f"(teacher in charge: {bd.get('teacher_in_charge', '')})  \n"
-                        f"**Risk assessment activities:** {', '.join(e.get('activities', []))}")
+        tick = "✓ " if hist.get(e["bank_name"]) else ""
+        place = bd.get("destination", "") + (f", {bd['address']}" if bd.get("address") else "")
+        travel = "Walking" if bd.get("transport_mode") == "Walking only" else \
+            ", ".join(v["name"] for v in bd.get("vehicles", [])) or "Site vehicle"
+        with st.expander(f"{tick}{bd.get('name', '')}  –  {place}"):
+            st.markdown(f"**Where:** {place}  \n"
+                        f"**Usual times:** {eu.fmt_time(bd.get('depart_time'))} – {eu.fmt_time(bd.get('return_time'))}"
+                        f"  ·  **Travel:** {travel}  \n"
+                        f"**Risk assessment covers:** {', '.join(e.get('activities', []))}")
             st.markdown(f"**Outline:** {bd.get('outline', '')}")
             st.markdown(f"**Curriculum:** {bd.get('curriculum', '')}")
-            if st.button("✏️ Use this to start a new excursion", key=f"bank_{e['bank_name']}", type="primary",
-                         use_container_width=True):
-                start_new(eu.bank_excursion(e, library))
-                ss.flash = ("ok", f"Pre-filled from '{e['bank_name']}' — go to ✏️ Plan / edit, add the date and "
-                                  "students, check each step, then 💾 Save.")
+            h = hist.get(e["bank_name"])
+            if prog and h:
+                when = f" on {eu.fmt_date(h['when'])}" if h.get("when") else ""
+                st.success(f"{prog} has done this before{when} – the same staff will be filled in.")
+            elif prog:
+                st.info(f"First time for {prog} – staff will be filled in from the {prog} staff list "
+                        "(change them in step 2 if needed).")
+            label = f"✏️ Use this for {prog}" if prog else "✏️ Use this to start a new excursion"
+            if st.button(label, key=f"bank_{e['bank_name']}", type="primary", use_container_width=True):
+                start_new(eu.bank_excursion(e, library, program=prog, staff_dir=staff_dir, saved_rows=rows))
+                ss.flash = ("ok", f"Pre-filled '{bd.get('name')}'{' for ' + prog if prog else ''} — go to ✏️ Plan / edit, "
+                                  "add the date and students, check each step, then 💾 Save.")
                 st.rerun()
 
-    # ---- 2. Saved excursions ----
+    # ---- 2. Saved plans (to reopen, download or copy) ----
+    def _haystack(r):
+        dd = r.get("data") or {}
+        _h = " ".join(str(x or "") for x in (r.get("name"), r.get("destination"), dd.get("address"), dd.get("outline"),
+                                             " ".join(a.get("name", "") for a in dd.get("activities", []))))
+        return eu.fold(_h)
+
+    found = [r for r in rows
+             if (show_arch or r.get("status") != "Archived")
+             and (not prog or r.get("program") == prog)
+             and all(t in _haystack(r) for t in terms)]
+    found.sort(key=lambda r: (r.get("excursion_date") or "", r.get("updated_at") or ""), reverse=True)
     st.markdown("---")
-    st.markdown(f"##### 💾 Saved excursions – {len(found)}")
+    st.markdown(f"##### 💾 Saved plans{' – ' + prog if prog else ''} – {len(found)}")
+    st.caption("Plans staff have saved – open to edit, download again, or copy for a repeat trip.")
     if not rows:
-        st.caption("None saved yet. Plans appear here once staff 💾 Save them in ✏️ Plan / edit.")
+        st.caption("None saved yet.")
     elif not found:
-        st.caption("No saved excursions match.")
-    elif not terms and not f_prog and len(found) > 15:
-        st.caption("Showing the 15 most recent – type a name or location to search them all.")
+        st.caption("No saved plans match.")
+    elif not terms and len(found) > 15:
+        st.caption("Showing the 15 most recent – search to find older ones.")
         found = found[:15]
 
     for r in found:
         dd = r.get("data") or {}
-        arch = " · 🗄️ archived" if r.get("status") == "Archived" else ""
-        head = (f"{eu.fmt_date(r.get('excursion_date')) or 'No date'}  ·  {r.get('name') or '(no name)'}  –  "
-                f"{r.get('destination') or ''}  ·  {r.get('program') or ''}  ·  {r.get('teacher_in_charge') or ''}{arch}")
-        with st.expander(head):
-            st.markdown(f"**Location:** {dd.get('destination', '')}{(', ' + dd['address']) if dd.get('address') else ''}  \n"
-                        f"**Students:** {eu.student_total(dd)} · **Adults:** {len(dd.get('staff', []))} · "
+        arch = "  ·  🗄️ archived" if r.get("status") == "Archived" else ""
+        place = (r.get("destination") or "") + (f", {dd['address']}" if dd.get("address") else "")
+        with st.expander(f"{eu.fmt_date(r.get('excursion_date')) or 'No date'}  ·  {r.get('name') or '(no name)'}  –  "
+                         f"{place}{arch}"):
+            st.markdown(f"**Students:** {eu.student_total(dd)} · **Adults:** {len(dd.get('staff', []))} · "
                         f"**Transport:** {eu.transport_text(dd)} · **Highest risk:** {eu.highest_level(dd)}  \n"
                         f"**Activities:** {', '.join(a.get('name', '') for a in dd.get('activities', [])) or '—'}  \n"
-                        f"<span style='color:#777'>Last saved {eu.fmt_date(r.get('updated_at'))}"
-                        f"{' by ' + r['prepared_by'] if r.get('prepared_by') else ''}</span>",
+                        f"<span style='color:#777'>Last saved {eu.fmt_date(r.get('updated_at'))}</span>",
                         unsafe_allow_html=True)
             download_buttons(r, r["id"])
             c = st.columns(3)
@@ -765,7 +785,7 @@ with tab_list:
                     db().table(eu.T_EXCURSIONS).update({"status": "Saved"}).eq("id", r["id"]).execute()
                     st.rerun()
             elif c[2].button("🗄️ Archive", key=f"ar_{r['id']}", use_container_width=True,
-                             help="Hides it from search (tick 'Include archived' to see it again)."):
+                             help="Hides it from search (tick 'Include archived plans' to see it again)."):
                 db().table(eu.T_EXCURSIONS).update({"status": "Archived"}).eq("id", r["id"]).execute()
                 st.rerun()
 
@@ -864,14 +884,15 @@ with tab_lead:
                 st.rerun()
 
     with l_staff:
-        st.caption("Used for quick-adding staff to an excursion and first aid expiry warnings. "
+        st.caption("Used for quick-adding staff, first aid expiry warnings, and – with **Program** set – pre-filling a "
+                   "program's staff when a plan is started from 📍 Excursions. "
                    "Tick **Leadership** for leaders – the first one is offered as the default site contact.")
-        sdf = pd.DataFrame(staff_dir, columns=["id", "name", "gender", "status", "is_leader",
+        sdf = pd.DataFrame(staff_dir, columns=["id", "name", "gender", "status", "program", "is_leader",
                                                "first_aid_expiry", "active"])
         sdf["first_aid_expiry"] = pd.to_datetime(sdf["first_aid_expiry"], errors="coerce").dt.date
         for _c in ("is_leader", "active"):
             sdf[_c] = sdf[_c].fillna(_c == "active").astype(bool)
-        for _c in ("id", "name", "gender", "status"):
+        for _c in ("id", "name", "gender", "status", "program"):
             sdf[_c] = sdf[_c].astype("string")
         ed = st.data_editor(sdf, key="staff_dir_ed", num_rows="dynamic", use_container_width=True,
                             column_config={
@@ -879,6 +900,10 @@ with tab_lead:
                                 "name": st.column_config.TextColumn("Name", required=True),
                                 "gender": st.column_config.SelectboxColumn("M/F", options=["M", "F", "X"]),
                                 "status": st.column_config.SelectboxColumn("Role", options=eu.STAFF_STATUSES),
+                                "program": st.column_config.SelectboxColumn(
+                                    "Program", options=["JP", "PY", "SY", "All"],
+                                    help="Pre-fills this person when a plan is started for that program. "
+                                         "'All' = included for every program."),
                                 "is_leader": st.column_config.CheckboxColumn("Leadership", default=False),
                                 "first_aid_expiry": st.column_config.DateColumn("First aid expires", format="DD/MM/YYYY"),
                                 "active": st.column_config.CheckboxColumn("Active", default=True)})
@@ -891,6 +916,7 @@ with tab_lead:
                     exp = rr.get("first_aid_expiry")
                     rec = {"name": _str(rr["name"]).strip(), "gender": _str(rr.get("gender")) or None,
                            "status": _str(rr.get("status")) or "Teacher",
+                           "program": _str(rr.get("program")) or None,
                            "is_leader": bool(rr.get("is_leader")) if not pd.isna(rr.get("is_leader")) else False,
                            "first_aid_expiry": exp.isoformat() if exp is not None and not pd.isna(exp) else None,
                            "active": bool(rr.get("active")) if not pd.isna(rr.get("active")) else True}
@@ -966,5 +992,6 @@ with tab_lead:
     with l_setup:
         st.markdown("Run this once in **Supabase → SQL editor** (the same project as the Hazard Report):")
         st.code(eu.SETUP_SQL, language="sql")
-        st.markdown("**Already ran the setup SQL before vehicles were added?** Run just this:")
+        st.markdown("**Already ran the setup SQL before?** Run these add-ons (safe to run more than once):")
         st.code(eu.VEHICLES_SQL, language="sql")
+        st.code(eu.STAFF_PROGRAM_SQL, language="sql")
