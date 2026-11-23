@@ -1,964 +1,945 @@
-# ==============================================================================
-# 18_Scatter_Plot_Tracker.py - CLC-LBU Portal
-# Simple Paper-Style Scatter Plot Tracker
-# ==============================================================================
+# ════════════════════════════════════════════════════════════════════════════
+# 18_Scatter_Plot_Tracker.py  ·  CLC-LBU Portal
+# Scatter Plot Tracker
+# ════════════════════════════════════════════════════════════════════════════
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
-from datetime import date, timedelta, datetime
+import plotly.express as px
+from datetime import date, timedelta
 import json
 
-try:
-    from staff_auth import get_staff_name
-except ImportError:
-    def get_staff_name():
-        return st.session_state.get("staff_name", "Staff")
-# require_auth(app_title="CLC LBU Staff Portal", app_icon="🏫")
-# logout_button()
+from auth import require_auth, logout_button, get_staff_name
+require_auth(app_title="CLC LBU Staff Portal", app_icon="🏫")
+logout_button()
 
-try:
-    from archive_utils import fetch_register, initials_from_name
-except ImportError:
-    fetch_register = None
-    initials_from_name = None
-
-TEAL = "#1A7A6E"
-AMBER = "#C8760A"
-
-st.set_page_config(page_title="Scatter Plot Tracker", layout="wide")
+TEAL  = "#1A6B8A"
+AMBER = "#D4860A"
+GREEN = "#2E7D32"
 
 st.markdown("""
 <style>
 [data-testid="stAppViewContainer"] { background:#f5f8fa; }
-.header {
-    background:linear-gradient(135deg,#1A7A6E 0%,#1A7A6EBB 100%);
-    color:white; padding:1rem 1.5rem; border-radius:10px; margin-bottom:1.5rem;
+.clc-header {
+    background:linear-gradient(135deg,#1A6B8A 0%,#1A6B8ABB 100%);
+    color:white; padding:.85rem 1.5rem; border-radius:10px; margin-bottom:1rem;
 }
-.header h1 { margin:0; font-size:1.8rem; }
-.header p { margin:.3rem 0 0; opacity:.9; font-size:.9rem; }
-.grid-container {
-    background:white; border:2px solid #cbd5e1; border-radius:10px;
-    padding:1rem; margin-top:1rem;
+.clc-header h2 { margin:0; font-size:1.25rem; }
+.clc-header p  { margin:.2rem 0 0; opacity:.85; font-size:.78rem; }
+.stu-card {
+    background:white; border:1.5px solid #e2e8f0; border-radius:10px;
+    padding:.65rem 1rem; margin-bottom:.4rem; cursor:pointer;
 }
-.week-grid {
-    width:100%; border-collapse:collapse; font-size:.85rem;
-    margin-top:1rem;
+.stu-card:hover { border-color:#1A6B8A; }
+.stu-active { border-color:#1A6B8A; background:#EBF4F9; }
+.grid-wrap { overflow-x:auto; border:1px solid #e2e8f0; border-radius:8px; margin-bottom:.6rem; }
+.sg { width:100%; border-collapse:collapse; font-size:.8rem; }
+.sg th {
+    background:#1A6B8A; color:white; padding:.38rem .45rem;
+    text-align:center; font-size:.7rem; font-weight:600; white-space:nowrap;
 }
-.week-grid th {
-    background:#1A7A6E; color:white; padding:.6rem .4rem;
-    text-align:center; font-weight:600; border:1px solid #0f5f56;
-}
-.week-grid td {
-    border:1px solid #cbd5e1; padding:.5rem .3rem;
-    text-align:center; min-width:45px; cursor:pointer;
-}
-.week-grid td:hover { background:#e0f2fe; }
-.week-grid .time-cell { 
-    background:#f1f5f9; font-weight:600; text-align:left;
-    padding-left:.6rem; white-space:nowrap;
-}
-.week-grid .activity-cell {
-    background:#f8fafc; text-align:left; padding-left:.6rem;
-    font-style:italic; font-size:.8rem; color:#64748b;
-}
-.week-grid .total-cell {
-    background:#fef3c7; font-weight:700; color:#92400e;
-}
-.week-grid .total-row {
-    background:#fef3c7; font-weight:700; color:#92400e;
-    font-size:.9rem;
-}
-.tally { color:#dc2626; font-weight:700; font-size:1.1rem; }
-.info-box {
-    background:#f0f9ff; border-left:4px solid #0284c7;
-    padding:.7rem 1rem; border-radius:6px; margin:.5rem 0;
+.sg th.lh { text-align:left; min-width:50px; }
+.sg th.la { text-align:left; min-width:110px; }
+.sg td { padding:.25rem .35rem; border:1px solid #e2e8f0; text-align:center; vertical-align:middle; }
+.sg td.tl { text-align:left; font-weight:600; color:#334155; font-size:.73rem; white-space:nowrap; background:#f8fafc; }
+.sg td.al { text-align:left; color:#64748b; font-size:.7rem; background:#f8fafc; }
+.c1  { background:#dbeafe; color:#1d4ed8; font-weight:700; }
+.c2  { background:#fee2e2; color:#b91c1c; font-weight:700; }
+.cx  { background:#f3f4f6; color:#9ca3af; font-weight:600; }
+.c0  { background:#f0fdf4; color:#15803d; font-weight:600; font-size:.72rem; }
+.ce  { background:white; color:#e2e8f0; font-size:.65rem; }
+.kpi { background:white; border-left:4px solid #1A6B8A; border-radius:6px;
+       padding:.45rem .75rem; text-align:center; margin-bottom:.4rem; }
+.kpi .val { font-size:1.4rem; font-weight:700; color:#1A6B8A; }
+.kpi .lbl { font-size:.67rem; color:#666; }
+.kpi-a { border-color:#D4860A; }
+.kpi-a .val { color:#D4860A; }
+.kpi-g { border-color:#2E7D32; }
+.kpi-g .val { color:#2E7D32; }
+.ins { background:#FEF9EC; border-left:4px solid #D4860A; border-radius:6px;
+       padding:.45rem .85rem; font-size:.82rem; margin-bottom:.3rem; }
+.ins-ok { background:#F0FAF4; border-left:4px solid #2EA056; }
+.period-active {
+    background:#f0fdf4; border:2px solid #22c55e; border-radius:10px;
+    padding:.55rem 1rem; margin-bottom:.75rem; font-size:.85rem;
 }
 </style>
 """, unsafe_allow_html=True)
 
-# ==============================================================================
-# SUPABASE
-# ==============================================================================
+DEFAULT_SCHEDULE = [
+    {"time":"9:00",  "activity":"De-escalation activity"},
+    {"time":"9:15",  "activity":"Interoception"},
+    {"time":"9:20",  "activity":"Activity"},
+    {"time":"10:00", "activity":"Breakfast"},
+    {"time":"10:05", "activity":"Fitness"},
+    {"time":"10:20", "activity":"Quiet Time"},
+    {"time":"10:30", "activity":"Activity"},
+    {"time":"11:00", "activity":"Recess"},
+    {"time":"11:30", "activity":"Quiet Time"},
+    {"time":"11:40", "activity":"Activity"},
+    {"time":"12:30", "activity":"Activity"},
+    {"time":"12:50", "activity":"Lunch eating"},
+    {"time":"13:00", "activity":"Lunch"},
+    {"time":"13:30", "activity":"Quiet Time"},
+    {"time":"13:45", "activity":"I.C.T."},
+    {"time":"14:30", "activity":"Home"},
+]
+DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday"]
+
+
+# ── Supabase ──────────────────────────────────────────────────────────────────
 def get_sb():
     try:
         from supabase import create_client
         return create_client(st.secrets["supabase"]["url"], st.secrets["supabase"]["key"])
-    except:
+    except Exception:
         return None
 
-# ==============================================================================
-# STUDENT REGISTER INTEGRATION
-# The Student Register (archive_utils.fetch_register) is the single front
-# door for adding/archiving students, same as Comm Log and SMARTAR — this
-# tool no longer has its own "Add Student" path. The register stores
-# INITIALS ONLY (no names), while this tool's existing scatter_students
-# rows are keyed by full name from before this integration. To avoid
-# losing history, a registered student is matched to any existing local
-# row by deriving that row's initials — if matched, the existing full
-# name stays the identity key (so old weekly data keeps working); if not
-# matched (never tracked here before), the initials themselves become
-# the identity key going forward, since that's all the register has.
-# ==============================================================================
-@st.cache_data(ttl=60)
-def get_trackable_students():
-    if fetch_register is None:
-        return []
-    registered = fetch_register("active")
-    sb = get_sb()
-    local_rows = []
-    if sb:
+
+
+def load_register_students():
+    """Active students from the shared `students` table (same names as Behaviour Support)."""
+    import os
+    from supabase import create_client
+    cands=[]
+    for sfx in ("_STUDENTS",""):
+        u=os.environ.get("SUPABASE_URL"+sfx); k=os.environ.get("SUPABASE_KEY"+sfx) or os.environ.get("SUPABASE_ANON_KEY"+sfx)
+        if u and k: cands.append((u,k))
+    try: cands.append((st.secrets["supabase"]["url"],st.secrets["supabase"]["key"]))
+    except Exception: pass
+    for u,k in cands:
         try:
-            local_rows = sb.table("scatter_students").select("*").execute().data or []
+            rows=create_client(u,k).table("students").select("*").execute().data or []
+            out=[]
+            for r in rows:
+                if r.get("archived"): continue
+                nm=(f"{r.get('first_name','')} {r.get('last_name','')}".strip() if r.get("first_name") else r.get("name") or "").strip()
+                if nm: out.append({"name":nm,"label":f"{nm}  ·  {r.get('program','')}"})
+            return sorted(out,key=lambda x:x["name"].lower())
         except Exception:
-            local_rows = []
+            continue
+    return []
 
-    by_initials = {}
-    for row in local_rows:
-        ini = initials_from_name(row.get("student_name")) if initials_from_name else None
-        if ini and ini not in by_initials:
-            by_initials[ini] = row
+def load_all_student_summaries():
+    """Return list of dicts with student_name, total obs, last date, behaviours."""
+    sb = get_sb()
+    if not sb: return []
+    try:
+        res = (sb.table("scatter_plot_observations")
+               .select("student_name,behaviour_label,value,obs_date")
+               .order("obs_date", desc=True)
+               .execute())
+        if not res.data: return []
+        df = pd.DataFrame(res.data)
+        df["obs_date"] = pd.to_datetime(df["obs_date"])
+        out = []
+        for name, grp in df.groupby("student_name"):
+            behs = [b for b in grp["behaviour_label"].dropna().unique() if b][:2]
+            out.append({
+                "name":      name,
+                "total":     len(grp),
+                "last_date": grp["obs_date"].max().strftime("%-d %b %Y"),
+                "behaviours": behs,
+            })
+        return sorted(out, key=lambda x: x["name"])
+    except Exception:
+        return []
 
-    trackable = []
-    for s in registered:
-        ini = s.get("initials")
-        program = s.get("program") or "-"
-        match = by_initials.get(ini)
-        if match:
-            key = match["student_name"]
-            display = f"{key} ({ini} · {program})"
-        else:
-            key = ini
-            display = f"{ini} ({program})"
-        trackable.append({
-            "initials": ini,
-            "program": s.get("program"),
-            "key": key,
-            "display": display,
-            "row": match,
-        })
-    return trackable
+
+def load_periods_by_name(student_name):
+    sb = get_sb()
+    if not sb: return []
+    try:
+        res = (sb.table("scatter_tracking_periods")
+               .select("*")
+               .eq("student_name", student_name)
+               .order("start_date", desc=True)
+               .execute())
+        return res.data or []
+    except Exception:
+        return []
 
 
-def upsert_behaviour_definition(key, program, beh_name, definition):
-    """Create or update this student's single tracked behaviour +
-    definition in scatter_students, keyed by `key` (see note above)."""
+def create_period(student_name, beh1, beh2, label=""):
+    sb = get_sb()
+    if not sb: return None
+    try:
+        # Close active periods first
+        sb.table("scatter_tracking_periods").update(
+            {"end_date": date.today().isoformat()}
+        ).eq("student_name", student_name).is_("end_date", "null").execute()
+        res = sb.table("scatter_tracking_periods").insert({
+            "student_id":   student_name,  # reuse column for name
+            "student_name": student_name,
+            "start_date":   date.today().isoformat(),
+            "end_date":     None,
+            "behaviour_1":  beh1.strip(),
+            "behaviour_2":  beh2.strip(),
+            "label":        label.strip(),
+        }).execute()
+        return res.data[0] if res.data else None
+    except Exception as e:
+        st.error("Could not create period: " + str(e))
+        return None
+
+
+def load_week_obs(student_name, week_start, week_end):
+    sb = get_sb()
+    if not sb: return pd.DataFrame()
+    try:
+        res = (sb.table("scatter_plot_observations")
+               .select("*")
+               .eq("student_name", student_name)
+               .gte("obs_date", str(week_start))
+               .lte("obs_date", str(week_end))
+               .execute())
+        df = pd.DataFrame(res.data) if res.data else pd.DataFrame()
+        if not df.empty:
+            df["obs_date_dt"]  = pd.to_datetime(df["obs_date"])
+            df["day_of_week"]  = df["obs_date_dt"].apply(
+                lambda x: DAYS[x.weekday()] if x.weekday() < 5 else "")
+        return df
+    except Exception as e:
+        st.error("Load error: " + str(e))
+        return pd.DataFrame()
+
+
+def load_all_obs(student_name):
+    sb = get_sb()
+    if not sb: return pd.DataFrame()
+    try:
+        res = (sb.table("scatter_plot_observations")
+               .select("*")
+               .eq("student_name", student_name)
+               .order("obs_date").order("time_slot")
+               .execute())
+        df = pd.DataFrame(res.data) if res.data else pd.DataFrame()
+        if not df.empty:
+            df["obs_date_dt"] = pd.to_datetime(df["obs_date"])
+            df["day_of_week"] = df["obs_date_dt"].apply(
+                lambda x: DAYS[x.weekday()] if x.weekday() < 5 else "")
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+def upsert_obs(student_name, sel_date, sel_day, sel_time, activity,
+               value, beh_index, beh_label, behaviours_str,
+               period_id=None, existing_id=None):
     sb = get_sb()
     if not sb:
+        st.session_state["_spt_err"] = "Supabase not configured."
         return False
+    row = {
+        "student_id":         student_name,
+        "student_name":       student_name,
+        "obs_date":           sel_date.isoformat(),
+        "day_of_week":        sel_day,
+        "time_slot":          sel_time,
+        "activity":           activity,
+        "value":              value,
+        "behaviour_index":    beh_index,
+        "behaviour_label":    beh_label,
+        "target_behaviours":  behaviours_str,
+        "tracking_period_id": period_id,
+        "created_by":         get_staff_name(),
+    }
+    minimal = {k: v for k, v in row.items()
+               if k not in ("behaviour_index","behaviour_label","tracking_period_id")}
     try:
-        beh_defs = {beh_name: definition} if beh_name and definition else {}
-        existing = sb.table("scatter_students").select("id").eq("student_name", key).execute()
-        if existing.data:
-            sb.table("scatter_students").update({
-                "behaviour_definitions": json.dumps(beh_defs) if beh_defs else None,
-                "program_type": program,
-            }).eq("id", existing.data[0]["id"]).execute()
+        if existing_id:
+            sb.table("scatter_plot_observations").update(
+                {"value": value, "behaviour_label": beh_label}
+            ).eq("id", existing_id).execute()
         else:
-            sb.table("scatter_students").insert({
-                "student_name": key,
-                "name": key,
-                "program_type": program,
-                "behaviour_definitions": json.dumps(beh_defs) if beh_defs else None,
-            }).execute()
-        get_trackable_students.clear()
+            sb.table("scatter_plot_observations").insert(row).execute()
+        st.session_state.pop("_spt_err", None)
         return True
     except Exception as e:
-        st.error(f"Save error: {e}")
+        err = str(e)
+        if any(k in err for k in ["behaviour_index","behaviour_label","tracking_period_id","column"]):
+            try:
+                if existing_id:
+                    sb.table("scatter_plot_observations").update(
+                        {"value": value}).eq("id", existing_id).execute()
+                else:
+                    sb.table("scatter_plot_observations").insert(minimal).execute()
+                st.session_state["_spt_err"] = "⚠️ Saved (run scatter_v4_schema.sql for full support)"
+                return True
+            except Exception as e2:
+                st.session_state["_spt_err"] = "Save failed: " + str(e2)
+                return False
+        st.session_state["_spt_err"] = "Save failed: " + err
         return False
 
-# ==============================================================================
-# GROQ AI (shared fallback chain — matches the fleet-wide fix used elsewhere
-# in the portal: gpt-oss-120b -> qwen3.6-27b -> llama-3.3-70b-versatile,
-# because Groq retired llama-3.3-70b-versatile for free/dev-tier accounts
-# on 16 Aug 2026. Also self-heals the httpx "proxies" client-init error and
-# 413 "request too large" by halving max_tokens and retrying.)
-# ==============================================================================
-GROQ_MODEL_CHAIN = ["openai/gpt-oss-120b", "qwen/qwen3.6-27b", "llama-3.3-70b-versatile"]
 
-def groq_ai_call(prompt, temperature=0.3, max_tokens=120):
-    from groq import Groq
-    api_key = st.secrets.get("GROQ_API_KEY") or st.secrets.get("groq", {}).get("api_key")
-    if not api_key:
-        raise RuntimeError("Add GROQ_API_KEY to Render secrets.")
+def delete_obs(obs_id):
+    sb = get_sb()
+    if not sb: return False
     try:
-        client = Groq(api_key=api_key)
-    except TypeError:
-        import httpx
-        client = Groq(api_key=api_key, http_client=httpx.Client())
+        sb.table("scatter_plot_observations").delete().eq("id", obs_id).execute()
+        return True
+    except Exception as e:
+        st.error("Delete failed: " + str(e))
+        return False
 
-    last_err = None
-    for model in GROQ_MODEL_CHAIN:
-        tokens = max_tokens
-        for _attempt in range(2):
-            try:
-                kwargs = dict(
-                    model=model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=temperature,
-                    max_tokens=tokens,
-                )
-                if model.startswith("qwen/"):
-                    kwargs["reasoning_effort"] = "none"  # suppress thinking-token output
-                response = client.chat.completions.create(**kwargs)
-                return response.choices[0].message.content.strip()
-            except Exception as e:
-                last_err = e
-                if "413" in str(e) or "too large" in str(e).lower():
-                    tokens = max(tokens // 2, 20)
-                    continue
-                break  # non-413 error: try next model in the chain
-    raise last_err
 
-# ==============================================================================
-# BEHAVIOUR TEMPLATES (shared by the Students page and the Setup page)
-# ==============================================================================
-BEHAVIOUR_TEMPLATES = {
-    "": "—",
-    "Hitting": "Making forceful contact with another person using an open or closed hand. Includes slapping, punching, striking. Excludes accidental contact, light taps, high-fives.",
-    "Pushing": "Using hands, arms, or body to forcefully move another person. Includes shoving, bumping with force. Excludes gentle guidance, accidental contact.",
-    "Kicking": "Making forceful contact with another person using foot or leg. Includes kicking, stomping, tripping. Excludes accidental contact, stretching.",
-    "Yelling": "Speaking louder than conversational tone for 3+ seconds. Includes shouting, screaming. Excludes excited play voice, calling from distance.",
-    "Task refusal": "Refusing to begin or continue assigned work. Includes saying 'no', pushing materials away. Excludes asking for help, requesting breaks.",
-    "Leaving area": "Moving beyond boundaries without permission. Includes leaving classroom, wandering. Excludes transitions with class.",
-    "Throwing objects": "Propelling objects through air with force. Includes throwing books, materials. Excludes passing items, accidental drops.",
-    "Swearing": "Using profanity or inappropriate language. Includes curse words. Excludes repeating without understanding.",
-    "Property destruction": "Damaging or breaking materials. Includes tearing, breaking, scratching. Excludes accidental damage.",
-    "Self-hitting": "Making forceful contact with own body. Includes hitting head with hand or on objects. Excludes scratching itch.",
-}
+def load_schedule_by_name(student_name):
+    sb = get_sb()
+    if not sb: return DEFAULT_SCHEDULE.copy()
+    try:
+        res = (sb.table("scatter_plot_schedules")
+               .select("schedule").eq("student_id", student_name).limit(1).execute())
+        if res.data:
+            raw = res.data[0]["schedule"]
+            return json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        pass
+    return DEFAULT_SCHEDULE.copy()
 
-# ==============================================================================
-# SESSION STATE
-# ==============================================================================
-def init():
-    if 'page' not in st.session_state:
-        st.session_state.page = 'students'
-    if 'student_name' not in st.session_state:
-        st.session_state.student_name = ''
-    if 'week_start' not in st.session_state:
-        st.session_state.week_start = date.today() - timedelta(days=date.today().weekday())
-    if 'behaviours' not in st.session_state:
-        st.session_state.behaviours = []
-    if 'schedule' not in st.session_state:
-        st.session_state.schedule = []
-    if 'grid_data' not in st.session_state:
-        st.session_state.grid_data = {}
 
-init()
+def save_schedule_by_name(student_name, schedule):
+    sb = get_sb()
+    if not sb: return
+    try:
+        data = {"student_id": student_name, "schedule": json.dumps(schedule)}
+        ex = sb.table("scatter_plot_schedules").select("id").eq("student_id", student_name).execute()
+        if ex.data:
+            sb.table("scatter_plot_schedules").update(data).eq("student_id", student_name).execute()
+        else:
+            sb.table("scatter_plot_schedules").insert(data).execute()
+    except Exception:
+        pass
 
-# ==============================================================================
+
+# ── Session state ─────────────────────────────────────────────────────────────
+ss = st.session_state
+for k, v in [
+    ("spt_name", ""),          ("spt_beh1", ""),
+    ("spt_beh2", ""),          ("spt_schedule", None),
+    ("spt_period_id", None),   ("spt_screen", "home"),
+    ("spt_week_start", date.today() - timedelta(days=date.today().weekday())),
+]:
+    if k not in ss: ss[k] = v
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # HEADER
-# ==============================================================================
+# ════════════════════════════════════════════════════════════════════════════
 st.markdown("""
-<div class='header'>
-<h1>📊 Scatter Plot Tracker</h1>
-<p>Simple paper-style weekly behaviour recording</p>
+<div class="clc-header">
+  <h2>📊 Scatter Plot Tracker</h2>
+  <p>Record targeted behaviour frequency across the school day
+  &nbsp;·&nbsp; CLC Learning &amp; Behaviour Unit</p>
 </div>
 """, unsafe_allow_html=True)
 
-# ==============================================================================
-# PAGE NAVIGATION
-# ==============================================================================
-col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
-with col1:
-    if st.button("👤 Students", use_container_width=True, type="primary" if st.session_state.page == 'students' else "secondary"):
-        st.session_state.page = 'students'
-        st.rerun()
-with col2:
-    if st.button("📋 Setup", use_container_width=True, type="primary" if st.session_state.page == 'setup' else "secondary"):
-        st.session_state.page = 'setup'
-        st.rerun()
-with col3:
-    if st.button("✏️ Record", use_container_width=True, type="primary" if st.session_state.page == 'record' else "secondary"):
-        st.session_state.page = 'record'
-        st.rerun()
-with col4:
-    if st.button("📈 Analysis", use_container_width=True, type="primary" if st.session_state.page == 'analysis' else "secondary"):
-        st.session_state.page = 'analysis'
-        st.rerun()
 
-st.markdown("---")
+# ════════════════════════════════════════════════════════════════════════════
+# SCREEN: HOME — pick or add student
+# ════════════════════════════════════════════════════════════════════════════
+if ss.spt_screen == "home":
 
-# ==============================================================================
-# PAGE 1: STUDENTS
-# ==============================================================================
-# ==============================================================================
-# PAGE 1: STUDENTS (target behaviour management)
-# ==============================================================================
-if st.session_state.page == 'students':
-    st.markdown("## 👤 Target Behaviour")
-    st.caption("Students are added and archived via the Student Register — they'll appear here automatically once active.")
+    summaries = load_all_student_summaries()
 
-    trackable = get_trackable_students()
+    # Students with existing data
+    if summaries:
+        st.markdown("### Students with existing data")
+        st.caption("Click a student to open their tracker.")
+        for stu in summaries:
+            c1, c2, c3, c4 = st.columns([3, 4, 2, 1])
+            with c1:
+                st.markdown(f"**{stu['name']}**")
+            with c2:
+                behs = stu["behaviours"]
+                st.caption("  ·  ".join(behs) if behs else "—")
+            with c3:
+                st.caption(f"Last: {stu['last_date']}  ({stu['total']} obs)")
+            with c4:
+                if st.button("Open →", key="open_" + stu["name"], use_container_width=True):
+                    ss.spt_name     = stu["name"]
+                    ss.spt_schedule = None
+                    ss.spt_screen   = "choose"
+                    st.rerun()
+        st.markdown("---")
 
-    if fetch_register is None:
-        st.error("❌ Could not load `archive_utils` — the Student Register module isn't available. Check the deployment.")
-        st.stop()
-
-    if not trackable:
-        st.warning("⚠️ No active students found in the Student Register. Add students there first.")
-        st.stop()
-
-    selected_display = st.selectbox("Select Student", options=[t['display'] for t in trackable])
-    selected = next(t for t in trackable if t['display'] == selected_display)
-
-    # AI Connection Test
-    with st.expander("🔧 Test AI Connection (click if AI not working)"):
-        if st.button("Test Groq API Connection"):
-            try:
-                api_key = st.secrets.get("GROQ_API_KEY") or st.secrets.get("groq", {}).get("api_key")
-                if not api_key:
-                    st.error("❌ No API key found. Add GROQ_API_KEY to Render secrets.")
-                else:
-                    st.info(f"✓ API key found: {api_key[:8]}...")
-                    result = groq_ai_call("Say 'test successful'", temperature=0.0, max_tokens=10)
-                    st.success(f"✅ AI Working! Response: {result}")
-            except ImportError as e:
-                st.error(f"❌ Groq library not installed: {e}")
-            except Exception as e:
-                st.error(f"❌ Connection failed: {str(e)}")
-
-    st.caption("Select from templates below, or use AI to generate a custom definition")
-
-    # Existing definition, if any
-    existing_defs = {}
-    if selected['row']:
-        raw = selected['row'].get('behaviour_definitions')
-        if raw:
-            try:
-                existing_defs = json.loads(raw) if isinstance(raw, str) else raw
-            except Exception:
-                existing_defs = {}
-    existing_beh = next(iter(existing_defs), '')
-    existing_def = existing_defs.get(existing_beh, '')
-
-    st.markdown("**Behaviour**")
-
-    col1a, col1b = st.columns([1, 1])
-    with col1a:
-        template1 = st.selectbox(
-            "Quick select from templates",
-            list(BEHAVIOUR_TEMPLATES.keys()),
-            index=list(BEHAVIOUR_TEMPLATES.keys()).index(existing_beh) if existing_beh in BEHAVIOUR_TEMPLATES else 0,
-            key="temp1"
-        )
-    with col1b:
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.caption("Or type your own below ↓")
-
-    col1, col2 = st.columns([4, 1])
-    with col1:
-        beh1_name = st.text_input(
-            "Behaviour name (select from dropdown OR type custom)",
-            value=template1 if template1 else existing_beh,
-            key="new_beh1",
-            placeholder="e.g., 'Hitting' or 'Interrupting others'"
-        )
-    with col2:
-        if st.button("🤖 AI", key="ai1", use_container_width=True, help="Generate definition with AI"):
-            if beh1_name:
-                with st.spinner("Generating..."):
-                    try:
-                        st.session_state['ai_gen1'] = groq_ai_call(
-                            f"Write a 2-3 sentence operational definition for the school behaviour '{beh1_name}'. Format: Description. Includes examples. Excludes non-examples."
-                        )
-                        st.success("✅ Generated!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"AI Error: {str(e)[:100]}")
-
-    # Show definition in prominent box
-    def_value = st.session_state.get('ai_gen1', BEHAVIOUR_TEMPLATES.get(template1) or existing_def)
-    if def_value:
-        st.info(f"📋 **Definition:** {def_value}")
-
-    beh1_def = st.text_area(
-        "Edit definition if needed",
-        value=def_value,
-        height=80,
-        key="def1",
-        placeholder="Observable, measurable description"
-    )
-
-    if st.button("💾 Save Behaviour Definition", type="primary", use_container_width=True):
-        if upsert_behaviour_definition(selected['key'], selected['program'], beh1_name, beh1_def):
-            st.success(f"✅ Saved for {selected['initials']}")
-            if 'ai_gen1' in st.session_state:
-                del st.session_state['ai_gen1']
-            st.rerun()
-
-    st.markdown("---")
-
-    # List students
-    st.markdown("### Current Students")
-    for t in trackable:
-        with st.expander(f"**{t['display']}**"):
-            st.markdown(f"**Program:** {t.get('program') or 'Not set'}")
-            beh_defs = {}
-            if t['row']:
-                raw = t['row'].get('behaviour_definitions')
-                if raw:
-                    try:
-                        beh_defs = json.loads(raw) if isinstance(raw, str) else raw
-                    except Exception:
-                        beh_defs = {}
-            if beh_defs:
-                st.markdown("**Target Behaviour:**")
-                for beh_name, beh_def in beh_defs.items():
-                    st.markdown(f"- **{beh_name}:** {beh_def}")
+    # Add / start new student
+    st.markdown("### Start tracking a new student")
+    _reg = load_register_students()
+    with st.form("spt_new_stu_form"):
+        nc1, nc2 = st.columns(2)
+        with nc1:
+            if _reg:
+                _opts = ["— select a student —"] + [r["label"] for r in _reg]
+                _pick = st.selectbox("Student *", _opts)
+                new_name = ""
+                if _pick != _opts[0]:
+                    new_name = next(r["name"] for r in _reg if r["label"] == _pick)
             else:
-                st.caption("No behaviour definition set")
+                st.caption("⚠️ Student Register not reachable - typing a name manually.")
+                new_name = st.text_input("Student name *", placeholder="Exactly as in Behaviour Support")
+        with nc2:
+            new_prog = st.selectbox("Program", ["JP","PY","SY"])
+        if st.form_submit_button("Start Tracking →", type="primary", use_container_width=True):
+            if not new_name.strip():
+                st.error("Please choose the student.")
+            else:
+                ss.spt_name     = new_name.strip()
+                ss.spt_schedule = None
+                ss.spt_screen   = "choose"
+                st.rerun()
+    st.stop()
 
-# ==============================================================================
-# PAGE 2: SETUP
-# ==============================================================================
-elif st.session_state.page == 'setup':
-    st.markdown("## 📋 Weekly Setup")
-    st.caption("Set up your tracking sheet for the week")
-    
-    # Student selection
-    st.markdown("### 1. Student")
-    
-    trackable = get_trackable_students()
-    
-    if not trackable:
-        st.warning("⚠️ No active students found in the Student Register. Add students there first.")
-        st.stop()
-    else:
-        display_options = [t['display'] for t in trackable]
-        current_display = next((t['display'] for t in trackable if t['key'] == st.session_state.student_name), display_options[0])
-        selected_display = st.selectbox(
-            "Select Student",
-            options=display_options,
-            index=display_options.index(current_display)
-        )
-        selected_student = next(t for t in trackable if t['display'] == selected_display)
-        st.session_state.student_name = selected_student['key']
-    
-    st.markdown("---")
-    
-    # Week selection
-    st.markdown("### 2. Week")
-    col1, col2 = st.columns(2)
-    with col1:
-        week_start = st.date_input(
-            "Monday (start of week)",
-            value=st.session_state.week_start,
-            help="Select the Monday of the tracking week"
-        )
-        st.session_state.week_start = week_start
-    with col2:
-        week_end = week_start + timedelta(days=4)
-        st.info(f"📅 Week: {week_start.strftime('%-d %b')} - {week_end.strftime('%-d %b %Y')}")
-    
-    st.markdown("---")
-    
-    # Target behaviours
-    st.markdown("### 3. Target Behaviour")
-    
-    # Check if student has a pre-defined behaviour
-    student_row = selected_student['row']
-    has_predefined = False
-    beh_defs = {}
-    
-    if student_row:
-        raw = student_row.get('behaviour_definitions')
-        if raw:
-            try:
-                beh_defs = json.loads(raw) if isinstance(raw, str) else raw
-                has_predefined = bool(beh_defs)
-            except:
-                pass
-    
-    if has_predefined:
-        st.info(f"📋 {selected_student['initials']} has a pre-defined behaviour: {', '.join(beh_defs.keys())}")
-        if st.button("✨ Use Pre-defined Behaviour", use_container_width=True):
-            st.session_state.behaviours = list(beh_defs.keys())[:1]
-            st.rerun()
-    
-    st.caption("Select from templates or type a custom behaviour name")
-    st.markdown("**For a custom behaviour not in templates, type the name and click AI to generate a definition**")
-    
-    # Behaviour
-    col1, col2 = st.columns([4, 1])
-    with col1:
-        template1 = st.selectbox("Select Behaviour or type custom below", list(BEHAVIOUR_TEMPLATES.keys()), key="setup_temp1")
-        beh1 = st.text_input(
-            "Behaviour name", 
-            value=(template1 if template1 and template1 != "—" else st.session_state.get('setup_beh1', '')),
-            key="beh1",
-            placeholder="Select from dropdown OR type custom"
-        )
-        # ALWAYS save to session state (not just on AI click)
-        st.session_state['setup_beh1'] = beh1 if beh1 else ''
-    with col2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🤖 AI", key="setup_ai1", use_container_width=True):
-            if beh1:
-                # Save behaviour name before generating
-                st.session_state['setup_beh1'] = beh1
-                
-                with st.spinner("Generating..."):
-                    try:
-                        new_def = groq_ai_call(
-                            f"Write a 2-3 sentence operational definition for the school behaviour '{beh1}'. Format: Description. Includes examples. Excludes non-examples."
-                        )
-                        st.session_state[f'setup_def_{beh1}'] = new_def
 
-                        if upsert_behaviour_definition(selected_student['key'], selected_student['program'], beh1, new_def):
-                            st.success("✅ Generated & saved!")
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"AI Error: {str(e)[:80]}")
-    
-    # Show definition if available
-    def1 = st.session_state.get(f'setup_def_{beh1}', BEHAVIOUR_TEMPLATES.get(template1) or beh_defs.get(beh1, ''))
-    if def1:
-        st.info(f"📋 {def1}")
-    
-    st.markdown("---")
-    
-    # Schedule
-    st.markdown("### 4. Daily Schedule")
-    st.caption("Enter your time slots and activities (e.g., '9:00 - Maths', '10:30 - Recess')")
-    
-    # Default schedule
-    if not st.session_state.schedule:
-        st.session_state.schedule = [
-            {"time": "9:00", "activity": "Morning routine"},
-            {"time": "9:30", "activity": "Lesson 1"},
-            {"time": "10:30", "activity": "Recess"},
-            {"time": "11:00", "activity": "Lesson 2"},
-            {"time": "12:30", "activity": "Lunch"},
-            {"time": "13:00", "activity": "Lesson 3"},
-            {"time": "14:00", "activity": "Pack up"},
-        ]
-    
-    schedule_data = pd.DataFrame(st.session_state.schedule)
-    
-    edited_schedule = st.data_editor(
-        schedule_data,
-        column_config={
-            "time": st.column_config.TextColumn("Time", width="small"),
-            "activity": st.column_config.TextColumn("Activity", width="medium")
-        },
-        num_rows="dynamic",
-        hide_index=True,
-        use_container_width=True
-    )
-    
-    st.session_state.schedule = edited_schedule.to_dict('records')
-    
-    st.markdown("---")
-    
-    # Build behaviours list from the single behaviour input (use widget, then template, then session_state)
-    behaviours = []
-    val1 = beh1 if beh1 else (template1 if template1 and template1 != "—" else st.session_state.get('setup_beh1', ''))
-    if val1 and val1.strip():
-        behaviours.append(val1.strip())
-    
-    st.session_state.behaviours = behaviours
-    
-    if behaviours:
-        st.info(f"✅ Ready to track: **{behaviours[0]}**")
+# ════════════════════════════════════════════════════════════════════════════
+# SCREEN: CHOOSE — continue or new period
+# ════════════════════════════════════════════════════════════════════════════
+if ss.spt_screen == "choose":
+
+    student_name = ss.spt_name
+    periods = load_periods_by_name(student_name)
+
+    if st.button("← Back to student list", key="back_to_home"):
+        ss.spt_screen = "home"
+        st.rerun()
+
+    st.markdown(f"### {student_name}")
+
+    if periods:
+        st.markdown("**Tracking periods on record:**")
+        for i, p in enumerate(periods):
+            active = not p.get("end_date")
+            tag    = " ✅ Active" if active else ""
+            sd     = pd.to_datetime(p["start_date"]).strftime("%-d %b %Y")
+            ed     = pd.to_datetime(p["end_date"]).strftime("%-d %b %Y") if p.get("end_date") else "ongoing"
+            b1     = p.get("behaviour_1","")
+            b2     = p.get("behaviour_2","")
+            lbl    = p.get("label") or ("Period " + str(len(periods)-i))
+            behtxt = b1 + (" · " + b2 if b2 else "")
+            st.markdown(
+                f'<div style="background:#f8fafc;border:1px solid #e2e8f0;border-left:4px solid '
+                f'{"#22c55e" if active else "#cbd5e1"};border-radius:8px;'
+                f'padding:.5rem .9rem;margin-bottom:.3rem;font-size:.83rem;">'
+                f'<b>{lbl}</b>{tag} &nbsp;'
+                f'<span style="color:#64748b;">{sd} – {ed}</span><br>'
+                f'<span style="color:#334155;">{behtxt}</span>'
+                f'</div>',
+                unsafe_allow_html=True
+            )
+
+        st.markdown("---")
+        active_p = next((p for p in periods if not p.get("end_date")), periods[0])
+        b1_a = active_p.get("behaviour_1","")
+        b2_a = active_p.get("behaviour_2","")
+        preview = b1_a + (" · " + b2_a if b2_a else "")
+
+        st.markdown("**What would you like to do?**")
+        ch1, ch2 = st.columns(2)
+        with ch1:
+            if st.button(
+                "▶  Continue — " + preview[:50],
+                type="primary", use_container_width=True, key="cont_btn"
+            ):
+                ss.spt_beh1      = b1_a
+                ss.spt_beh2      = b2_a
+                ss.spt_period_id = active_p["id"]
+                ss.spt_screen    = "tracker"
+                st.rerun()
+        with ch2:
+            if st.button(
+                "🔄  New period — behaviours have changed",
+                use_container_width=True, key="new_period_btn"
+            ):
+                ss.spt_screen = "new_period"
+                st.rerun()
+
+        if len(periods) > 1:
+            st.markdown("**Or view a historical period:**")
+            opts = {}
+            for i, p in enumerate(periods):
+                b1t  = p.get("behaviour_1","")
+                b2t  = p.get("behaviour_2","")
+                lbl_t= p.get("label") or ("Period " + str(len(periods)-i))
+                sd_t = pd.to_datetime(p["start_date"]).strftime("%-d %b %y")
+                ed_t = pd.to_datetime(p["end_date"]).strftime("%-d %b %y") if p.get("end_date") else "now"
+                opts[p["id"]] = lbl_t + " — " + b1t + (" · "+b2t if b2t else "") + " (" + sd_t + "–" + ed_t + ")"
+            vc1, vc2 = st.columns([4,1])
+            with vc1:
+                view_pid = st.selectbox("Select period", list(opts.keys()),
+                                        format_func=lambda x: opts[x], key="view_period_sel")
+            with vc2:
+                st.markdown("<div style='padding-top:1.8rem;'>", unsafe_allow_html=True)
+                if st.button("View", use_container_width=True, key="view_period_btn"):
+                    vp = next((p for p in periods if p["id"]==view_pid), None)
+                    if vp:
+                        ss.spt_beh1      = vp.get("behaviour_1","")
+                        ss.spt_beh2      = vp.get("behaviour_2","")
+                        ss.spt_period_id = vp["id"]
+                    ss.spt_screen = "tracker"
+                    st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
+
     else:
-        st.error("❌ Please select or enter a behaviour to track")
-    
-    # Save and continue
-    if st.button("✅ Setup Complete - Start Recording", type="primary", use_container_width=True):
-        if not st.session_state.student_name:
-            st.error("❌ Please select a student")
-        elif not behaviours:
-            st.error("❌ Please enter at least one behaviour")
-        elif not st.session_state.schedule:
-            st.error("❌ Please add your daily schedule")
+        # No periods yet — ask for behaviours to start first period
+        st.markdown("**Enter the behaviour(s) to track:**")
+        with st.form("first_period_form"):
+            fp1, fp2 = st.columns(2)
+            with fp1: nb1 = st.text_input("Behaviour 1 *", placeholder="e.g. Roaming instead of participating")
+            with fp2: nb2 = st.text_input("Behaviour 2 (optional)", placeholder="e.g. Verbal outbursts")
+            nl = st.text_input("Label (optional)", placeholder="e.g. Term 1 Week 3")
+            if st.form_submit_button("✅ Start Tracking", type="primary", use_container_width=True):
+                if not nb1.strip():
+                    st.error("Please enter at least Behaviour 1.")
+                else:
+                    p = create_period(student_name, nb1.strip(), nb2.strip(), nl.strip())
+                    ss.spt_beh1      = nb1.strip()
+                    ss.spt_beh2      = nb2.strip()
+                    ss.spt_period_id = p["id"] if p else None
+                    ss.spt_screen    = "tracker"
+                    st.rerun()
+
+    st.stop()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# SCREEN: NEW PERIOD
+# ════════════════════════════════════════════════════════════════════════════
+if ss.spt_screen == "new_period":
+    st.markdown("### 🔄 New Tracking Period — " + ss.spt_name)
+    st.caption("Existing data is preserved. This starts a fresh period from today.")
+    with st.form("new_period_form"):
+        np1, np2 = st.columns(2)
+        with np1: np_beh1  = st.text_input("Behaviour 1 *", placeholder="e.g. Hitting peers")
+        with np2: np_beh2  = st.text_input("Behaviour 2 (optional)")
+        np_label = st.text_input("Label (optional)", placeholder="e.g. Term 2 Week 3")
+        bc1, bc2 = st.columns(2)
+        with bc1: do_start  = st.form_submit_button("✅ Start", type="primary", use_container_width=True)
+        with bc2: do_back   = st.form_submit_button("← Back", use_container_width=True)
+    if do_back:
+        ss.spt_screen = "choose"; st.rerun()
+    if do_start:
+        if not np_beh1.strip():
+            st.error("Please enter at least Behaviour 1.")
         else:
-            # Save week to database
-            sb = get_sb()
-            if sb:
-                try:
-                    week_start = st.session_state.week_start
-                    sb.table("scatter_weekly_data").upsert({
-                        "student_name": st.session_state.student_name,
-                        "week_start": str(week_start),
-                        "behaviours": json.dumps(behaviours),
-                        "schedule": json.dumps(st.session_state.schedule),
-                        "grid_data": json.dumps({}),
-                        "created_by": get_staff_name() if hasattr(get_staff_name, '__call__') else "Staff"
-                    }, on_conflict="student_name,week_start").execute()
-                except Exception as e:
-                    st.error(f"Save error: {e}")
-            
-            st.session_state.page = 'record'
+            p = create_period(ss.spt_name, np_beh1.strip(), np_beh2.strip(), np_label.strip())
+            ss.spt_beh1      = np_beh1.strip()
+            ss.spt_beh2      = np_beh2.strip()
+            ss.spt_period_id = p["id"] if p else None
+            ss.spt_screen    = "tracker"
             st.rerun()
+    st.stop()
 
-# ==============================================================================
-# PAGE 3: RECORDING
-# ==============================================================================
-elif st.session_state.page == 'record':
-    
-    if not st.session_state.student_name or not st.session_state.behaviours:
-        st.warning("⚠️ Please complete setup first")
-        if st.button("Go to Setup"):
-            st.session_state.page = 'setup'
-            st.rerun()
-        st.stop()
-    
-    st.markdown(f"## ✏️ Recording: {st.session_state.student_name}")
-    
-    week_start = st.session_state.week_start
-    week_end = week_start + timedelta(days=4)
-    
-    st.markdown(f"<div class='info-box'><b>Week:</b> {week_start.strftime('%-d %b')} - {week_end.strftime('%-d %b %Y')} | <b>Behaviours:</b> {', '.join(st.session_state.behaviours)}</div>", unsafe_allow_html=True)
-    
-    # Show behaviour definitions if student has them
-    @st.cache_data(ttl=60)
-    def load_students():
-        sb = get_sb()
-        if not sb: return []
-        try:
-            res = sb.table("scatter_students").select("*").order("student_name").execute()
-            return res.data or []
-        except:
-            return []
-    
-    students = load_students()
-    student_obj = [s for s in students if s['student_name'] == st.session_state.student_name]
-    
-    if student_obj:
-        beh_defs = student_obj[0].get('behaviour_definitions')
-        if beh_defs:
-            if isinstance(beh_defs, str):
-                try:
-                    beh_defs = json.loads(beh_defs)
-                except:
-                    beh_defs = {}
-            
-            if beh_defs:
-                with st.expander("📋 Behaviour Definitions (click to view)", expanded=False):
-                    for beh in st.session_state.behaviours:
-                        if beh in beh_defs:
-                            st.markdown(f"**{beh}:** {beh_defs[beh]}")
-                        else:
-                            st.caption(f"{beh}: No definition set")
-    
-    # Days of week
-    days = []
-    for i in range(5):
-        day_date = week_start + timedelta(days=i)
-        days.append({
-            "name": day_date.strftime("%A"),
-            "short": day_date.strftime("%a"),
-            "date": day_date.strftime("%-d/%-m"),
-            "date_obj": day_date
-        })
-    
-    behaviours = st.session_state.behaviours
-    schedule = st.session_state.schedule
-    
-    # Initialize grid data if needed
-    if not st.session_state.grid_data:
-        st.session_state.grid_data = {}
-    
-    st.markdown("### 📊 Weekly Grid")
-    st.caption("Click any cell to add a tally mark ( / ). Click repeatedly to add more.")
-    
-    # Build grid as DataFrame for display
-    grid_rows = []
-    
-    for slot in schedule:
-        time = slot['time']
-        activity = slot.get('activity', '')
-        
-        row = {"Time": time, "Activity": activity}
-        
-        for day in days:
-            for beh_idx, beh in enumerate(behaviours):
-                cell_key = f"{day['date_obj']}_{time}_{beh_idx}"
-                current_value = st.session_state.grid_data.get(cell_key, 0)
-                
-                # Display tally marks
-                if current_value == 0:
-                    display = ""
-                elif current_value <= 4:
-                    display = "/" * current_value
-                else:
-                    display = str(current_value)
-                
-                col_name = f"{day['short']}_{beh[:8]}"
-                row[col_name] = display
-        
-        # Row total
-        row_total = sum(st.session_state.grid_data.get(f"{d['date_obj']}_{time}_{i}", 0) 
-                       for d in days for i in range(len(behaviours)))
-        row["Total"] = str(row_total) if row_total > 0 else ""
-        
-        grid_rows.append(row)
-    
-    # Add totals row
-    totals_row = {"Time": "TOTAL", "Activity": ""}
-    week_total = 0
-    
-    for day in days:
-        for beh_idx, beh in enumerate(behaviours):
-            day_beh_total = sum(st.session_state.grid_data.get(f"{day['date_obj']}_{s['time']}_{beh_idx}", 0) 
-                               for s in schedule)
-            col_name = f"{day['short']}_{beh[:8]}"
-            totals_row[col_name] = str(day_beh_total) if day_beh_total > 0 else ""
-            week_total += day_beh_total
-    
-    totals_row["Total"] = str(week_total)
-    grid_rows.append(totals_row)
-    
-    # Display grid
-    grid_df = pd.DataFrame(grid_rows)
-    st.dataframe(grid_df, use_container_width=True, hide_index=True)
-    
-    st.markdown("---")
-    
-    # Quick recording interface
-    st.markdown("### ✏️ Quick Record")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        record_day = st.selectbox("Day", [d['name'] for d in days])
-        day_obj = [d for d in days if d['name'] == record_day][0]['date_obj']
-    
-    with col2:
-        record_time = st.selectbox("Time", [s['time'] for s in schedule])
-    
-    with col3:
-        record_beh = st.selectbox("Behaviour", behaviours)
-        beh_idx = behaviours.index(record_beh)
-    
-    cell_key = f"{day_obj}_{record_time}_{beh_idx}"
-    current = st.session_state.grid_data.get(cell_key, 0)
-    
-    st.info(f"Current value: **{current}** {'/' * current if current <= 4 else ''}")
-    
-    col_add, col_minus, col_set = st.columns(3)
-    
-    with col_add:
-        if st.button("➕ Add Tally ( / )", use_container_width=True, type="primary"):
-            st.session_state.grid_data[cell_key] = current + 1
-            st.rerun()
-    
-    with col_minus:
-        if st.button("➖ Remove Tally", use_container_width=True):
-            if current > 0:
-                st.session_state.grid_data[cell_key] = current - 1
-                st.rerun()
-    
-    with col_set:
-        set_value = st.number_input("Or set to:", min_value=0, max_value=20, value=current, key="set_val", label_visibility="collapsed")
-        if st.button("✏️ Set", use_container_width=True):
-            st.session_state.grid_data[cell_key] = set_value
-            st.rerun()
-    
-    st.markdown("---")
-    
-    # Save/Load
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        if st.button("💾 Save Week", use_container_width=True):
-            sb = get_sb()
-            if sb:
-                try:
-                    # Save as JSON blob - upsert to update if exists
-                    sb.table("scatter_weekly_data").upsert({
-                        "student_name": st.session_state.student_name,
-                        "week_start": str(week_start),
-                        "behaviours": json.dumps(behaviours),
-                        "schedule": json.dumps(schedule),
-                        "grid_data": json.dumps(st.session_state.grid_data),
-                        "created_by": get_staff_name() if hasattr(get_staff_name, '__call__') else "Staff"
-                    }, on_conflict="student_name,week_start").execute()
-                    st.success("✅ Week saved!")
-                except Exception as e:
-                    st.error(f"Save failed: {e}")
-    
-    with col2:
-        if st.button("📥 Load Week", use_container_width=True):
-            sb = get_sb()
-            if sb:
-                try:
-                    res = sb.table("scatter_weekly_data").select("*").eq("student_name", st.session_state.student_name).eq("week_start", str(week_start)).execute()
-                    if res.data:
-                        data = res.data[0]
-                        st.session_state.grid_data = json.loads(data.get('grid_data', '{}'))
-                        st.success("✅ Week loaded!")
-                        st.rerun()
-                    else:
-                        st.info("No saved data for this week")
-                except Exception as e:
-                    st.error(f"Load failed: {e}")
-    
-    with col3:
-        if st.button("🗑️ Clear All", use_container_width=True):
-            if st.checkbox("Confirm clear all data"):
-                st.session_state.grid_data = {}
-                st.rerun()
 
-# ==============================================================================
-# PAGE 4: ANALYSIS
-# ==============================================================================
-elif st.session_state.page == 'analysis':
-    st.markdown("## 📈 Scatter Plot & Analysis")
-    
-    if not st.session_state.student_name:
-        st.warning("⚠️ Select a student in Setup first")
-        if st.button("Go to Setup"):
-            st.session_state.page = 'setup'
-            st.rerun()
-        st.stop()
-    
-    # Load saved weeks for analysis
-    @st.cache_data(ttl=30)
-    def load_all_weeks(student_name):
-        sb = get_sb()
-        if not sb: return []
-        try:
-            res = sb.table("scatter_weekly_data").select("*").eq("student_name", student_name).order("week_start").execute()
-            return res.data or []
-        except:
-            return []
-    
-    weeks = load_all_weeks(st.session_state.student_name)
-    
-    if not weeks:
-        st.info("No data yet. Record some observations first.")
-        st.stop()
-    
-    # Week selector
-    week_options = [f"{pd.to_datetime(w['week_start']).strftime('%-d %b %Y')}" for w in weeks]
-    selected_week_idx = st.selectbox("Select Week", range(len(weeks)), format_func=lambda i: week_options[i])
-    
-    week = weeks[selected_week_idx]
-    behaviours = json.loads(week.get('behaviours', '[]'))
-    schedule = json.loads(week.get('schedule', '[]'))
-    grid_data = json.loads(week.get('grid_data', '{}'))
-    week_start = pd.to_datetime(week['week_start']).date()
-    
-    st.markdown(f"**Week:** {week_start.strftime('%-d %b')} - {(week_start + timedelta(days=4)).strftime('%-d %b %Y')}")
-    st.markdown(f"**Behaviours:** {', '.join(behaviours)}")
-    
-    # Show behaviour definitions
-    @st.cache_data(ttl=60)
-    def load_student_defs(student_name):
-        sb = get_sb()
-        if not sb: return {}
-        try:
-            res = sb.table("scatter_students").select("behaviour_definitions").eq("student_name", student_name).execute()
-            if res.data:
-                defs = res.data[0].get('behaviour_definitions')
-                if defs and isinstance(defs, str):
-                    return json.loads(defs)
-                return defs or {}
-            return {}
-        except:
-            return {}
-    
-    beh_defs = load_student_defs(st.session_state.student_name)
-    
-    # Show definitions prominently
-    st.markdown("### 📋 Behaviour Definitions")
-    if beh_defs:
-        for beh in behaviours:
-            if beh in beh_defs:
-                st.success(f"**{beh}**")
-                st.write(beh_defs[beh])
-                st.markdown("")
-            else:
-                st.warning(f"**{beh}** — No definition recorded")
-                st.markdown("")
-    else:
-        st.info("No behaviour definitions saved for this student")
-    
-    st.markdown("---")
-    
-    # Summary stats
-    days = [week_start + timedelta(days=i) for i in range(5)]
-    total_incidents = sum(grid_data.values())
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Total Incidents", total_incidents)
-    with col2:
-        avg_per_day = total_incidents / 5 if total_incidents > 0 else 0
-        st.metric("Avg Per Day", f"{avg_per_day:.1f}")
-    with col3:
-        # Peak time
-        time_totals = {}
-        for slot in schedule:
-            time = slot['time']
-            time_total = sum(grid_data.get(f"{d}_{time}_{i}", 0) for d in days for i in range(len(behaviours)))
-            time_totals[time] = time_total
-        peak_time = max(time_totals, key=time_totals.get) if time_totals and max(time_totals.values()) > 0 else "—"
-        st.metric("Peak Time", peak_time)
-    
-    st.markdown("---")
-    
-    # Build plot data
-    plot_data = []
-    for day_idx, day in enumerate(days):
-        for slot_idx, slot in enumerate(schedule):
-            time = slot['time']
-            activity = slot.get('activity', '')
-            
-            for beh_idx, beh in enumerate(behaviours):
-                cell_key = f"{day}_{time}_{beh_idx}"
-                value = grid_data.get(cell_key, 0)
-                
-                if value > 0:
-                    plot_data.append({
-                        "Day": day.strftime("%a %d/%m"),
-                        "Time": time,
-                        "Activity": activity,
-                        "Behaviour": beh,
-                        "Count": value
-                    })
-    
-    if plot_data:
-        df_plot = pd.DataFrame(plot_data)
-        
-        # Scatter plot
-        st.markdown("### 📍 Scatter Plot")
-        fig = px.scatter(
-            df_plot,
-            x="Day",
-            y="Time",
-            size="Count",
-            color="Behaviour",
-            hover_data=["Activity", "Count"],
-            title="Behaviour Occurrences by Day and Time",
-            height=500
-        )
-        fig.update_layout(
-            yaxis=dict(categoryorder='array', categoryarray=[s['time'] for s in schedule][::-1])
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # By behaviour
-        st.markdown("### 📊 By Behaviour")
-        beh_totals = df_plot.groupby("Behaviour")["Count"].sum().reset_index()
-        fig2 = px.bar(beh_totals, x="Behaviour", y="Count")
-        st.plotly_chart(fig2, use_container_width=True)
-        
-        # By day
-        st.markdown("### 📅 By Day")
-        day_totals = df_plot.groupby("Day")["Count"].sum().reset_index()
-        fig3 = px.bar(day_totals, x="Day", y="Count")
-        st.plotly_chart(fig3, use_container_width=True)
-        
-        # By time
-        st.markdown("### ⏰ By Time")
-        time_totals = df_plot.groupby("Time")["Count"].sum().reset_index()
-        fig4 = px.bar(time_totals, x="Time", y="Count")
-        st.plotly_chart(fig4, use_container_width=True)
-    else:
-        st.info("No observations recorded yet")
+# ════════════════════════════════════════════════════════════════════════════
+# SCREEN: TRACKER — the main grid + entry screen
+# ════════════════════════════════════════════════════════════════════════════
+student_name = ss.spt_name
+behaviours   = [b for b in [ss.spt_beh1.strip(), ss.spt_beh2.strip()] if b]
+
+if not student_name:
+    ss.spt_screen = "home"; st.rerun()
+
+# Load schedule
+if ss.spt_schedule is None:
+    ss.spt_schedule = load_schedule_by_name(student_name)
+schedule = ss.spt_schedule
+
+# Top bar: name + back + behaviours
+tb1, tb2, tb3 = st.columns([1.5, 3, 3])
+with tb1:
+    if st.button("← Students", key="back_tracker", use_container_width=True):
+        ss.spt_screen = "home"; st.rerun()
+with tb2:
+    st.markdown(f"**{student_name}**")
+    if behaviours:
+        st.caption("  ·  ".join([f"B{i+1}: {b[:40]}" for i,b in enumerate(behaviours)]))
+with tb3:
+    if st.button("🔄 Change behaviours / new period", key="change_beh_btn", use_container_width=True):
+        ss.spt_screen = "new_period"; st.rerun()
 
 st.markdown("---")
-st.caption("🏫 CLC-LBU · Scatter Plot Tracker")
+
+# Tabs
+t_record, t_analysis = st.tabs(["📋  Record & View", "📈  Analysis & Download"])
+
+# ════════════════════════════════════════════════════════════════════════════
+# RECORD & VIEW
+# ════════════════════════════════════════════════════════════════════════════
+with t_record:
+
+    # Persistent error
+    _err = ss.get("_spt_err")
+    if _err:
+        st.warning(_err) if _err.startswith("⚠️") else st.error(_err)
+        if st.button("Dismiss", key="dismiss_err"): ss.pop("_spt_err", None); st.rerun()
+
+    # Week navigation
+    week_start = ss.spt_week_start
+    week_end   = week_start + timedelta(days=4)
+    this_week  = date.today() - timedelta(days=date.today().weekday())
+    is_this    = week_start == this_week
+
+    wc1, wc2, wc3, wc4 = st.columns([1,4,1,1])
+    with wc1:
+        if st.button("← Prev", use_container_width=True, key="prev_wk"):
+            ss.spt_week_start -= timedelta(weeks=1); st.rerun()
+    with wc2:
+        st.markdown(
+            f'<div style="text-align:center;padding:.38rem 0;font-weight:700;color:{TEAL};font-size:.9rem;">'
+            f'Week of {week_start.strftime("%-d %b")} – {week_end.strftime("%-d %b %Y")}'
+            + (' &nbsp;<span style="background:#dbeafe;color:#1d4ed8;font-size:.68rem;'
+               'padding:.1rem .45rem;border-radius:10px;">This week</span>' if is_this else '')
+            + '</div>', unsafe_allow_html=True
+        )
+    with wc3:
+        if st.button("Next →", use_container_width=True, key="next_wk"):
+            ss.spt_week_start += timedelta(weeks=1); st.rerun()
+    with wc4:
+        if st.button("Today", use_container_width=True, key="today_wk"):
+            ss.spt_week_start = this_week; st.rerun()
+
+    week_df = load_week_obs(student_name, week_start, week_end)
+
+    # Cell lookup: {beh_index: {time_slot: {day: {id, value}}}}
+    cell_data = {i: {} for i in range(max(len(behaviours), 1))}
+    if not week_df.empty:
+        for _, row in week_df.iterrows():
+            t   = row.get("time_slot","")
+            d   = row.get("day_of_week","")
+            bi  = int(row.get("behaviour_index",0) or 0)
+            val = row.get("value","")
+            rid = row.get("id","")
+            if not t or not d: continue
+            if bi not in cell_data: cell_data[bi] = {}
+            if t not in cell_data[bi]: cell_data[bi][t] = {}
+            cell_data[bi][t][d] = {"id": rid, "value": val}
+
+    # Legend
+    st.markdown(
+        '<div style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;font-size:.75rem;margin:.25rem 0 .6rem;">'
+        '<b>Key:</b>'
+        '<span style="background:#dbeafe;color:#1d4ed8;padding:.1rem .5rem;border-radius:12px;font-weight:700;">1</span> one occurrence &nbsp;'
+        '<span style="background:#fee2e2;color:#b91c1c;padding:.1rem .5rem;border-radius:12px;font-weight:700;">2</span> more than one &nbsp;'
+        '<span style="background:#f3f4f6;color:#9ca3af;padding:.1rem .5rem;border-radius:12px;font-weight:700;">X</span> evacuation &nbsp;'
+        '<span style="background:#f0fdf4;color:#15803d;padding:.1rem .5rem;border-radius:12px;font-weight:600;">✓</span> no behaviour observed'
+        '</div>', unsafe_allow_html=True
+    )
+
+    # Grid tabs — one per behaviour
+    if behaviours:
+        beh_tabs = st.tabs([f"B{i+1}: {b[:40]}" for i, b in enumerate(behaviours)])
+    else:
+        beh_tabs = [st.container()]
+
+    day_dates  = {DAYS[i]: (week_start + timedelta(days=i)).strftime("%-d/%m") for i in range(5)}
+    today_day  = DAYS[date.today().weekday()] if date.today().weekday() < 5 else None
+
+    for bi, btab in enumerate(beh_tabs):
+        with btab:
+            th = '<th class="lh">Time</th><th class="la">Activity</th>'
+            for d in DAYS:
+                is_td = (d == today_day and is_this)
+                bg = 'background:#1a4d8a;' if is_td else ''
+                th += f'<th style="{bg}">{d[:3]}<br><span style="font-weight:400;font-size:.62rem;">{day_dates[d]}</span></th>'
+            rows_html = ""
+            for slot in schedule:
+                t   = slot["time"]
+                act = slot["activity"]
+                rows_html += f'<tr><td class="tl">{t}</td><td class="al">{act}</td>'
+                for d in DAYS:
+                    cell = cell_data.get(bi,{}).get(t,{}).get(d)
+                    if cell:
+                        v   = cell["value"]
+                        cls = {"1":"c1","2":"c2","X":"cx","0":"c0"}.get(v,"ce")
+                        disp = "✓" if v == "0" else v
+                        rows_html += f'<td class="{cls}">{disp}</td>'
+                    else:
+                        rows_html += '<td class="ce">·</td>'
+                rows_html += "</tr>"
+            st.markdown(
+                f'<div class="grid-wrap"><table class="sg"><thead><tr>{th}</tr></thead>'
+                f'<tbody>{rows_html}</tbody></table></div>',
+                unsafe_allow_html=True
+            )
+            # Daily totals
+            if not week_df.empty and "behaviour_index" in week_df.columns:
+                bw = week_df[week_df["behaviour_index"]==bi]
+                tc = st.columns(6); grand = 0
+                for i, d in enumerate(DAYS):
+                    n = bw[(bw["day_of_week"]==d) & (bw["value"].isin(["1","2"]))].shape[0]
+                    grand += n
+                    tc[i].markdown(f"<div class='kpi'><div class='val'>{n}</div><div class='lbl'>{d[:3]}</div></div>", unsafe_allow_html=True)
+                tc[5].markdown(f"<div class='kpi kpi-a'><div class='val'>{grand}</div><div class='lbl'>Incidents</div></div>", unsafe_allow_html=True)
+
+    # Quick entry strip
+    st.markdown("---")
+    st.markdown("**➕ Record an observation**")
+    slot_times     = [s["time"] for s in schedule]
+    today_day_name = DAYS[date.today().weekday()] if date.today().weekday() < 5 else DAYS[0]
+
+    qc1, qc2 = st.columns([2.5, 2])
+    with qc1:
+        sel_time = st.selectbox("Time slot", slot_times, key="q_time")
+    with qc2:
+        sel_day = st.selectbox("Day", DAYS,
+            index=DAYS.index(today_day_name) if today_day_name in DAYS else 0,
+            key="q_day")
+
+    sel_activity = next((s["activity"] for s in schedule if s["time"]==sel_time),"")
+    sel_date     = week_start + timedelta(days=DAYS.index(sel_day))
+
+    for bi, beh in enumerate(behaviours if behaviours else [""]):
+        existing = cell_data.get(bi,{}).get(sel_time,{}).get(sel_day)
+        cur_val  = existing["value"] if existing else ""
+        val_styles = {"1":"background:#dbeafe;color:#1d4ed8","2":"background:#fee2e2;color:#b91c1c",
+                      "X":"background:#f3f4f6;color:#6b7280","0":"background:#f0fdf4;color:#15803d"}
+        cur_disp  = "✓" if cur_val=="0" else cur_val
+        cur_badge = (f'<span style="padding:.1rem .45rem;border-radius:8px;font-weight:700;'
+                     f'{val_styles.get(cur_val,"")};font-size:.75rem;">{cur_disp}</span>'
+                     if cur_val else '<span style="color:#ccc;font-size:.72rem;">—</span>')
+        rc1, rc2, rc3, rc4, rc5, rc6 = st.columns([4, 0.7, 0.7, 0.7, 0.7, 0.5])
+        with rc1:
+            lbl = (f"B{bi+1}: {beh[:50]}" if beh else "Record observation")
+            st.markdown(f'<div style="padding:.55rem 0 .2rem;font-size:.82rem;font-weight:600;color:#334155;">{lbl} &nbsp;{cur_badge}</div>', unsafe_allow_html=True)
+        for col, val, key_sfx, btn_type in [
+            (rc2, "1", "1", "primary"),
+            (rc3, "2", "2", "secondary"),
+            (rc4, "X", "x", "secondary"),
+            (rc5, "0", "0", "secondary"),
+        ]:
+            with col:
+                st.markdown("<div style='padding-top:1.8rem;'>", unsafe_allow_html=True)
+                disp = "✓" if val=="0" else val
+                if st.button(disp, key=f"btn_{bi}_{key_sfx}", use_container_width=True,
+                             type=btn_type if btn_type=="primary" else "secondary"):
+                    upsert_obs(student_name, sel_date, sel_day, sel_time,
+                               sel_activity, val, bi, beh,
+                               " | ".join(behaviours) if behaviours else beh,
+                               ss.spt_period_id,
+                               existing["id"] if existing else None)
+                    st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
+        with rc6:
+            if cur_val:
+                st.markdown("<div style='padding-top:1.8rem;'>", unsafe_allow_html=True)
+                if st.button("✕", key=f"clr_{bi}", use_container_width=True, help="Clear"):
+                    if existing: delete_obs(existing["id"]); st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
+
+    # Remove entry expander
+    with st.expander("🗑️ Remove an entry from this week"):
+        entries = []
+        if not week_df.empty:
+            for _, row in week_df.iterrows():
+                bi  = int(row.get("behaviour_index",0) or 0)
+                beh = behaviours[bi] if bi < len(behaviours) else row.get("behaviour_label","?")
+                val = row.get("value","")
+                disp = "✓ no behaviour" if val=="0" else val
+                entries.append({
+                    "label": f"B{bi+1} · {row['day_of_week']} {row['time_slot']} — {disp}  ({beh[:25]})",
+                    "id":    row["id"],
+                })
+        if not entries:
+            st.caption("No entries this week.")
+        else:
+            dc1, dc2 = st.columns([4,1])
+            with dc1:
+                chosen = st.selectbox("Select entry", [e["label"] for e in entries], key="del_sel")
+            with dc2:
+                st.markdown("<div style='padding-top:1.8rem;'>", unsafe_allow_html=True)
+                if st.button("Remove", key="del_btn", use_container_width=True):
+                    oid = next(e["id"] for e in entries if e["label"]==chosen)
+                    if delete_obs(oid): st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
+
+    # Manage schedule
+    with st.expander("⚙️ Manage Schedule"):
+        st.caption("Schedule is saved per student.")
+        sched = ss.spt_schedule
+        changed = False
+        for i, slot in enumerate(sched):
+            sc1,sc2,sc3,sc4,sc5 = st.columns([1.5,3,.55,.55,.55])
+            with sc1: nt = st.text_input("T", slot["time"],     key=f"st_{i}", label_visibility="collapsed")
+            with sc2: na = st.text_input("A", slot["activity"], key=f"sa_{i}", label_visibility="collapsed")
+            with sc3:
+                if i > 0 and st.button("↑", key=f"su_{i}"): sched[i],sched[i-1]=sched[i-1],sched[i]; changed=True
+            with sc4:
+                if i<len(sched)-1 and st.button("↓", key=f"sd_{i}"): sched[i],sched[i+1]=sched[i+1],sched[i]; changed=True
+            with sc5:
+                if st.button("✕", key=f"sx_{i}"): sched.pop(i); changed=True
+            if nt!=slot["time"] or na!=slot["activity"]:
+                sched[i]={"time":nt,"activity":na}; changed=True
+            if changed:
+                ss.spt_schedule=sched; save_schedule_by_name(student_name,sched); st.rerun()
+        st.markdown("---")
+        nc1,nc2,nc3 = st.columns([1.5,3,1])
+        with nc1: new_t = st.text_input("Time",     placeholder="8:45", key="sched_nt")
+        with nc2: new_a = st.text_input("Activity", placeholder="Morning check-in", key="sched_na")
+        with nc3:
+            st.markdown("<div style='padding-top:1.8rem;'>", unsafe_allow_html=True)
+            if st.button("Add", key="sched_add", use_container_width=True):
+                if new_t.strip():
+                    sched.append({"time":new_t.strip(),"activity":new_a.strip()})
+                    ss.spt_schedule=sched; save_schedule_by_name(student_name,sched); st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
+        if st.button("↺ Reset to default", key="sched_reset"):
+            ss.spt_schedule=DEFAULT_SCHEDULE.copy()
+            save_schedule_by_name(student_name,DEFAULT_SCHEDULE.copy()); st.rerun()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# ANALYSIS & DOWNLOAD
+# ════════════════════════════════════════════════════════════════════════════
+with t_analysis:
+    st.markdown(f"#### {student_name} — Analysis")
+    st.caption("Only values 1 and 2 shown on charts. ✓ (no behaviour) and X excluded.")
+
+    all_obs = load_all_obs(student_name)
+    if all_obs.empty:
+        st.info("No observations recorded yet."); st.stop()
+
+    fc1, fc2 = st.columns(2)
+    with fc1: date_from = st.date_input("From", value=all_obs["obs_date_dt"].min().date(), key="af")
+    with fc2: date_to   = st.date_input("To",   value=all_obs["obs_date_dt"].max().date(), key="at")
+
+    filt = all_obs[
+        (all_obs["obs_date_dt"].dt.date >= date_from) &
+        (all_obs["obs_date_dt"].dt.date <= date_to)
+    ].copy()
+
+    if filt.empty:
+        st.info("No observations in this range."); st.stop()
+
+    inc_filt  = filt[filt["value"].isin(["1","2"])].copy()
+    n1   = int((filt["value"]=="1").sum())
+    n2   = int((filt["value"]=="2").sum())
+    n0   = int((filt["value"]=="0").sum())
+
+    k1,k2,k3,k4 = st.columns(4)
+    k1.markdown(f"<div class='kpi'><div class='val'>{n1+n2}</div><div class='lbl'>Incident intervals</div></div>", unsafe_allow_html=True)
+    k2.markdown(f"<div class='kpi'><div class='val'>{n1}</div><div class='lbl'>Single (1)</div></div>", unsafe_allow_html=True)
+    k3.markdown(f"<div class='kpi kpi-a'><div class='val'>{n2}</div><div class='lbl'>Multiple (2)</div></div>", unsafe_allow_html=True)
+    k4.markdown(f"<div class='kpi kpi-g'><div class='val'>{n0}</div><div class='lbl'>✓ No behaviour</div></div>", unsafe_allow_html=True)
+
+    if inc_filt.empty:
+        st.success("🎉 No incidents in this period."); st.stop()
+
+    # Build time label map
+    time_labels = {s["time"]: s["time"] + "  " + s["activity"] for s in schedule}
+    def _sort_t(t):
+        try: h,m=str(t).split(":"); return int(h)*60+int(m)
+        except: return 999
+
+    # Per-behaviour tabs + combined
+    beh_list = behaviours if behaviours else ["All"]
+    an_tabs  = st.tabs([f"B{i+1}: {b[:35]}" for i,b in enumerate(beh_list)] + ["Combined"])
+
+    for bi, abtab in enumerate(an_tabs[:-1]):
+        with abtab:
+            b_inc = inc_filt[inc_filt["behaviour_index"]==bi].copy() \
+                if "behaviour_index" in inc_filt.columns else inc_filt.copy()
+            if b_inc.empty:
+                st.info("No incidents for this behaviour."); continue
+
+            b_inc["date_str"]   = b_inc["obs_date_dt"].dt.strftime("%a %-d %b")
+            b_inc["date_order"] = b_inc["obs_date_dt"].dt.date
+            b_inc["time_label"] = b_inc["time_slot"].map(time_labels).fillna(b_inc["time_slot"])
+            b_inc["hover"]      = (b_inc["date_str"] + "<br>" + b_inc["time_label"] + "<br>" +
+                                   b_inc["value"].map({"1":"Single","2":"Multiple"}).fillna(b_inc["value"]) +
+                                   "<br>" + b_inc["day_of_week"])
+
+            all_slots     = sorted(b_inc["time_slot"].unique(), key=_sort_t)
+            ordered_lbl   = [time_labels.get(t,t) for t in all_slots]
+            date_order    = sorted(b_inc["date_str"].unique(),
+                                   key=lambda s: b_inc.loc[b_inc["date_str"]==s,"date_order"].min())
+
+            fig = go.Figure()
+            for val, sz, col, name in [("1",16,"#3b82f6","1 — single"),("2",26,"#ef4444","2 — multiple")]:
+                sub = b_inc[b_inc["value"]==val]
+                if sub.empty: continue
+                fig.add_trace(go.Scatter(
+                    x=sub["date_str"], y=sub["time_label"], mode="markers", name=name,
+                    marker=dict(size=sz, color=col, opacity=.85, line=dict(color="white",width=1.5)),
+                    hovertemplate="%{customdata}<extra></extra>", customdata=sub["hover"],
+                ))
+            fig.update_layout(
+                title=beh_list[bi] if bi < len(beh_list) else "Scatter Plot",
+                height=max(400,len(ordered_lbl)*28+120),
+                xaxis=dict(categoryorder="array",categoryarray=date_order,
+                           showgrid=True,gridcolor="#e2e8f0",side="top",tickfont=dict(size=11)),
+                yaxis=dict(categoryorder="array",categoryarray=ordered_lbl[::-1],
+                           showgrid=True,gridcolor="#e2e8f0",automargin=True,tickfont=dict(size=11)),
+                plot_bgcolor="white", paper_bgcolor="white",
+                legend=dict(orientation="h",yanchor="bottom",y=1.02,xanchor="left",x=0),
+                margin=dict(l=10,r=20,t=80,b=20), hovermode="closest",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            st.caption("● Small blue = single (1)  ·  ● Large red = multiple (2)  ·  Dates along top, times top to bottom")
+
+            col_a, col_b = st.columns(2)
+            with col_a:
+                daily = b_inc.groupby(b_inc["obs_date_dt"].dt.date).size().reset_index(name="n")
+                daily["ds"] = pd.to_datetime(daily["obs_date_dt"]).dt.strftime("%-d %b")
+                fig2 = go.Figure(go.Bar(x=daily["ds"],y=daily["n"],
+                    marker_color=[AMBER if v>=3 else TEAL for v in daily["n"]],
+                    text=daily["n"],textposition="outside"))
+                fig2.update_layout(title="Per day",height=240,showlegend=False,
+                    plot_bgcolor="#f8fafc",paper_bgcolor="white",
+                    yaxis=dict(tickformat="d",gridcolor="#e2e8f0"),margin=dict(l=10,r=10,t=40,b=10))
+                st.plotly_chart(fig2, use_container_width=True)
+            with col_b:
+                dow = b_inc.groupby("day_of_week").size().reindex(DAYS,fill_value=0)
+                fig3 = go.Figure(go.Bar(x=dow.index,y=dow.values,marker_color=TEAL,
+                    text=dow.values,textposition="outside"))
+                fig3.update_layout(title="By day of week",height=240,showlegend=False,
+                    plot_bgcolor="#f8fafc",paper_bgcolor="white",
+                    yaxis=dict(tickformat="d",gridcolor="#e2e8f0"),margin=dict(l=10,r=10,t=40,b=10))
+                st.plotly_chart(fig3, use_container_width=True)
+
+    with an_tabs[-1]:
+        if inc_filt.empty:
+            st.info("No incidents."); st.stop()
+        inc2 = inc_filt.copy()
+        inc2["Behaviour"] = inc2.get("behaviour_index",pd.Series(dtype=object)).apply(
+            lambda i: f"B{int(i)+1}: {beh_list[int(i)][:30]}" if pd.notna(i) and int(i)<len(beh_list) else "B1"
+        ) if "behaviour_index" in inc2.columns else "All"
+        inc2["date_str"]   = inc2["obs_date_dt"].dt.strftime("%a %-d %b")
+        inc2["date_order"] = inc2["obs_date_dt"].dt.date
+        inc2["time_label"] = inc2["time_slot"].map(time_labels).fillna(inc2["time_slot"])
+        date_order_c = sorted(inc2["date_str"].unique(),
+                              key=lambda s: inc2.loc[inc2["date_str"]==s,"date_order"].min())
+        all_lbl_c    = sorted(inc2["time_label"].unique(), key=lambda l: _sort_t(l.split()[0] if l else "0"))
+        fig_c = go.Figure()
+        colours = ["#3b82f6","#ef4444","#f59e0b"]
+        for idx, bname in enumerate(inc2["Behaviour"].unique()):
+            sub = inc2[inc2["Behaviour"]==bname]
+            for val, sz in [("1",16),("2",26)]:
+                s = sub[sub["value"]==val]
+                if s.empty: continue
+                fig_c.add_trace(go.Scatter(
+                    x=s["date_str"], y=s["time_label"], mode="markers",
+                    name=f"{bname} ({'single' if val=='1' else 'multiple'})",
+                    marker=dict(size=sz, color=colours[idx%3], opacity=.75,
+                                line=dict(color="white",width=1.5),
+                                symbol="circle" if val=="1" else "circle-open"),
+                ))
+        fig_c.update_layout(
+            title="Combined — All Behaviours",
+            height=max(400,len(all_lbl_c)*28+120),
+            xaxis=dict(categoryorder="array",categoryarray=date_order_c,showgrid=True,gridcolor="#e2e8f0",side="top"),
+            yaxis=dict(categoryorder="array",categoryarray=all_lbl_c[::-1],showgrid=True,gridcolor="#e2e8f0",automargin=True),
+            plot_bgcolor="white",paper_bgcolor="white",
+            legend=dict(orientation="h",yanchor="bottom",y=1.02,xanchor="left",x=0),
+            margin=dict(l=10,r=20,t=80,b=20),hovermode="closest",
+        )
+        st.plotly_chart(fig_c, use_container_width=True)
+
+    st.markdown("---")
+    dl = filt.copy()
+    dl["obs_date"] = dl["obs_date_dt"].dt.strftime("%-d/%m/%Y")
+    dl["value_desc"] = dl["value"].map({"1":"Single","2":"Multiple","X":"Evacuation","0":"No behaviour"})
+    csv = dl[["obs_date","day_of_week","time_slot","activity","value","value_desc",
+              "behaviour_label","target_behaviours","created_by"]].to_csv(index=False)
+    st.download_button("📥 Download CSV", csv,
+        file_name=f"ScatterPlot_{student_name.replace(' ','_')}_{date_from}_{date_to}.csv",
+        mime="text/csv", use_container_width=True)
