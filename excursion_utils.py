@@ -47,6 +47,10 @@ DEFAULT_VEHICLES = [
     {"id": None, "name": "Van", "rego": "S996BQL", "seats": None, "active": True},
 ]
 
+STAFF_PROGRAM_SQL = """-- Excursion Planner: program column on the staff list (run once if you ran the earlier setup SQL)
+alter table excursion_staff add column if not exists program text;
+"""
+
 VEHICLES_SQL = """-- Excursion Planner: site vehicles list (run once if you ran the earlier setup SQL)
 create table if not exists excursion_vehicles (
   id uuid primary key default gen_random_uuid(),
@@ -98,6 +102,7 @@ create table if not exists excursion_staff (
   status text default 'Teacher',                 -- Teacher / SSO / Leader / Specialist / Other
   email text,
   is_leader boolean default false,               -- Leadership (used as the default site contact)
+  program text,                                  -- JP / PY / SY / All – pre-fills staff for that program
   first_aid_expiry date,
   active boolean default true
 );
@@ -1735,7 +1740,7 @@ EXCURSION_BANK = [
               "staff": [_CAITIE, _BEN_SE], "teacher_in_charge": "Caitie Hook"},
      "activities": [_CAR, "Park, reserve or playground", "BBQ / cooking food", _WEATHER]},
     {"bank_name": "Polonia Reserve – Croydon Park",
-     "data": {"name": "Primary Program – Polonia Reserve", "destination": "Polonia Reserve", "address": "Croydon Park",
+     "data": {"name": "Polonia Reserve", "destination": "Polonia Reserve", "address": "Croydon Park",
               "program": "PY", "outline": "Walk and explore Polonia Reserve. Practise appropriate behaviours and social "
                                           "skills in public places.",
               "curriculum": "Health, PE & Social Skills.",
@@ -1810,14 +1815,81 @@ EXCURSION_BANK = [
 ]
 
 
-def bank_excursion(entry: dict, library: list[dict] | None = None) -> dict:
-    """Build a full new excursion from a bank entry (date, students, costs and checks left blank)."""
+PROGRAM_SPECIFIC = ("program", "staff", "teacher_in_charge", "min_at_once")
+
+# Used until the ⚙️ Settings staff list has programs set
+DEFAULT_PROGRAM_STAFF = {
+    "PY": [_CAITIE, _BEN_SE],
+    "JP": [_BEN_SU, _MEGHAN],
+    "SY": [],
+}
+
+
+def program_staff(program: str, staff_dir: list[dict] | None = None, on_date=None) -> list[dict]:
+    """Staff for a program: from the Settings staff list (Program column), else the built-in defaults."""
+    on_date = _parse_date(on_date) or today_adl()
+    rows = [r for r in (staff_dir or []) if r.get("active", True) and r.get("program")
+            and (program in str(r["program"]).replace(" ", "").split(",") or str(r["program"]).strip().lower() == "all")]
+    if rows:
+        out = []
+        for r in rows:
+            exp = _parse_date(r.get("first_aid_expiry"))
+            out.append({"name": r["name"], "gender": r.get("gender") or "", "status": r.get("status") or "Teacher",
+                        "experience": "Y", "first_aid": bool(exp and exp >= on_date)})
+        out.sort(key=lambda x: (x["status"] not in ("Teacher", "Leader"), x["name"]))
+        return out
+    return copy.deepcopy(DEFAULT_PROGRAM_STAFF.get(program, []))
+
+
+def _same_place(a: str, b: str) -> bool:
+    a, b = fold(a).strip(), fold(b).strip()
+    return bool(a and b) and (a in b or b in a)
+
+
+def program_history(entry: dict, program: str, saved_rows: list[dict] | None = None) -> dict | None:
+    """The most recent time this program did this excursion: a saved plan, else the bank's own record."""
+    if not program:
+        return None
+    dest = entry["data"].get("destination", "")
+    hits = [r for r in (saved_rows or []) if r.get("program") == program and r.get("status") != "Archived"
+            and _same_place(r.get("destination") or "", dest)]
+    hits.sort(key=lambda r: r.get("excursion_date") or "", reverse=True)
+    if hits:
+        dd = hits[0].get("data") or {}
+        return {"staff": dd.get("staff") or [], "teacher_in_charge": dd.get("teacher_in_charge", ""),
+                "min_at_once": dd.get("min_at_once"), "when": hits[0].get("excursion_date")}
+    if entry["data"].get("program") == program:
+        return {"staff": entry["data"].get("staff") or [], "teacher_in_charge": entry["data"].get("teacher_in_charge", ""),
+                "min_at_once": entry["data"].get("min_at_once"), "when": None}
+    return None
+
+
+def bank_excursion(entry: dict, library: list[dict] | None = None, program: str | None = None,
+                   staff_dir: list[dict] | None = None, saved_rows: list[dict] | None = None) -> dict:
+    """Build a new excursion from a bank entry. Program + staff come from the program chosen
+    (its staff last time it did this excursion, else the program's staff list). Date, students,
+    costs and checks are left blank."""
     d = blank_excursion()
-    d.update(copy.deepcopy(entry["data"]))
+    d.update({k: copy.deepcopy(v) for k, v in entry["data"].items() if k not in PROGRAM_SPECIFIC})
     d["transport_mode"] = d.get("transport_mode") or TRANSPORT_MODES[0]
     d["site_contact"] = d.get("site_contact") or "Candice Cooper"
     if d["site_contact"] == "Candice Cooper" and not d.get("site_contact_phone"):
         d["site_contact_phone"] = CANDICE_MOBILE
+    if program:
+        d["program"] = program
+        hist = program_history(entry, program, saved_rows)
+        if hist and hist["staff"]:
+            d["staff"] = copy.deepcopy(hist["staff"])
+            d["teacher_in_charge"] = hist["teacher_in_charge"]
+            d["min_at_once"] = hist.get("min_at_once") or 2
+        else:
+            d["staff"] = program_staff(program, staff_dir)
+            teachers = [x["name"] for x in d["staff"] if x.get("status") in ("Teacher", "Leader")]
+            d["teacher_in_charge"] = teachers[0] if teachers else ""
+        if d["teacher_in_charge"] and d["teacher_in_charge"] not in [x["name"] for x in d["staff"]]:
+            d["teacher_in_charge"] = ""
+    else:
+        d["staff"], d["teacher_in_charge"] = [], ""
     d["prepared_by"] = d.get("teacher_in_charge", "")
     by_name = {a["name"]: a for a in DEFAULT_ACTIVITIES}
     for a in library or []:
