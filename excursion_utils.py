@@ -477,6 +477,23 @@ DEFAULT_ACTIVITIES = [
 - Go to the meeting point; ask park staff to help and watch the exits.
 - {UNSIGHTED}"""),
     ]},
+    {"name": "Ten-pin bowling / indoor entertainment venue", "category": "Venue", "flags": {"public": True}, "risks": [
+        _r("Injury from bowling balls (dropped on feet or fingers caught) or slipping on the lanes.", "Unlikely", "Minor", """
+- Staff model how to pick up, carry and release the ball; students choose a ball they can manage (light balls / ramps).
+- Only the bowler on the approach; others wait seated; bowling shoes worn; no crossing the foul line.""",
+           """
+- First aid; ice for bumps; contact parent/carer if more than minor."""),
+        _r("Student separated from the group in a busy venue (arcade / food areas).", "Unlikely", "Major", """
+- Group stays in its booked lanes; meeting point set at the lanes; arcade only with an adult.""",
+           f"""
+- Go to the meeting point; ask venue staff to help and watch the exits.
+- {UNSIGHTED}"""),
+        _r("Frustration or conflict over turn-taking, scores or losing.", "Possible", "Minor", """
+- Turn-taking, fair play and good sportsmanship pre-taught; visual turn order; bumpers if helpful.
+- Staff watch for early warning signs and offer breaks.""",
+           """
+- Follow the student's Safety & Risk Plan; take a calm break away from the lanes."""),
+    ]},
     {"name": "Weather – sun, heat, rain and storms", "category": "General", "flags": {"outdoor": True}, "risks": [
         _r("Sunburn, heat exhaustion or dehydration.", "Possible", "Minor", """
 - DfE inclement weather and sun protection procedure followed; BOM forecast checked.
@@ -1671,3 +1688,152 @@ def build_ed169(row: dict) -> bytes:
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
+
+
+# =====================================================================
+# Excursion bank – CLC's previous excursions, ready to pre-fill a new plan
+# (built from past ED169s; students, date, costs and checks are left blank to fill in each time)
+# =====================================================================
+CANDICE_MOBILE = "0476 037 050"
+_CAITIE = {"name": "Caitie Hook", "gender": "F", "status": "Teacher", "experience": "Y", "first_aid": True}
+_BEN_SE = {"name": "Ben Selga", "gender": "M", "status": "Teacher", "experience": "Y", "first_aid": True}
+_VINNIE = {"name": "Vinnie Don", "gender": "M", "status": "SSO", "experience": "Y", "first_aid": True}
+_BEN_SU = {"name": "Ben Sutton", "gender": "M", "status": "Teacher", "experience": "Y", "first_aid": True}
+_MEGHAN = {"name": "Meghan Strydom", "gender": "F", "status": "Teacher", "experience": "Y", "first_aid": True}
+_ROISIN = {"name": "Roisin Mcilduff", "gender": "F", "status": "Teacher", "experience": "Y", "first_aid": True}
+_KIA = [{"name": "Kia (site car)", "rego": "S104BQL", "seats": None}]
+_VAN = [{"name": "Van", "rego": "S996BQL", "seats": None}]
+_PUBLIC = ("Opportunity to demonstrate and practise appropriate public behaviour and engage socially with others, "
+           "and practise following instructions.")
+_CAFE = ("Students practise appropriate behaviour in public spaces: selecting and ordering their own meal from the menu "
+         "within the provided budget, and practising table etiquette and socially acceptable behaviours.\n"
+         "Students observe how baristas work and how cafés run – supporting teaching for transfer in the Junior "
+         "Barista Programme.")
+_CAR = "Travel – site car / government vehicle"
+_WEATHER = "Weather – sun, heat, rain and storms"
+
+EXCURSION_BANK = [
+    {"bank_name": "Beach & Adventure Park – Point Malcolm Reserve (BBQ lunch)",
+     "data": {"name": "Beach & Adventure Park", "destination": "Point Malcolm Reserve", "address": "Semaphore Park",
+              "program": "PY", "outline": _PUBLIC + "\nWalking and exploring Point Malcolm Reserve. Cooking lunch on the BBQ.",
+              "curriculum": "English, Social Skills, Protective Practices.",
+              "depart_time": "12:00", "return_time": "14:30", "vehicles": _KIA,
+              "staff": [_CAITIE, _BEN_SE], "teacher_in_charge": "Caitie Hook"},
+     "activities": [_CAR, "Beach, coast or jetty", "Park, reserve or playground", "BBQ / cooking food", _WEATHER]},
+    {"bank_name": "Semaphore – walk and explore",
+     "data": {"name": "Semaphore", "destination": "Semaphore", "address": "Semaphore foreshore and jetty",
+              "program": "PY", "outline": _PUBLIC + "\nWalking and exploring Semaphore.",
+              "curriculum": "English, Social Skills, Protective Practices.",
+              "depart_time": "11:00", "return_time": "14:30", "vehicles": _KIA,
+              "staff": [_CAITIE, _BEN_SE], "teacher_in_charge": "Caitie Hook"},
+     "activities": [_CAR, "Walking – footpaths and crossing roads", "Beach, coast or jetty", _WEATHER]},
+    {"bank_name": "Roy Marten Reserve (BBQ lunch)",
+     "data": {"name": "Roy Marten Reserve", "destination": "Roy Marten Reserve", "address": "",
+              "program": "PY", "outline": _PUBLIC + "\nWalking and exploring Roy Marten Reserve. Cooking lunch on the BBQ.",
+              "curriculum": "English, Social Skills, Protective Practices.",
+              "depart_time": "11:30", "return_time": "14:30", "vehicles": _KIA,
+              "staff": [_CAITIE, _BEN_SE], "teacher_in_charge": "Caitie Hook"},
+     "activities": [_CAR, "Park, reserve or playground", "BBQ / cooking food", _WEATHER]},
+    {"bank_name": "Polonia Reserve – Croydon Park",
+     "data": {"name": "Primary Program – Polonia Reserve", "destination": "Polonia Reserve", "address": "Croydon Park",
+              "program": "PY", "outline": "Walk and explore Polonia Reserve. Practise appropriate behaviours and social "
+                                          "skills in public places.",
+              "curriculum": "Health, PE & Social Skills.",
+              "depart_time": "12:00", "return_time": "14:20", "vehicles": _VAN,
+              "staff": [_BEN_SE, _CAITIE, _VINNIE], "teacher_in_charge": "Ben Selga", "min_at_once": 3},
+     "activities": [_CAR, "Park, reserve or playground", _WEATHER]},
+    {"bank_name": "Gorge Wildlife Park",
+     "data": {"name": "Wildlife Park", "destination": "Gorge Wildlife Park", "address": "Cudlee Creek",
+              "program": "PY",
+              "outline": "Students will visit Gorge Wildlife Park to observe and interact with a variety of native "
+                         "Australian and exotic animals. Activities include exploring animal exhibits, supervised animal "
+                         "feeding and interactions, and lunch in designated picnic areas.\nThe excursion provides "
+                         "opportunities for students to practise social skills, emotional regulation, following "
+                         "instructions and respectful interactions with peers, adults and animals in a community setting.",
+              "curriculum": "Science: Explore living things, their habitats, characteristics and basic needs, while "
+                            "developing an understanding of animal care and conservation.\nHASS: Develop an understanding "
+                            "of the importance of caring for animals and protecting natural environments.\nHealth and "
+                            "Physical Education: Practise emotional regulation, respectful communication, cooperation and "
+                            "safe decision-making in a community setting.\nPersonal and Social Capability: Develop "
+                            "self-management, social awareness, relationship skills and responsible decision-making.",
+              "depart_time": "11:00", "return_time": "14:30", "vehicles": _KIA, "bushfire_area": True,
+              "staff": [_CAITIE, _BEN_SE], "teacher_in_charge": "Caitie Hook"},
+     "activities": [_CAR, "Zoo or wildlife park", _WEATHER]},
+    {"bank_name": "Ten-pin bowling – Zone Bowling Cross Road",
+     "data": {"name": "10 Pin Bowling", "destination": "Zone Bowling", "address": "Cross Road",
+              "program": "PY",
+              "outline": _PUBLIC + "\nPlaying 10 pin bowling: practising turn taking, fair play, good sportsmanship and "
+                                   "following instructions.",
+              "curriculum": "English, Social Skills, PE.",
+              "depart_time": "11:30", "return_time": "14:30", "vehicles": _VAN,
+              "staff": [_CAITIE, _BEN_SE], "teacher_in_charge": "Caitie Hook"},
+     "activities": [_CAR, "Ten-pin bowling / indoor entertainment venue"]},
+    {"bank_name": "Café lunch – Café Pellegrini",
+     "data": {"name": "Café Lunch", "destination": "Café Pellegrini", "address": "Adelaide CBD",
+              "program": "PY", "outline": _CAFE,
+              "curriculum": "Social skills, Health, Protective Behaviours, Literacy, Numeracy.",
+              "depart_time": "11:45", "return_time": "14:30", "vehicles": _VAN,
+              "staff": [_CAITIE, _BEN_SE], "teacher_in_charge": "Caitie Hook"},
+     "activities": [_CAR, "Walking – footpaths and crossing roads", "Café or restaurant"]},
+    {"bank_name": "Café lunch – Burgerstronomy",
+     "data": {"name": "Café Lunch", "destination": "Burgerstronomy", "address": "",
+              "program": "PY", "outline": _CAFE,
+              "curriculum": "Social skills, Health, Protective Behaviours, Literacy, Numeracy.",
+              "depart_time": "11:30", "return_time": "14:00", "vehicles": _VAN,
+              "staff": [_CAITIE, _BEN_SE], "teacher_in_charge": "Caitie Hook"},
+     "activities": [_CAR, "Café or restaurant"]},
+    {"bank_name": "Hamra Library and park next door (walk)",
+     "data": {"name": "HAMRA Library", "destination": "Hamra Library and park next door", "address": "",
+              "program": "JP", "outline": "Walking to Hamra Library. Borrowing library books and playing on the play "
+                                          "equipment in the park next door.",
+              "curriculum": "PE, Health, Social Skills programmes and Literacy.",
+              "depart_time": "13:00", "return_time": "14:00", "transport_mode": "Walking only",
+              "emergency_extra": "Van is available for immediate return to site if required.",
+              "staff": [_BEN_SU, _MEGHAN], "teacher_in_charge": "Ben Sutton"},
+     "activities": ["Walking – footpaths and crossing roads", "Library", "Park, reserve or playground", _WEATHER]},
+    {"bank_name": "Salvation Army store (walk)",
+     "data": {"name": "Salvation Army store", "destination": "Salvation Army store", "address": "",
+              "program": "PY", "outline": "Walking to the Salvation Army store for a student to choose clothes for "
+                                          "swimming.",
+              "curriculum": "PE, Health, Social Skills programmes and Literacy.",
+              "depart_time": "09:50", "return_time": "10:30", "transport_mode": "Walking only",
+              "emergency_extra": "Van is available for immediate return to site if required.",
+              "staff": [_CAITIE, _VINNIE], "teacher_in_charge": "Caitie Hook"},
+     "activities": ["Walking – footpaths and crossing roads", "Shopping centre"]},
+    {"bank_name": "Swimming lessons – The Parks Recreation & Sports Centre (YMCA)",
+     "data": {"name": "Swimming", "destination": "The Parks Recreation and Sports Centre – YMCA", "address": "",
+              "program": "JP", "outline": "Swimming lessons at The Parks Recreation and Sports Centre.",
+              "curriculum": "PE, Health and Social Skills programmes.",
+              "depart_time": "09:00", "return_time": "11:00", "vehicles": _VAN,
+              "staff": [_BEN_SU, _ROISIN], "teacher_in_charge": "Ben Sutton"},
+     "activities": [_CAR, "Swimming pool / aquatic centre"]},
+]
+
+
+def bank_excursion(entry: dict, library: list[dict] | None = None) -> dict:
+    """Build a full new excursion from a bank entry (date, students, costs and checks left blank)."""
+    d = blank_excursion()
+    d.update(copy.deepcopy(entry["data"]))
+    d["transport_mode"] = d.get("transport_mode") or TRANSPORT_MODES[0]
+    d["site_contact"] = d.get("site_contact") or "Candice Cooper"
+    if d["site_contact"] == "Candice Cooper" and not d.get("site_contact_phone"):
+        d["site_contact_phone"] = CANDICE_MOBILE
+    d["prepared_by"] = d.get("teacher_in_charge", "")
+    by_name = {a["name"]: a for a in DEFAULT_ACTIVITIES}
+    for a in library or []:
+        by_name[a["name"]] = a
+    d["activities"] = [activity_for_excursion(by_name[n]) for n in entry.get("activities", []) if n in by_name]
+    d["students"] = [{"year": "3", "male": 0, "female": 0, "other": 0}]
+    d["date_from"] = d["date_to"] = None
+    return d
+
+
+def search_bank(query: str) -> list[dict]:
+    terms = [t for t in (query or "").lower().split() if t]
+    out = []
+    for e in EXCURSION_BANK:
+        hay = " ".join([e["bank_name"], e["data"].get("name", ""), e["data"].get("destination", ""),
+                        e["data"].get("address", ""), e["data"].get("outline", "")]).lower()
+        if all(t in hay for t in terms):
+            out.append(e)
+    return out
