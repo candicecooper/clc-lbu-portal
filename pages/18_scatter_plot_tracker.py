@@ -113,7 +113,8 @@ def load_register_students():
             out=[]
             for r in rows:
                 if r.get("archived"): continue
-                nm=(f"{r.get('first_name','')} {r.get('last_name','')}".strip() if r.get("first_name") else r.get("name") or "").strip()
+                _ln=str(r.get('last_name') or '').strip(); _ln='' if _ln in ('-','–','—','.') else _ln
+                nm=(f"{r.get('first_name','')} {_ln}".strip() if r.get("first_name") else str(r.get("name") or "").rstrip("- ")).strip()
                 if nm: out.append({"name":nm,"label":f"{nm}  ·  {r.get('program','')}"})
             return sorted(out,key=lambda x:x["name"].lower())
         except Exception:
