@@ -273,6 +273,19 @@ with tab_plan:
     if top[2].button("💾 Save", use_container_width=True, type="primary"):
         queue("save")
 
+    with st.expander("📚 Start from a past CLC excursion (pre-fills most sections)", expanded=not ss.ex_id and not d.get("name")):
+        st.caption("Copies the outline, curriculum links, times, vehicle, staff and risk-assessment activities. "
+                   "You then add the date and students, and check everything suits this group.")
+        bank_names = [e["bank_name"] for e in eu.EXCURSION_BANK]
+        c = st.columns([4, 1])
+        pick_b = c[0].selectbox("Past excursion", [""] + bank_names, key=K("bankpick"),
+                                format_func=lambda x: x or "Choose…")
+        c[1].markdown("<div style='height:1.8rem'></div>", unsafe_allow_html=True)
+        if c[1].button("Use this", use_container_width=True, disabled=not pick_b, key="bank_use_top"):
+            queue("use_bank", pick_b)
+        if pick_b and (d.get("name") or ss.ex_id):
+            st.caption("⚠️ This replaces what's currently in the planner with a new, unsaved excursion.")
+
     s1, s2, s3, s4, s5, s6 = st.tabs(["1 · Details", "2 · Students & staff", "3 · Transport & costs",
                                       "4 · Activities & risks", "5 · Emergency & checks", "6 · Review, save & print"])
 
@@ -394,7 +407,11 @@ with tab_plan:
             fleet = [v for v in load_vehicles() if v.get("active", True)]
             if fleet:
                 names = [v["name"] for v in fleet]
-                chosen_before = [v.get("name") for v in d.get("vehicles") or [] if v.get("name") in names]
+                prev = d.get("vehicles") or []
+                prev_regos = {(v.get("rego") or "").upper() for v in prev if v.get("rego")}
+                prev_names = {v.get("name") for v in prev}
+                chosen_before = [v["name"] for v in fleet
+                                 if v["name"] in prev_names or (v.get("rego") or "").upper() in prev_regos]
                 picked = st.multiselect("Which site vehicle(s)?", names, default=chosen_before, key=K("veh_pick"),
                                         disabled=locked)
                 d["vehicles"] = [{"name": v["name"], "rego": v.get("rego") or "", "seats": v.get("seats")}
@@ -622,6 +639,11 @@ with tab_plan:
         d = ss.ex
         if action == "new":
             start_new()
+        elif action == "use_bank":
+            entry = next((e for e in eu.EXCURSION_BANK if e["bank_name"] == args[0]), None)
+            if entry:
+                start_new(eu.bank_excursion(entry, library))
+                ss.flash = ("ok", f"Pre-filled from '{args[0]}'. Add the date and students, check each step, then 💾 Save.")
         elif action == "add_staff":
             for n in args[0]:
                 rec = next((s for s in staff_dir if s.get("name") == n), {})
@@ -646,7 +668,7 @@ with tab_plan:
         elif action == "save":
             if save_excursion():
                 ss.flash = ("ok", f"Saved '{d.get('name') or 'excursion'}'. Find it any time in 🔍 Find an excursion.")
-        if action not in ("new",):
+        if action not in ("new", "use_bank"):
             ss.fv += 1     # rebuild widgets from ss.ex
         st.rerun()
 
@@ -677,10 +699,25 @@ with tab_list:
     if not terms and not f_prog:
         st.caption(f"{len(found)} saved excursion(s). Showing the most recent – type a name or location to search.")
         found = found[:15]
-    elif not found:
+    elif not found and not eu.search_bank(q):
         st.info("No saved excursions match. Try part of the name or location, or start a new one in ✏️ Plan / edit.")
     else:
-        st.caption(f"{len(found)} match(es).")
+        st.caption(f"{len(found)} saved excursion(s) match.")
+
+    bank_hits = eu.search_bank(q) if terms else []
+    if bank_hits:
+        st.markdown("##### 📚 From the CLC excursion bank")
+        for e in bank_hits:
+            c = st.columns([5, 1])
+            c[0].markdown(f"**{e['bank_name']}**  \n<span style='color:#777'>{e['data'].get('outline', '')[:140]}…</span>",
+                          unsafe_allow_html=True)
+            if c[1].button("Use this", key=f"bank_{e['bank_name']}", use_container_width=True):
+                start_new(eu.bank_excursion(e, library))
+                ss.flash = ("ok", f"Pre-filled from '{e['bank_name']}' — go to ✏️ Plan / edit, add the date and "
+                                  "students, check each step, then 💾 Save.")
+                st.rerun()
+        if found:
+            st.markdown("##### 💾 Saved excursions")
 
     for r in found:
         dd = r.get("data") or {}
