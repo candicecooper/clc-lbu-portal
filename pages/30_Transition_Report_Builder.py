@@ -151,7 +151,7 @@ WOT_ZONES = [
     {"id": "copingdown", "name": "Coping",               "tag": "Early withdrawal", "color": "#3E6E8E", "tint": "#DEE7ED"},
     {"id": "hypo",       "name": "Immobilisation",      "tag": "Hypoarousal",      "color": "#38456B", "tint": "#DFE2EA"},
 ]
-WOT_COLS = [("context", "Context"), ("behaviour", "Behaviour descriptors"), ("interventions", "What helps")]
+WOT_COLS = [("context", "Context"), ("behaviour", "Behaviour descriptors"), ("interventions", "Interventions")]
 
 # ── Report sections ──────────────────────────────────────────────────────────
 SOUNDS_WRITE = [
