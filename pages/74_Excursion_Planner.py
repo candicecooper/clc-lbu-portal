@@ -688,38 +688,52 @@ with tab_list:
 
     def _haystack(r):
         dd = r.get("data") or {}
-        return " ".join(str(x or "") for x in (r.get("name"), r.get("destination"), dd.get("address"),
-                                               dd.get("outline"), r.get("teacher_in_charge"))).lower()
+        _h = " ".join(str(x or "") for x in (r.get("name"), r.get("destination"), dd.get("address"),
+                                               dd.get("outline"), r.get("teacher_in_charge"),
+                                               " ".join(a.get("name", "") for a in dd.get("activities", []))))
+        return eu.fold(_h)
 
-    terms = [t for t in q.lower().split() if t]
+    terms = [t for t in eu.fold(q).split() if t]
     found = [r for r in rows
              if (show_arch or r.get("status") != "Archived")
              and (not f_prog or r.get("program") in f_prog)
              and all(t in _haystack(r) for t in terms)]
     # newest excursion date first
     found.sort(key=lambda r: (r.get("excursion_date") or "", r.get("updated_at") or ""), reverse=True)
-    if not terms and not f_prog:
-        st.caption(f"{len(found)} saved excursion(s). Showing the most recent – type a name or location to search.")
-        found = found[:15]
-    elif not found and not eu.search_bank(q):
-        st.info("No saved excursions match. Try part of the name or location, or start a new one in ✏️ Plan / edit.")
-    else:
-        st.caption(f"{len(found)} saved excursion(s) match.")
-
-    bank_hits = eu.search_bank(q) if terms else []
-    if bank_hits:
-        st.markdown("##### 📚 From the CLC excursion bank")
-        for e in bank_hits:
-            c = st.columns([5, 1])
-            c[0].markdown(f"**{e['bank_name']}**  \n<span style='color:#777'>{e['data'].get('outline', '')[:140]}…</span>",
-                          unsafe_allow_html=True)
-            if c[1].button("Use this", key=f"bank_{e['bank_name']}", use_container_width=True):
+    # ---- 1. CLC excursion bank (always listed; narrowed by search / program) ----
+    bank_hits = [e for e in eu.search_bank(q) if not f_prog or e["data"].get("program") in f_prog]
+    st.markdown(f"##### 📚 CLC excursion bank – {len(bank_hits)} of {len(eu.EXCURSION_BANK)}")
+    st.caption("Past CLC excursions. **Use this** pre-fills a new plan – then add the date and students and check each step.")
+    if not bank_hits:
+        st.caption("No bank excursions match.")
+    for e in bank_hits:
+        bd = e["data"]
+        with st.expander(f"📚 {e['bank_name']}  ·  {bd.get('program', '')}  ·  "
+                         f"{'Walking' if bd.get('transport_mode') == 'Walking only' else ', '.join(v['name'] for v in bd.get('vehicles', [])) or ''}"):
+            st.markdown(f"**Destination:** {bd.get('destination', '')}{(', ' + bd['address']) if bd.get('address') else ''}  \n"
+                        f"**Times:** {eu.fmt_time(bd.get('depart_time'))} – {eu.fmt_time(bd.get('return_time'))}  \n"
+                        f"**Staff:** {', '.join(x['name'] for x in bd.get('staff', []))} "
+                        f"(teacher in charge: {bd.get('teacher_in_charge', '')})  \n"
+                        f"**Risk assessment activities:** {', '.join(e.get('activities', []))}")
+            st.markdown(f"**Outline:** {bd.get('outline', '')}")
+            st.markdown(f"**Curriculum:** {bd.get('curriculum', '')}")
+            if st.button("✏️ Use this to start a new excursion", key=f"bank_{e['bank_name']}", type="primary",
+                         use_container_width=True):
                 start_new(eu.bank_excursion(e, library))
                 ss.flash = ("ok", f"Pre-filled from '{e['bank_name']}' — go to ✏️ Plan / edit, add the date and "
                                   "students, check each step, then 💾 Save.")
                 st.rerun()
-        if found:
-            st.markdown("##### 💾 Saved excursions")
+
+    # ---- 2. Saved excursions ----
+    st.markdown("---")
+    st.markdown(f"##### 💾 Saved excursions – {len(found)}")
+    if not rows:
+        st.caption("None saved yet. Plans appear here once staff 💾 Save them in ✏️ Plan / edit.")
+    elif not found:
+        st.caption("No saved excursions match.")
+    elif not terms and not f_prog and len(found) > 15:
+        st.caption("Showing the 15 most recent – type a name or location to search them all.")
+        found = found[:15]
 
     for r in found:
         dd = r.get("data") or {}
