@@ -2,18 +2,21 @@
 74_Excursion_Planner.py  —  CLC Excursion Planner (ED169 + Risk Management Plan)
 
 Staff enter an excursion ONCE; the tool builds both documents from it:
-  * ED169 Application to Conduct a Camp or Excursion
+  * ED169 Application to Conduct a Camp or Excursion (the official DfE form, filled in)
   * CLC Risk Management Plan and Approval to Transport
 
+Staff save, find (search by excursion name or location), edit and download. The documents are then
+PRINTED and SIGNED BY HAND – teacher-in-charge, then Leadership. Nothing is sent electronically.
+
 Tabs
-  1. ✏️ Plan an excursion – staff (staff password). Sub-steps: details, students & staff,
-                            transport & costs, activities & risks, emergency & checks, review & submit
-  2. 📋 Excursions        – every excursion and its status; edit drafts, reuse as a template, download
-  3. 📚 Activity Library  – the risks/strategies each activity brings into a risk assessment
-  4. 🔒 Leadership        – confidential password: approve / return, manage library + staff list, setup
+  1. ✏️ Plan / edit            – staff (staff password). Steps: details, students & staff, transport & costs,
+                                 activities & risks, emergency & checks, review / save / download
+  2. 🔍 Find an excursion      – search saved plans by name or location; open, copy as new, download, archive
+  3. 📚 Activity Library       – the risks/strategies each activity brings into a risk assessment
+  4. ⚙️ Settings (Leadership)  – confidential password: edit library, staff list, setup SQL
 
 Rules checked come from the DfE Camps and Excursions Procedure (March 2025) — see excursion_utils.py.
-Needs: excursion_utils.py in the repo root + the SQL in Leadership → Setup run once in Supabase.
+Needs: excursion_utils.py in the repo root, data/excursions/ (ED169 template + logo), and the setup SQL run once.
 """
 
 import os
@@ -92,22 +95,13 @@ def load_excursions() -> list[dict]:
     try:
         return db().table(eu.T_EXCURSIONS).select("*").order("excursion_date", desc=True).execute().data or []
     except Exception as e:
-        st.error(f"Couldn't load excursions ({e}). Has the setup SQL been run? (Leadership → Setup)")
+        st.error(f"Couldn't load excursions ({e}). Has the setup SQL been run? (⚙️ Settings → Setup)")
         return []
 
 
 def refresh():
     load_staff_dir.clear()
     load_library.clear()
-
-
-def leader_emails() -> list[str]:
-    return [s["email"] for s in load_staff_dir() if s.get("is_leader") and s.get("active", True) and s.get("email")]
-
-
-def staff_email(name: str) -> str | None:
-    rec = next((s for s in load_staff_dir() if s.get("name") == name), None)
-    return (rec or {}).get("email")
 
 
 def save_new_library_activities(d: dict, who: str):
@@ -127,25 +121,22 @@ def save_new_library_activities(d: dict, who: str):
     load_library.clear()
 
 
-def save_excursion(status: str | None = None) -> dict | None:
+def save_excursion() -> dict | None:
     d = ss.ex
     save_new_library_activities(d, d.get("prepared_by") or d.get("teacher_in_charge") or "")
     rec = {
         "name": d.get("name"), "destination": d.get("destination"), "program": d.get("program"),
         "excursion_date": d.get("date_from") or None, "teacher_in_charge": d.get("teacher_in_charge"),
         "prepared_by": d.get("prepared_by"), "data": d, "updated_at": eu.now_iso(),
-        "status": status or ss.ex_status or "Draft",
+        "status": "Saved",
     }
-    if status == "Submitted":
-        rec["submitted_at"] = eu.now_iso()
-        rec["leader_comment"] = None
     try:
         if ss.ex_id:
             row = db().table(eu.T_EXCURSIONS).update(rec).eq("id", ss.ex_id).execute().data
         else:
             row = db().table(eu.T_EXCURSIONS).insert(rec).execute().data
     except Exception as e:
-        st.error(f"Couldn't save ({e}). Has the setup SQL been run? (Leadership → Setup)")
+        st.error(f"Couldn't save ({e}). Has the setup SQL been run? (⚙️ Settings → Setup)")
         return None
     row = (row or [None])[0]
     if row:
@@ -159,7 +150,7 @@ def save_excursion(status: str | None = None) -> dict | None:
 def start_new(data: dict | None = None):
     ss.ex = data if data is not None else eu.blank_excursion()
     ss.ex_id = None
-    ss.ex_status = "Draft"
+    ss.ex_status = "Saved"
     ss.fv = ss.get("fv", 0) + 1
 
 
@@ -172,7 +163,7 @@ def load_into_planner(row: dict, as_template: bool = False):
         base.update(date_from=None, date_to=None, checks={}, venue_reviewed=False)
         start_new(base)
     else:
-        ss.ex, ss.ex_id, ss.ex_status = base, row["id"], row.get("status", "Draft")
+        ss.ex, ss.ex_id, ss.ex_status = base, row["id"], row.get("status", "Saved")
         ss.fv = ss.get("fv", 0) + 1
 
 
@@ -207,8 +198,7 @@ def level_badge(lvl: str) -> str:
             f"padding:1px 9px;font-size:0.8rem;font-weight:600'>{lvl}</span>")
 
 
-STATUS_BADGE = {"Draft": "📝 Draft", "Submitted": "⏳ Awaiting approval", "Returned": "↩️ Returned for changes",
-                "Approved": "✅ Approved", "Cancelled": "✖️ Cancelled"}
+STATUS_BADGE = {"Saved": "💾 Saved", "Archived": "🗄️ Archived"}
 
 
 def show_checks(checks):
@@ -242,8 +232,8 @@ st.markdown(f"""
 <div style="background:linear-gradient(135deg,{TEAL},#0f5f5f);color:white;border-radius:14px;
             padding:1.1rem 1.4rem;margin-bottom:0.8rem">
   <div style="font-size:1.5rem;font-weight:700">🚌 Excursion Planner</div>
-  <div style="opacity:.85;font-size:.92rem">Enter the excursion once → ED169 and Risk Management Plan built for you,
-  checked against the DfE Camps &amp; Excursions Procedure, then approved by a Leader.</div>
+  <div style="opacity:.85;font-size:.92rem">Enter the excursion once → ED169 and Risk Management Plan built for you and
+  checked against the DfE Camps &amp; Excursions Procedure. Save it, find it again, download, print and sign.</div>
 </div>""", unsafe_allow_html=True)
 
 if ss.flash:
@@ -252,7 +242,7 @@ if ss.flash:
     ss.flash = None
 
 tab_plan, tab_list, tab_lib, tab_lead = st.tabs(
-    ["✏️ Plan an excursion", "📋 Excursions", "📚 Activity Library", "🔒 Leadership"])
+    ["✏️ Plan / edit", "🔍 Find an excursion", "📚 Activity Library", "⚙️ Settings (Leadership)"])
 
 staff_dir = load_staff_dir()
 library, lib_from_db = load_library()
@@ -264,19 +254,17 @@ with tab_plan:
     d = ss.ex
     top = st.columns([3, 1, 1])
     title = d.get("name") or "New excursion"
-    top[0].markdown(f"#### {title}  \n<span style='color:#666'>{STATUS_BADGE.get(ss.ex_status, ss.ex_status)}"
-                    f"{' · saved' if ss.ex_id else ' · not saved yet'}</span>", unsafe_allow_html=True)
-    locked = ss.ex_status in ("Submitted", "Approved")
-    if locked:
-        st.info("This excursion has been submitted/approved, so it's read-only here. To change it, ask a Leader "
-                "to return it, or use **📋 Excursions → Use as template** to start a new one.")
+    top[0].markdown(f"#### {title}  \n<span style='color:#666'>"
+                    f"{'💾 Saved – changes need saving again' if ss.ex_id else '📝 Not saved yet'}</span>",
+                    unsafe_allow_html=True)
+    locked = False   # every saved plan stays editable
     if top[1].button("➕ Start new", use_container_width=True):
         queue("new")
-    if top[2].button("💾 Save draft", use_container_width=True, disabled=locked, type="primary"):
+    if top[2].button("💾 Save", use_container_width=True, type="primary"):
         queue("save")
 
     s1, s2, s3, s4, s5, s6 = st.tabs(["1 · Details", "2 · Students & staff", "3 · Transport & costs",
-                                      "4 · Activities & risks", "5 · Emergency & checks", "6 · Review & submit"])
+                                      "4 · Activities & risks", "5 · Emergency & checks", "6 · Review, save & print"])
 
     # ---------------- 1. Details ----------------
     with s1:
@@ -355,7 +343,7 @@ with tab_plan:
             if c[1].button("Add", use_container_width=True, disabled=not pick):
                 queue("add_staff", pick)
         elif not names:
-            st.caption("Tip: a Leader can add the staff list (with first aid expiry dates) in 🔒 Leadership → Staff list.")
+            st.caption("Tip: a Leader can add the staff list (with first aid expiry dates) in ⚙️ Settings → Staff list.")
         init_key = f"staff_init_{ss.fv}"
         if init_key not in ss:
             _t = pd.DataFrame(d.get("staff") or [], columns=["name", "gender", "status", "experience", "first_aid"])
@@ -480,8 +468,8 @@ with tab_plan:
         with st.expander("ℹ️ How to rate a risk (Likelihood × Consequence)"):
             mdf = pd.DataFrame({cons: eu.MATRIX[cons] for cons in reversed(eu.CONSEQUENCE)}, index=eu.LIKELIHOOD).T
             st.dataframe(mdf, use_container_width=True)
-            st.caption("Rate the risk **with your strategies in place**. HIGH needs a Leader to accept it; "
-                       "EXTREME can't be submitted – add controls or change the plan. "
+            st.caption("Rate the risk **with your strategies in place**. Talk any HIGH risk through with Leadership "
+                       "when the forms are signed; EXTREME means add controls or change the plan. "
                        "Major consequence includes 'one or more children are lost from the main group'.")
 
         for ai, a in enumerate(d.get("activities", [])):
@@ -574,7 +562,7 @@ with tab_plan:
         d["venue_reviewed"] = st.checkbox("Venue and safety information reviewed (and attached if the venue provides it)",
                                           bool(d.get("venue_reviewed")), key=K("venue"), disabled=locked)
 
-    # ---------------- 6. Review & submit ----------------
+    # ---------------- 6. Review, save & print ----------------
     with s6:
         checks = eu.check_excursion(d, staff_dir)
         blocks = sum(1 for lv, _ in checks if lv == "block")
@@ -585,20 +573,16 @@ with tab_plan:
         c[2].metric("Highest risk", eu.highest_level(d))
         c[3].metric("To fix / to check", f"{blocks} / {warns}")
         show_checks(checks)
-        st.markdown("##### Preview documents")
-        st.caption("Drafts are marked DRAFT. The final versions are available once a Leader approves.")
-        preview = {"status": ss.ex_status, "data": d}
-        download_buttons(preview, "plan")
-        if not locked:
-            st.markdown("---")
-            ok = eu.can_submit(checks)
-            if not ok:
-                st.info("Fix the ⛔ items above, then submit. You can save a draft any time.")
-            elif warns:
-                st.info("You can submit with ⚠️ items, but the Leader will see them — tick or explain what you can first.")
-            if st.button("📨 Submit to Leadership for approval", type="primary", disabled=not ok,
-                         use_container_width=True):
-                queue("submit")
+        st.markdown("---")
+        if st.button("💾 Save this excursion", type="primary", use_container_width=True, key="save_bottom"):
+            queue("save")
+        st.markdown("##### Download, print and sign")
+        if blocks:
+            st.info("You can download now, but fix the ⛔ items before printing the forms for signing.")
+        download_buttons({"status": "Saved", "data": d, "updated_at": eu.now_iso()}, "plan")
+        st.markdown(
+            "**Next steps:** print both documents → teacher-in-charge signs and dates the ED169 → "
+            "give both to Leadership to sign (ED169 approval and the risk assessment) → file the signed copies.")
 
     # ---------------- pending actions (run after every widget above has updated ss.ex) ----------------
     if ss.pending:
@@ -630,14 +614,7 @@ with tab_plan:
             d["activities"].pop(args[0])
         elif action == "save":
             if save_excursion():
-                ss.flash = ("ok", "Draft saved. Find it any time in 📋 Excursions.")
-        elif action == "submit":
-            row = save_excursion("Submitted")
-            if row:
-                ok, msg = eu.send_email(leader_emails(), f"🚌 Excursion for approval – {d.get('name')} "
-                                        f"({eu.fmt_date(d.get('date_from'))})", eu.submission_email_html(row))
-                ss.flash = ("ok" if ok else "warn",
-                            "Submitted to Leadership. " + (msg if ok else f"{msg} — please let a Leader know it's waiting."))
+                ss.flash = ("ok", f"Saved '{d.get('name') or 'excursion'}'. Find it any time in 🔍 Find an excursion.")
         if action not in ("new",):
             ss.fv += 1     # rebuild widgets from ss.ex
         st.rerun()
@@ -648,45 +625,65 @@ with tab_plan:
 # =====================================================================
 with tab_list:
     rows = load_excursions()
-    c = st.columns(3)
-    f_status = c[0].multiselect("Status", list(STATUS_BADGE), default=["Draft", "Submitted", "Returned", "Approved"])
-    f_prog = c[1].multiselect("Program", eu.PROGRAMS)
-    f_text = c[2].text_input("Search", placeholder="destination, teacher…")
-    shown = [r for r in rows if r.get("status") in f_status
-             and (not f_prog or r.get("program") in f_prog)
-             and (not f_text or f_text.lower() in " ".join(str(r.get(k) or "") for k in
-                                                         ("name", "destination", "teacher_in_charge", "prepared_by")).lower())]
-    if not shown:
-        st.info("No excursions match. Start one in ✏️ Plan an excursion.")
-    for r in shown:
+    c = st.columns([3, 1, 1])
+    q = c[0].text_input("🔍 Search by excursion name or location",
+                        placeholder="e.g. beach, library, Semaphore, Polonia…", key="find_q")
+    f_prog = c[1].multiselect("Program", eu.PROGRAMS, key="find_prog")
+    show_arch = c[2].checkbox("Include archived", key="find_arch")
+
+    def _haystack(r):
         dd = r.get("data") or {}
-        head = (f"{STATUS_BADGE.get(r['status'], r['status'])}  ·  {eu.fmt_date(r.get('excursion_date'))}  ·  "
-                f"{r.get('name') or '(no name)'} – {r.get('destination') or ''}  ·  {r.get('program') or ''}  ·  "
-                f"{r.get('teacher_in_charge') or ''}")
+        return " ".join(str(x or "") for x in (r.get("name"), r.get("destination"), dd.get("address"),
+                                               dd.get("outline"), r.get("teacher_in_charge"))).lower()
+
+    terms = [t for t in q.lower().split() if t]
+    found = [r for r in rows
+             if (show_arch or r.get("status") != "Archived")
+             and (not f_prog or r.get("program") in f_prog)
+             and all(t in _haystack(r) for t in terms)]
+    # newest excursion date first
+    found.sort(key=lambda r: (r.get("excursion_date") or "", r.get("updated_at") or ""), reverse=True)
+    if not terms and not f_prog:
+        st.caption(f"{len(found)} saved excursion(s). Showing the most recent – type a name or location to search.")
+        found = found[:15]
+    elif not found:
+        st.info("No saved excursions match. Try part of the name or location, or start a new one in ✏️ Plan / edit.")
+    else:
+        st.caption(f"{len(found)} match(es).")
+
+    for r in found:
+        dd = r.get("data") or {}
+        arch = " · 🗄️ archived" if r.get("status") == "Archived" else ""
+        head = (f"{eu.fmt_date(r.get('excursion_date')) or 'No date'}  ·  {r.get('name') or '(no name)'}  –  "
+                f"{r.get('destination') or ''}  ·  {r.get('program') or ''}  ·  {r.get('teacher_in_charge') or ''}{arch}")
         with st.expander(head):
-            st.markdown(f"**Students:** {eu.student_total(dd)} · **Adults:** {len(dd.get('staff', []))} · "
-                        f"**Transport:** {dd.get('transport_mode', '')} · **Highest risk:** {eu.highest_level(dd)}")
-            if r.get("status") == "Returned" and r.get("leader_comment"):
-                st.warning(f"**{r.get('leader_name')}:** {r['leader_comment']}")
-            if r.get("status") == "Approved":
-                st.success(f"Approved by {r.get('leader_name')} on {eu.fmt_date(r.get('decided_at'))}"
-                           + (f" – {r['leader_comment']}" if r.get("leader_comment") else ""))
+            st.markdown(f"**Location:** {dd.get('destination', '')}{(', ' + dd['address']) if dd.get('address') else ''}  \n"
+                        f"**Students:** {eu.student_total(dd)} · **Adults:** {len(dd.get('staff', []))} · "
+                        f"**Transport:** {eu.transport_text(dd)} · **Highest risk:** {eu.highest_level(dd)}  \n"
+                        f"**Activities:** {', '.join(a.get('name', '') for a in dd.get('activities', [])) or '—'}  \n"
+                        f"<span style='color:#777'>Last saved {eu.fmt_date(r.get('updated_at'))}"
+                        f"{' by ' + r['prepared_by'] if r.get('prepared_by') else ''}</span>",
+                        unsafe_allow_html=True)
             download_buttons(r, r["id"])
             c = st.columns(3)
-            if r["status"] in ("Draft", "Returned"):
-                if c[0].button("✏️ Edit", key=f"edit_{r['id']}", use_container_width=True):
-                    load_into_planner(r)
-                    ss.flash = ("ok", f"Loaded '{r.get('name')}' — open the ✏️ Plan an excursion tab.")
-                    st.rerun()
-            if c[1].button("📑 Use as template for a new excursion", key=f"tpl_{r['id']}", use_container_width=True):
-                load_into_planner(r, as_template=True)
-                ss.flash = ("ok", f"Copied '{r.get('name')}' as a new draft (dates and checks cleared) — open the "
-                                  "✏️ Plan an excursion tab and review every risk for this group.")
+            if c[0].button("✏️ Open to edit", key=f"edit_{r['id']}", use_container_width=True):
+                load_into_planner(r)
+                ss.flash = ("ok", f"Opened '{r.get('name')}' — go to the ✏️ Plan / edit tab. Remember to 💾 Save changes.")
                 st.rerun()
-            if r["status"] in ("Draft", "Returned", "Submitted"):
-                if c[2].button("✖️ Cancel excursion", key=f"cx_{r['id']}", use_container_width=True):
-                    db().table(eu.T_EXCURSIONS).update({"status": "Cancelled", "updated_at": eu.now_iso()}).eq("id", r["id"]).execute()
+            if c[1].button("📑 Copy as a new excursion", key=f"tpl_{r['id']}", use_container_width=True,
+                           help="For a repeat trip: copies everything except the date and preparation checks."):
+                load_into_planner(r, as_template=True)
+                ss.flash = ("ok", f"Copied '{r.get('name')}' as a new excursion (date and checks cleared) — go to "
+                                  "✏️ Plan / edit, check every risk suits this group, then 💾 Save.")
+                st.rerun()
+            if r.get("status") == "Archived":
+                if c[2].button("↩️ Restore", key=f"rs_{r['id']}", use_container_width=True):
+                    db().table(eu.T_EXCURSIONS).update({"status": "Saved"}).eq("id", r["id"]).execute()
                     st.rerun()
+            elif c[2].button("🗄️ Archive", key=f"ar_{r['id']}", use_container_width=True,
+                             help="Hides it from search (tick 'Include archived' to see it again)."):
+                db().table(eu.T_EXCURSIONS).update({"status": "Archived"}).eq("id", r["id"]).execute()
+                st.rerun()
 
 
 # =====================================================================
@@ -717,66 +714,12 @@ with tab_lib:
 with tab_lead:
     try:
         from confidential_auth import require_confidential_auth
-        require_confidential_auth("Excursion approvals", "🚌")
+        require_confidential_auth("Excursion Planner settings", "⚙️")
     except ModuleNotFoundError:
         st.error("confidential_auth.py not found.")
         st.stop()
 
-    l_appr, l_lib, l_staff, l_setup = st.tabs(["✅ Awaiting approval", "📚 Edit library", "👥 Staff list", "⚙️ Setup"])
-
-    with l_appr:
-        pending_rows = [r for r in load_excursions() if r.get("status") == "Submitted"]
-        if not pending_rows:
-            st.success("Nothing waiting for approval.")
-        leader_names = [s["name"] for s in staff_dir if s.get("is_leader") and s.get("active", True)]
-        for r in pending_rows:
-            dd = r.get("data") or {}
-            with st.expander(f"⏳ {eu.fmt_date(r.get('excursion_date'))} · {r.get('name')} – {r.get('destination')} · "
-                             f"{r.get('program')} · {r.get('teacher_in_charge')}", expanded=True):
-                c = st.columns(4)
-                c[0].metric("Students", eu.student_total(dd))
-                c[1].metric("Adults", f"{len(dd.get('staff', []))} / {eu.required_adults(dd)[0]} needed")
-                c[2].metric("Highest risk", eu.highest_level(dd))
-                c[3].metric("Leave → return", f"{eu.fmt_time(dd.get('depart_time'))}–{eu.fmt_time(dd.get('return_time'))}")
-                st.markdown(f"**Outline:** {dd.get('outline', '')}")
-                st.markdown(f"**Activities:** " + ", ".join(a.get("name", "") for a in dd.get("activities", [])))
-                if dd.get("student_considerations"):
-                    st.markdown(f"**Student considerations:** {dd['student_considerations']}")
-                chk = [x for x in eu.check_excursion(dd, staff_dir) if x[0] != "ok"]
-                if chk:
-                    st.markdown("**Flags for the Leader**")
-                    show_checks(chk)
-                st.caption("Open the documents to read every risk before approving:")
-                download_buttons(r, f"lead_{r['id']}")
-                c = st.columns([2, 3])
-                if leader_names:
-                    who = c[0].selectbox("Leader", leader_names, key=f"who_{r['id']}")
-                else:
-                    who = c[0].text_input("Leader name", key=f"who_{r['id']}")
-                comment = c[1].text_area("Comment (required if returning)", key=f"cm_{r['id']}", height=70)
-                c = st.columns(2)
-                if c[0].button("✅ Approve", key=f"ap_{r['id']}", type="primary", use_container_width=True,
-                               disabled=not who):
-                    upd = {"status": "Approved", "leader_name": who, "leader_comment": comment or None,
-                           "decided_at": eu.now_iso(), "updated_at": eu.now_iso()}
-                    db().table(eu.T_EXCURSIONS).update(upd).eq("id", r["id"]).execute()
-                    r.update(upd)
-                    to = [e for e in {staff_email(r.get("teacher_in_charge")), staff_email(r.get("prepared_by"))} if e]
-                    ok, msg = eu.send_email(to, f"✅ Excursion approved – {r.get('name')}", eu.decision_email_html(r, True)) \
-                        if to else (False, "No email on file for the teacher in charge.")
-                    ss.flash = ("ok", f"Approved. {msg if ok else msg + ' Let the teacher know directly.'}")
-                    st.rerun()
-                if c[1].button("↩️ Return for changes", key=f"rt_{r['id']}", use_container_width=True,
-                               disabled=not (who and comment.strip())):
-                    upd = {"status": "Returned", "leader_name": who, "leader_comment": comment,
-                           "decided_at": eu.now_iso(), "updated_at": eu.now_iso()}
-                    db().table(eu.T_EXCURSIONS).update(upd).eq("id", r["id"]).execute()
-                    r.update(upd)
-                    to = [e for e in {staff_email(r.get("teacher_in_charge")), staff_email(r.get("prepared_by"))} if e]
-                    ok, msg = eu.send_email(to, f"↩️ Excursion returned for changes – {r.get('name')}",
-                                            eu.decision_email_html(r, False)) if to else (False, "No email on file.")
-                    ss.flash = ("ok", f"Returned with your comment. {msg if ok else msg + ' Let the teacher know directly.'}")
-                    st.rerun()
+    l_lib, l_staff, l_setup = st.tabs(["📚 Edit library", "👥 Staff list", "⚙️ Setup"])
 
     with l_lib:
         missing = [a for a in library if not a.get("id")]
@@ -837,14 +780,14 @@ with tab_lead:
                 st.rerun()
 
     with l_staff:
-        st.caption("Used for quick-adding staff, first aid expiry warnings, choosing the approving Leader, and emails. "
-                   "**Leaders** receive submission emails and can approve.")
-        sdf = pd.DataFrame(staff_dir, columns=["id", "name", "gender", "status", "email", "is_leader",
+        st.caption("Used for quick-adding staff to an excursion and first aid expiry warnings. "
+                   "Tick **Leadership** for leaders – the first one is offered as the default site contact.")
+        sdf = pd.DataFrame(staff_dir, columns=["id", "name", "gender", "status", "is_leader",
                                                "first_aid_expiry", "active"])
         sdf["first_aid_expiry"] = pd.to_datetime(sdf["first_aid_expiry"], errors="coerce").dt.date
         for _c in ("is_leader", "active"):
             sdf[_c] = sdf[_c].fillna(_c == "active").astype(bool)
-        for _c in ("id", "name", "gender", "status", "email"):
+        for _c in ("id", "name", "gender", "status"):
             sdf[_c] = sdf[_c].astype("string")
         ed = st.data_editor(sdf, key="staff_dir_ed", num_rows="dynamic", use_container_width=True,
                             column_config={
@@ -852,8 +795,7 @@ with tab_lead:
                                 "name": st.column_config.TextColumn("Name", required=True),
                                 "gender": st.column_config.SelectboxColumn("M/F", options=["M", "F", "X"]),
                                 "status": st.column_config.SelectboxColumn("Role", options=eu.STAFF_STATUSES),
-                                "email": st.column_config.TextColumn("Email"),
-                                "is_leader": st.column_config.CheckboxColumn("Leader", default=False),
+                                "is_leader": st.column_config.CheckboxColumn("Leadership", default=False),
                                 "first_aid_expiry": st.column_config.DateColumn("First aid expires", format="DD/MM/YYYY"),
                                 "active": st.column_config.CheckboxColumn("Active", default=True)})
         c = st.columns(2)
@@ -864,7 +806,7 @@ with tab_lead:
                         continue
                     exp = rr.get("first_aid_expiry")
                     rec = {"name": _str(rr["name"]).strip(), "gender": _str(rr.get("gender")) or None,
-                           "status": _str(rr.get("status")) or "Teacher", "email": _str(rr.get("email")).strip() or None,
+                           "status": _str(rr.get("status")) or "Teacher",
                            "is_leader": bool(rr.get("is_leader")) if not pd.isna(rr.get("is_leader")) else False,
                            "first_aid_expiry": exp.isoformat() if exp is not None and not pd.isna(exp) else None,
                            "active": bool(rr.get("active")) if not pd.isna(rr.get("active")) else True}
@@ -877,13 +819,13 @@ with tab_lead:
                 st.rerun()
             except Exception as e:
                 st.error(f"Couldn't save ({e}).")
-        if c[1].button("📥 Copy names & emails from the Hazard Report lists", use_container_width=True):
+        if c[1].button("📥 Copy names from the Hazard Report lists", use_container_width=True):
             try:
                 have = {s["name"].lower() for s in staff_dir}
                 new = []
                 for h in db().table("hazard_recipients").select("*").eq("active", True).execute().data or []:
                     if h.get("name") and h["name"].lower() not in have:
-                        new.append({"name": h["name"], "email": h.get("email"),
+                        new.append({"name": h["name"],
                                     "is_leader": h.get("role") == "Leadership",
                                     "status": "Leader" if h.get("role") == "Leadership" else "SSO"})
                         have.add(h["name"].lower())
@@ -902,10 +844,3 @@ with tab_lead:
     with l_setup:
         st.markdown("Run this once in **Supabase → SQL editor** (the same project as the Hazard Report):")
         st.code(eu.SETUP_SQL, language="sql")
-        st.markdown("Email uses the existing portal mailer (`EMAIL_WEBHOOK_URL` / `EMAIL_WEBHOOK_TOKEN`). "
-                    "Submissions go to every **active Leader with an email** in the Staff list.")
-        if st.button("Send a test email to the Leaders"):
-            ok, msg = eu.send_email(leader_emails(), "TEST – Excursion Planner",
-                                    "<p>Test from the CLC portal's Excursion Planner. Excursions submitted for "
-                                    "approval will arrive like this.</p>")
-            (st.success if ok else st.error)(msg)
