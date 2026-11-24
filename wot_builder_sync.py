@@ -7,7 +7,7 @@ Used by: pages/5_Behaviour_Support.py (Analysis page, Window of Tolerance sectio
 The WoT Builder (window-of-tolerance-builder.html on the Cloudflare launcher) keeps
 one report per student in `wot_builder_reports` (its own Supabase project), with
 data = {zone_id: {"context": [...], "behaviour": [...], "interventions": [...]}}
-where each line is {"text": "...", "custom": bool}.
+where each line is {"text": "...", "custom": bool, "orig": neutral wording?}.
 
 This module adds the student's Behaviour Support data into that report:
   * every incident behaviour type, intervention and context, in the zone the
@@ -23,6 +23,11 @@ Rules that keep staff in charge of the document:
   * A synced line nobody has touched is removed if the data no longer supports it
     (e.g. an incident was deleted), so the report stays truthful.
   * The Window of Tolerance zone itself is never written to.
+  * Every synced line is written with the student's own pronouns (the Builder's
+    per-student setting, wot_builder_reports.pronouns) instead of "they / their /
+    the student". The neutral wording is kept as "orig" and the line key is always
+    built from it, so changing a student's pronouns is never mistaken for a staff
+    edit, and the Builder (same rules, in JavaScript) and this module always agree.
 
 -------------------------------------------------------------------
 SUPABASE SETUP — run once in the SQL editor of the WoT BUILDER's project
@@ -73,6 +78,205 @@ def norm(text: str) -> str:
 
 def line_key(zone: str, col: str, text: str) -> str:
     return f"{zone}|{col}|{norm(text).lower()}"
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Student pronouns — same rules as the Builder page (window-of-tolerance-builder.html),
+# so a line reads identically whichever side converts it. Generic wording
+# ("they / their / the student / the child") becomes the student's own pronouns;
+# text inside quotation marks is never changed. Rule-based, no AI.
+# ──────────────────────────────────────────────────────────────────────────
+PRONOUN_SETS = {
+    "he":   {"subj": "he",   "obj": "him",  "poss": "his",   "possPron": "his",    "refl": "himself"},
+    "she":  {"subj": "she",  "obj": "her",  "poss": "her",   "possPron": "hers",   "refl": "herself"},
+    "they": {"subj": "they", "obj": "them", "poss": "their", "possPron": "theirs", "refl": "themselves"},
+}
+_PN_NOUNS = {"student", "child", "learner", "kid"}
+_PN_ADVERBS = set("also often still just really usually always never sometimes only already even actually "
+                  "quickly slowly suddenly rarely generally typically frequently mostly then now all both "
+                  "first finally clearly".split())
+_PN_KEEP_VERBS = set("can could will would should may might must shall can't couldn't won't wouldn't "
+                     "shouldn't mustn't cannot had did felt got went said made came knew saw took found left "
+                     "lost ran sat stood thought told gave kept began heard hadn't didn't hit put set let cut "
+                     "needn't".split())
+_PN_TO_SINGULAR = {"are": "is", "were": "was", "have": "has", "do": "does", "don't": "doesn't",
+                   "aren't": "isn't", "weren't": "wasn't", "haven't": "hasn't", "go": "goes"}
+_PN_SUBJ_LEAD = set("if when while because until unless before after so and that as where once whether "
+                    "or but".split())
+_PN_TOKEN = re.compile(r"([A-Za-z]+(?:['’][A-Za-z]+)?)|([^A-Za-z]+)")
+_PN_QUOTES = re.compile(r"(“[^”]*”|\"[^\"]*\")")
+_PN_BREAK = re.compile(r"[.,;:!?()—–]")
+
+
+def normalise_pronouns(v) -> str | None:
+    t = re.sub(r"\s+", "", str(v or "").lower())
+    if t in ("he", "him", "his") or t.startswith("he/"):
+        return "he"
+    if t in ("she", "her") or t.startswith("she/"):
+        return "she"
+    if t in ("they", "them") or t.startswith("they/"):
+        return "they"
+    return None
+
+
+def _pn_lower(w: str) -> str:
+    return w.lower().replace("’", "'")
+
+
+def _pn_case(src: str, out: str) -> str:
+    if not src or not out:
+        return out
+    if len(src) > 1 and src == src.upper():
+        return out.upper()
+    if src[0] != src[0].lower():
+        return out[0].upper() + out[1:]
+    return out
+
+
+def _pn_next(toks, i):
+    j = i + 1
+    if j < len(toks) and not toks[j]["w"]:
+        if re.fullmatch(r"[ \t]+", toks[j]["t"]):
+            j += 1
+        else:
+            return -1
+    return j if j < len(toks) and toks[j]["w"] else -1
+
+
+def _pn_prev(toks, i):
+    j = i - 1
+    if j >= 0 and not toks[j]["w"]:
+        if re.fullmatch(r"[ \t]+", toks[j]["t"]):
+            j -= 1
+        else:
+            return -1
+    return j if j >= 0 and toks[j]["w"] else -1
+
+
+def _pn_verb(toks, i):
+    j, guard = _pn_next(toks, i), 0
+    while j != -1 and _pn_lower(toks[j]["t"]) in _PN_ADVERBS and guard < 3:
+        j = _pn_next(toks, j)
+        guard += 1
+    return j
+
+
+def _pn_is_past(lv: str) -> bool:
+    return lv.endswith("ed") and not lv.endswith("eed")
+
+
+def _pn_singular(v: str) -> str:
+    lv = _pn_lower(v)
+    if lv in _PN_KEEP_VERBS or _pn_is_past(lv):
+        return v
+    if lv in _PN_TO_SINGULAR:
+        return _pn_case(v, _PN_TO_SINGULAR[lv])
+    if "'" in lv:
+        return v
+    if re.search(r"(s|x|z|ch|sh|o)$", lv):
+        return v + "es"
+    if re.search(r"[^aeiou]y$", lv):
+        return v[:-1] + "ies"
+    return v + "s"
+
+
+def _pn_plural(v: str) -> str:
+    lv = _pn_lower(v)
+    to_plural = {"is": "are", "was": "were", "has": "have", "does": "do", "doesn't": "don't",
+                 "isn't": "aren't", "wasn't": "weren't", "hasn't": "haven't", "goes": "go"}
+    if lv in _PN_KEEP_VERBS or _pn_is_past(lv):
+        return v
+    if lv in to_plural:
+        return _pn_case(v, to_plural[lv])
+    if "'" in lv:
+        return v
+    if len(lv) > 4 and lv.endswith("ies"):
+        return v[:-3] + "y"
+    if re.search(r"(ss|x|z|ch|sh|o)es$", lv):
+        return v[:-2]
+    if re.search(r"[^su]s$", lv) and not re.search(r"(ss|us|is)$", lv):
+        return v[:-1]
+    return v
+
+
+def _pn_convert_segment(seg: str, key: str) -> str:
+    P = PRONOUN_SETS[key]
+    toks = [{"w": bool(m.group(1)), "t": m.group(0)} for m in _PN_TOKEN.finditer(seg)]
+    # 1) "the student's / this child / the student" -> pronoun
+    i = 0
+    while i < len(toks):
+        tk = toks[i]
+        if tk["w"] and _pn_lower(tk["t"]) in ("the", "this"):
+            j = _pn_next(toks, i)
+            nm = re.fullmatch(r"([a-z]+)('s)?", _pn_lower(toks[j]["t"])) if j != -1 else None
+            if nm and nm.group(1) in _PN_NOUNS:
+                is_subj = False
+                if nm.group(2):
+                    out = P["poss"]
+                else:
+                    p = _pn_prev(toks, i)
+                    is_subj = (p == -1 and i == 0) or (p != -1 and _pn_lower(toks[p]["t"]) in _PN_SUBJ_LEAD)
+                    out = P["subj"] if is_subj else P["obj"]
+                toks[i] = {"w": True, "t": _pn_case(tk["t"], out), "done": True}
+                del toks[i + 1:j + 1]
+                if is_subj and key == "they":
+                    v = _pn_verb(toks, i)
+                    if v != -1:
+                        toks[v] = {"w": True, "t": _pn_plural(toks[v]["t"]), "done": True}
+        i += 1
+    if key == "they":
+        return "".join(t["t"] for t in toks)
+    # 2) they / them / their / theirs / themselves -> he/she forms
+    subj_active = False
+    for i, tk in enumerate(toks):
+        if not tk["w"]:
+            if _PN_BREAK.search(tk["t"]):
+                subj_active = False
+            continue
+        if tk.get("done"):
+            continue
+        lw = _pn_lower(tk["t"])
+        if subj_active and lw in ("and", "or", "but"):
+            cj = _pn_next(toks, i)
+            if cj != -1 and not toks[cj].get("done") and _pn_lower(toks[cj]["t"]) in _PN_TO_SINGULAR:
+                toks[cj] = {"w": True, "t": _pn_case(toks[cj]["t"], _PN_TO_SINGULAR[_pn_lower(toks[cj]["t"])]),
+                            "done": True}
+            continue
+        rep = None
+        if lw == "they":
+            subj_active = True
+            rep = P["subj"]
+            vi = _pn_verb(toks, i)
+            if vi != -1 and not toks[vi].get("done"):
+                toks[vi] = {"w": True, "t": _pn_singular(toks[vi]["t"]), "done": True}
+        elif lw in ("they're", "they've"):
+            rep, subj_active = P["subj"] + "'s", True
+        elif lw == "they'd":
+            rep, subj_active = P["subj"] + "'d", True
+        elif lw == "they'll":
+            rep, subj_active = P["subj"] + "'ll", True
+        elif lw == "them":
+            rep = P["obj"]
+        elif lw == "their":
+            rep = P["poss"]
+        elif lw == "theirs":
+            rep = P["possPron"]
+        elif lw in ("themselves", "themself"):
+            rep = P["refl"]
+        if rep:
+            toks[i] = {"w": True, "t": _pn_case(tk["t"], rep), "done": True}
+    return "".join(t["t"] for t in toks)
+
+
+def convert_pronouns(text: str, pronouns) -> str:
+    """Generic wording -> this student's pronouns ('he' / 'she' / 'they'). Unknown -> unchanged."""
+    key = normalise_pronouns(pronouns)
+    if not key or not text:
+        return text
+    parts = _PN_QUOTES.split(str(text))
+    for i in range(0, len(parts), 2):
+        parts[i] = _pn_convert_segment(parts[i], key)
+    return "".join(parts)
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -147,12 +351,15 @@ def desired_lines(wot_all: dict) -> dict:
 # ──────────────────────────────────────────────────────────────────────────
 # Merge (pure — no database)
 # ──────────────────────────────────────────────────────────────────────────
-def merge(report_data: dict | None, desired: dict, synced_keys: set, dismissed_keys: set) -> dict:
-    """Returns {"data", "synced_keys", "dismissed_keys", "added", "removed", "kept_by_staff"}."""
+def merge(report_data: dict | None, desired: dict, synced_keys: set, dismissed_keys: set,
+          pronouns: str | None = None) -> dict:
+    """Returns {"data", "synced_keys", "dismissed_keys", "added", "removed", "kept_by_staff",
+    "converted"}. `pronouns` ('he' / 'she' / 'they', or None if not set yet) decides how
+    synced lines are worded; keys always come from the neutral wording."""
     data = {z: {c: [dict(i) for i in ((report_data or {}).get(z, {}) or {}).get(c, []) or []
                     if isinstance(i, dict)] for c in COLS} for z in ZONES}
     dismissed = set(dismissed_keys)
-    added = removed = kept = 0
+    added = removed = kept = converted = 0
 
     present = set()
     for z in SYNC_ZONES:
@@ -180,14 +387,25 @@ def merge(report_data: dict | None, desired: dict, synced_keys: set, dismissed_k
                     elif it.get("key") not in want:
                         removed += 1
                         continue
+                    elif pronouns:
+                        # untouched synced line: make sure it reads with this student's pronouns
+                        base = it.get("orig") or it.get("synced_text") or it.get("text") or ""
+                        shown = convert_pronouns(base, pronouns)
+                        if shown != it.get("text"):
+                            it["text"] = it["synced_text"] = shown
+                            converted += 1
+                        it["orig"] = base
                 keep.append(it)
             lst[:] = keep
             have_text = {norm(i.get("text")).lower() for i in lst}
             have_keys = {i.get("key") for i in lst if i.get("key")}
             for k, t in want.items():
-                if k in have_keys or k in dismissed or norm(t).lower() in have_text:
+                shown = convert_pronouns(t, pronouns) if pronouns else t
+                if (k in have_keys or k in dismissed or norm(t).lower() in have_text
+                        or norm(shown).lower() in have_text):
                     continue
-                lst.append({"text": t, "custom": False, "src": "bst", "key": k, "synced_text": t})
+                lst.append({"text": shown, "custom": False, "src": "bst", "key": k,
+                            "synced_text": shown, "orig": t})
                 added += 1
 
     now_synced = set()
@@ -199,7 +417,7 @@ def merge(report_data: dict | None, desired: dict, synced_keys: set, dismissed_k
     # forget dismissals for lines the data no longer produces at all
     dismissed &= want_keys
     return {"data": data, "synced_keys": sorted(now_synced), "dismissed_keys": sorted(dismissed),
-            "added": added, "removed": removed, "kept_by_staff": kept}
+            "added": added, "removed": removed, "kept_by_staff": kept, "converted": converted}
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -232,10 +450,15 @@ def sync_student(initials: str, wot_all: dict, client=None) -> dict:
             .order("updated_at", desc=True).limit(1).execute().data or [])
     rep = reps[0] if reps else None
 
+    # The student's pronouns: set per report in the Builder (falls back to the register,
+    # if it ever stores them). None = not chosen yet -> lines go in neutral and the
+    # Builder converts them as soon as staff pick pronouns there.
+    pronouns = normalise_pronouns((rep or {}).get("pronouns")) or normalise_pronouns(stu.get("pronouns"))
     res = merge(rep.get("data") if rep else None, desired_lines(wot_all),
-                set(srow.get("synced_keys") or []), set(srow.get("dismissed_keys") or []))
+                set(srow.get("synced_keys") or []), set(srow.get("dismissed_keys") or []),
+                pronouns=pronouns)
     now = datetime.now(timezone.utc).isoformat()
-    changed = bool(res["added"] or res["removed"] or res["kept_by_staff"])
+    changed = bool(res["added"] or res["removed"] or res["kept_by_staff"] or res["converted"])
     created = False
     if rep is None:
         if res["added"]:
@@ -258,6 +481,7 @@ def sync_student(initials: str, wot_all: dict, client=None) -> dict:
     }, on_conflict="student_register_id").execute()
 
     return {"ok": True, "added": res["added"], "removed": res["removed"],
-            "kept_by_staff": res["kept_by_staff"], "created": created,
+            "kept_by_staff": res["kept_by_staff"], "converted": res["converted"],
+            "pronouns": pronouns, "created": created,
             "register_name": stu.get("full_name") or stu.get("initials"),
             "report_id": (rep or {}).get("id"), "total_synced": len(res["synced_keys"])}
