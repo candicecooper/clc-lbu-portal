@@ -1105,6 +1105,44 @@ def render_bsem_recommendations(items: list[dict], key_prefix: str):
         _SCREEN["paused"] = _prev
 
 
+def _student_own_names(student) -> list:
+    """This student's own first/last name words (never a register code like "LAB",
+    which could match an ordinary word such as "lab")."""
+    def _is_code(w):
+        return w.replace("-", "").isalpha() and w.isupper() and 2 <= len(w) <= 4
+    words = []
+    for raw in ((student or {}).get("first_name"), (student or {}).get("last_name"), (student or {}).get("name")):
+        for w in re.split(r"[\s\-]+", str(raw or "")):
+            w = w.strip(".")
+            if len(w) > 2 and w.isalpha() and not _is_code(w) and w.lower() not in {x.lower() for x in words}:
+                words.append(w)
+    return words
+
+
+def _scrub_own_name_for_builder(wot_all: dict, student) -> dict:
+    """Before lines go to the Window of Tolerance Builder: swap the student's own name in
+    free text (context / interventions) for "the student", which the Builder sync then
+    turns into this student's pronouns. Keeps the Builder report initials-only."""
+    names = _student_own_names(student)
+    if not names:
+        return wot_all
+
+    def _clean(t):
+        if not isinstance(t, str):
+            return t
+        for n in names:
+            t = re.sub(rf"\b{re.escape(n)}['\u2019]s\b", "the student's", t, flags=re.IGNORECASE)
+            t = re.sub(rf"\b{re.escape(n)}\b", "the student", t, flags=re.IGNORECASE)
+        return t[:1].upper() + t[1:] if t else t
+
+    for zd in (wot_all or {}).values():
+        for blk in (zd, zd.get("micro") or {}):
+            for c in ("context", "behaviour", "interventions"):
+                if isinstance(blk.get(c), list):
+                    blk[c] = [_clean(t) for t in blk[c]]
+    return wot_all
+
+
 def render_wot_builder_sync(student, full_df, key: str = "wbs"):
     """Automatically send this student's WoT data (every incident behaviour,
     intervention and context + every micro behaviour) into their report in the
@@ -1126,6 +1164,7 @@ def render_wot_builder_sync(student, full_df, key: str = "wbs"):
             if (full_df is not None and not full_df.empty) else {}
         for _zid, _mzd in get_micro_wot(sid, full=True).items():
             wot_all.setdefault(_zid, {"n": 0, "context": [], "behaviour": [], "interventions": []})["micro"] = _mzd
+        wot_all = _scrub_own_name_for_builder(wot_all, student)
         desired = wbs.desired_lines(wot_all)
         n_lines = sum(len(v) for z in desired.values() for v in z.values())
         if not n_lines:
@@ -1163,10 +1202,18 @@ def render_wot_builder_sync(student, full_df, key: str = "wbs"):
                 bits.append(f"added {res['added']} new line{'s' if res['added'] != 1 else ''}")
             if res.get("removed"):
                 bits.append(f"removed {res['removed']} line{'s' if res['removed'] != 1 else ''} the data no longer supports")
+            if res.get("converted"):
+                bits.append(f"updated the pronouns on {res['converted']} line{'s' if res['converted'] != 1 else ''}")
             what = ", ".join(bits) if bits else "already up to date"
             st.success(f"✅ Window of Tolerance Builder: {what} (synced {last.get('at', '')}). "
                        f"{res.get('total_synced', 0)} lines in {res.get('register_name', ini)}'s report come from "
                        f"this tool.")
+            if res.get("pronouns"):
+                st.caption(f"Lines are written with this student's pronouns ({res['pronouns']}) from the Builder, "
+                           "not \u201cthey\u201d or \u201cthe student\u201d.")
+            else:
+                st.caption("No pronouns chosen for this student in the Builder yet. Lines are sent in neutral "
+                           "wording and converted as soon as staff pick pronouns there.")
             st.caption("Every incident behaviour, intervention and context, and every micro behaviour, is sent to "
                        "the matching zone. Staff can still add their own lines in the Builder. Lines they remove or "
                        "reword there stay that way, and the Window of Tolerance zone itself is left for staff.")
