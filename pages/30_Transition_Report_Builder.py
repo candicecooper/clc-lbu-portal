@@ -4123,10 +4123,7 @@ def build_docx(rep):
         return t
 
     # ── cover page (every report type) — full-page artwork in its own section ──
-    note = None
-    if rep["type"] == "Modified Report":
-        note = "This modified report includes: " + (
-            ", ".join(SECTION_LABEL[k] for k, _ in SECTIONS if k in rep["sections"]) or "cover page only")
+    note = None                     # no list of included sections on the cover
     cover_png = make_cover_png(rep["type"], rep.get("cover_name") or rep["name"], rep["report_date"].strftime("%d/%m/%Y"),
                                rep["school"] or "", note=note)
     cp = doc.paragraphs[0] if doc.paragraphs else doc.add_paragraph()
