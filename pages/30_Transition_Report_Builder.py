@@ -2795,6 +2795,25 @@ def ai_draft(section, initials, ctx):
                   "Write 2-3 sentences describing the attendance pattern (e.g. part-time timetable, absences, early finishes "
                   "or day ends used to avoid escalation, late arrivals), framed supportively. Do not restate the total days "
                   'attended (it is shown separately). Return JSON: {"text": "<2-3 sentences>"}')
+    elif section == "sw":
+        prompt = (f"Sounds-Write phonics assessment results for student {initials}:\n{data}\n\n"
+                  "For EACH skill listed, write a 'summary of outcome' of 1-2 sentences for a report table: what the score "
+                  "shows the student can do now in that skill (and the growth from pre to post if both are given), then the "
+                  "next step for that skill in Sounds-Write terms (e.g. consolidating the initial code, moving into the "
+                  "extended code, two- and multi-syllable words, automaticity). Use the exact skill names given. Base the "
+                  "judgement on the scores and percentages; don't invent scores. Return JSON: "
+                  '{"items": [{"name": "<skill, exactly as given>", "text": "<1-2 sentences>"}]}')
+    elif section == "literacy":
+        prompt = (f"Literacy assessment results for student {initials}:\n{data}\n\n"
+                  "Write the Literacy summary for the report, covering Word Aware (vocabulary) and Sounds-Write "
+                  "(phonics), as two short paragraphs (about 120-180 words in total):\n"
+                  "1) The student's current literacy ability: vocabulary, and phonics skills (blending, segmenting, phoneme "
+                  "manipulation, code knowledge, non-word reading) — strengths first, then the areas still developing, "
+                  "and the growth from pre to post where both scores exist.\n"
+                  "2) Start with 'Next steps:' — the next progression in the student's learning: what to teach next in "
+                  "Sounds-Write and in Word Aware vocabulary, concrete enough for the next teacher to act on.\n"
+                  "Only use the results given; if a skill wasn't assessed, don't comment on it. Separate the paragraphs "
+                  'with a blank line. Return JSON: {"text": "<paragraphs>"}')
     elif section == "recommendations":
         prompt = (f"Data about student {initials}:\n{data}\n\nWrite Transition Recommendations for the staff at the school "
                   f"{initials} is moving to. Give 6-10 specific, practical recommendations drawn ONLY from the data: what to put "
@@ -2833,6 +2852,17 @@ def ai_draft(section, initials, ctx):
                 els = [e for e in HITS_ELEMENTS[nm] if e.lower() in {str(x).strip().lower() for x in it.get("elements") or []}]
                 items.append({"name": nm, "elements": els, "text": str(it["text"]).strip()})
         return {"items": items}
+    if section == "sw":
+        names = [sk for sk, _ in SOUNDS_WRITE]
+        items = []
+        for it in out.get("items") or []:
+            nm = next((n_ for n_ in names if n_.lower() == str(it.get("name", "")).strip().lower()
+                       or n_.lower().startswith(str(it.get("name", "")).strip().lower()[:8])), None) \
+                if isinstance(it, dict) and str(it.get("name", "")).strip() else None
+            if nm and it.get("text") and nm not in [x["name"] for x in items]:
+                items.append({"name": nm, "text": str(it["text"]).strip()})
+        assessed = {x["skill"] for x in ctx.get("sounds_write") or []}
+        return {"items": [x for x in items if x["name"] in assessed]}
     if section == "restorative":
         items = []
         for it in out.get("items") or []:
@@ -2850,9 +2880,55 @@ def ai_draft(section, initials, ctx):
     return res
 
 
+LITERACY_SECTIONS = ("sw", "literacy")
+
+
+def _pct(score, mx):
+    try:
+        return round(float(score) / float(mx) * 100)
+    except Exception:
+        return None
+
+
+def literacy_context(initials):
+    """Only the literacy assessment results entered in this report — no Behaviour Support data needed."""
+    rows = st.session_state.get("tr_sw_latest") or st.session_state.get("tr_sw_base") or []
+    sw = []
+    for (skill, mx), r in zip(SOUNDS_WRITE, rows):
+        pre, post = str(r.get("Pre") or "").strip(), str(r.get("Post") or "").strip()
+        if not (pre or post):
+            continue
+        sw.append({"skill": skill, "what_it_assesses": SOUNDS_WRITE_DESC.get(skill, ""), "max_score": mx,
+                   "pre": pre or None, "post": post or None, "pre_percent": _pct(pre, mx), "post_percent": _pct(post, mx),
+                   "band_now": (lambda p_: None if p_ is None else "Mastered" if p_ >= 90 else "Developing" if p_ >= 70
+                                else "Needs improvement")(_pct(post or pre, mx)),
+                   "teacher_notes": str(r.get("Summary") or "").strip() or None})
+    wa = {k: (st.session_state.get(f"tr_vocab_{k}") or "").strip() for k in ("type", "pre", "post")}
+    return {"student": initials, "program": st.session_state.get("_tr_program") or "",
+            "word_aware_vocabulary": {k: v for k, v in wa.items() if v} or None,
+            "sounds_write": sw,
+            "score_bands": "Mastered 90-100%, Developing 70-89%, Needs improvement under 70%"}
+
+
 def run_ai_draft(section, initials, report_start, report_end):
     """Button callback: build the context, ask the AI, keep the draft for review."""
     st.session_state.pop(f"tr_aiedit_{section}", None)
+    if section in LITERACY_SECTIONS:
+        try:
+            ctx = literacy_context(initials)
+            if section == "sw" and not ctx["sounds_write"]:
+                st.session_state["tr_ai_sw"] = {"error": "Enter at least one Pre or Post score in the Sounds-Write table first."}
+                return
+            if section == "literacy" and not ctx["sounds_write"] and not ctx["word_aware_vocabulary"]:
+                st.session_state["tr_ai_literacy"] = {"error": "Enter the Word Aware and/or Sounds-Write scores first."}
+                return
+            d_ = ai_draft(section, initials, ctx)
+            if not d_.get("items") and not d_.get("text"):
+                d_ = {"error": "The AI couldn't draft this from the scores entered."}
+            st.session_state[f"tr_ai_{section}"] = d_
+        except Exception as e:
+            st.session_state[f"tr_ai_{section}"] = {"error": f"Couldn't create a draft: {e}"}
+        return
     try:
         ctx, problem = bst_context(initials, report_start, report_end)
         if problem:
@@ -2878,6 +2954,22 @@ def accept_ai_draft(section):
     """Add (or add the edited version of) a draft to the report fields."""
     d_ = st.session_state.get(f"tr_ai_{section}") or {}
     editing = st.session_state.get(f"tr_aiedit_{section}")
+    if section == "sw":
+        rows = [dict(r) for r in (st.session_state.get("tr_sw_latest") or st.session_state.get("tr_sw_base") or
+                                  [{"Pre": "", "Post": "", "Summary": ""} for _ in SOUNDS_WRITE])]
+        names = [sk for sk, _ in SOUNDS_WRITE]
+        for n_, it in enumerate(d_.get("items") or []):
+            if editing and not st.session_state.get(f"tr_aikeep_{section}_{n_}", True):
+                continue
+            text = ((st.session_state.get(f"tr_aitext_{section}_{n_}") if editing else it["text"]) or "").strip()
+            if text and it["name"] in names:
+                rows[names.index(it["name"])]["Summary"] = text      # replaces that skill's summary
+        st.session_state["tr_sw_base"] = rows
+        st.session_state["tr_sw_latest"] = rows
+        st.session_state["tr_sw_v"] = st.session_state.get("tr_sw_v", 0) + 1   # reload the table with the new text
+        discard_ai_draft(section)
+        st.session_state["tr_ai_added_note"] = "Added to the Summary column — check the wording in the table."
+        return
     if section in ("hits", "restorative"):
         list_key, opts = ("tr_hits", HITS_OPTIONS) if section == "hits" else ("tr_rp", RP_OPTIONS)
         chosen = list(st.session_state.get(list_key) or [])
@@ -2906,7 +2998,7 @@ def accept_ai_draft(section):
             if text.strip():
                 _append("tr_att_comment", text.strip())
         elif text.strip():
-            _append("tr_recs" if section == "recommendations" else "tr_summary", text.strip())
+            _append({"recommendations": "tr_recs", "literacy": "tr_vocab_summary"}.get(section, "tr_summary"), text.strip())
     discard_ai_draft(section)
     st.session_state["tr_ai_added_note"] = "Added to the report — check the wording below."
 
@@ -2921,7 +3013,7 @@ def discard_ai_draft(section):
 def edit_ai_draft(section):
     d_ = st.session_state.get(f"tr_ai_{section}") or {}
     st.session_state[f"tr_aiedit_{section}"] = True
-    if section in ("hits", "restorative"):
+    if section in ("hits", "restorative", "sw"):
         for n_, it in enumerate(d_.get("items") or []):
             st.session_state[f"tr_aitext_{section}_{n_}"] = it["text"]
             st.session_state[f"tr_aikeep_{section}_{n_}"] = True
@@ -2932,11 +3024,14 @@ def edit_ai_draft(section):
 def ai_draft_box(section, initials, report_start, report_end):
     """The '✨ Draft from Behaviour Support data' control + its italic suggestion with Add / Edit / Discard."""
     d_ = st.session_state.get(f"tr_ai_{section}")
+    lit = section in LITERACY_SECTIONS
     if not d_:
-        st.button("✨ Draft from Behaviour Support data", key=f"tr_aibtn_{section}",
+        st.button({"sw": "✨ Draft skill summaries from the scores", "literacy": "✨ Draft literacy summary and next steps"}
+                  .get(section, "✨ Draft from Behaviour Support data"), key=f"tr_aibtn_{section}",
                   on_click=run_ai_draft, args=(section, initials, report_start, report_end),
-                  help="Uses AI to suggest wording from this student's Behaviour Support Tool records. "
-                       "Nothing is added until you choose Add.")
+                  help=("Uses AI to suggest wording from the assessment scores entered above. " if lit else
+                        "Uses AI to suggest wording from this student's Behaviour Support Tool records. ")
+                       + "Nothing is added until you choose Add.")
         if st.session_state.get("tr_ai_added_note"):
             st.caption("✅ " + st.session_state.pop("tr_ai_added_note"))
         return
@@ -2945,9 +3040,10 @@ def ai_draft_box(section, initials, report_start, report_end):
         st.button("Close", key=f"tr_aiclose_{section}", on_click=discard_ai_draft, args=(section,))
         return
     with st.container(border=True):
-        st.markdown("**✨ AI draft from Behaviour Support data** — *a suggestion only; check it before adding.*")
+        st.markdown(("**✨ AI draft from the assessment scores**" if lit else "**✨ AI draft from Behaviour Support data**")
+                    + " — *a suggestion only; check it before adding.*")
         editing = st.session_state.get(f"tr_aiedit_{section}")
-        if section in ("hits", "restorative"):
+        if section in ("hits", "restorative", "sw"):
             for n_, it in enumerate(d_.get("items") or []):
                 if editing:
                     st.checkbox(f"Include **{it['name']}**", key=f"tr_aikeep_{section}_{n_}")
@@ -2960,7 +3056,7 @@ def ai_draft_box(section, initials, report_start, report_end):
                 st.markdown(f"**From attendance records:** {d_['days_attended']} of {d_['expected_days']} expected days attended "
                             "(these numbers will fill the Days Attended / Total Days boxes).")
             if editing:
-                st.text_area("Draft", key=f"tr_aitext_{section}_0", height=260 if section in ("summary", "recommendations") else 130,
+                st.text_area("Draft", key=f"tr_aitext_{section}_0", height=260 if section in ("summary", "recommendations", "literacy") else 130,
                              label_visibility="collapsed")
             elif d_.get("text"):
                 st.markdown("\n\n".join(f"*{ln_.strip()}*" for ln_ in d_["text"].split("\n") if ln_.strip()))
@@ -3357,6 +3453,7 @@ if not picked:
 with st.sidebar:
     student = reg_by_id[picked]
     INITIALS = student["initials"]
+    st.session_state["_tr_program"] = student.get("program") or ""
 
     # keep entered values even while a section is hidden (Modified Report) — Streamlit
     # otherwise drops a widget's value when the widget isn't shown
@@ -3454,7 +3551,6 @@ with tab1:
         lc1.text_input("Pre-Assessment Type", key="tr_vocab_type")
         lc2.text_input("Pre Score", key="tr_vocab_pre", placeholder="/5")
         lc3.text_input("Post Score", key="tr_vocab_post", placeholder="/5")
-        st.text_area("Summary", key="tr_vocab_summary", height=80)
 
         st.markdown("**Sounds-Write Assessments**")
         st.caption("Leave blank if not assessed")
@@ -3473,6 +3569,13 @@ with tab1:
                            "Summary": st.column_config.TextColumn(width="large")},
         )
         st.session_state["tr_sw_latest"] = edited_sw[["Pre", "Post", "Summary"]].fillna("").to_dict("records")
+        ai_draft_box("sw", INITIALS, placement_start, placement_end)
+
+        st.markdown("**Literacy summary — Word Aware and Sounds-Write**")
+        st.caption("The student's current literacy ability and the next progression in their learning.")
+        ai_draft_box("literacy", INITIALS, placement_start, placement_end)
+        st.text_area("Literacy summary", key="tr_vocab_summary", height=150, label_visibility="collapsed",
+                     placeholder="Current ability in vocabulary and phonics… Next steps: …")
         st.markdown("---")
 
     if inc("numeracy"):
@@ -4163,7 +4266,8 @@ def build_docx(rep):
         v = rep["vocab"]
         if v["type"] or v["pre"] or v["post"]:
             table([["Assessment", "Pre", "Post"], [v["type"] or "—", v["pre"] or "—", v["post"] or "—"]])
-        para(v["summary"])
+        else:
+            para("", empty="Not assessed.")
         sub("Linguistics and Phonics (Sounds-Write)")
         blurb(BLURB["sounds_write"])
         if rep["sounds_write"]:
@@ -4191,6 +4295,8 @@ def build_docx(rep):
                     row_.cells[j_].width = w
         else:
             para("", empty="Not assessed.")
+        sub("Literacy summary and next steps")
+        paras(v["summary"])
 
     if "numeracy" in rep["sections"]:
         heading("Numeracy Progress")
@@ -4604,12 +4710,13 @@ with tab2:
         v = rep["vocab"]
         if v["pre"] or v["post"]:
             st.write(f"Word Aware ({v['type'] or 'assessment'}): pre {v['pre'] or '—'}, post {v['post'] or '—'}")
-        if v["summary"]:
-            st.write(v["summary"])
         if rep["sounds_write"]:
             st.dataframe(pd.DataFrame(rep["sounds_write"]).rename(columns={
                 "skill": "Skill", "max": "Max", "pre": "Pre", "post": "Post", "change": "Change", "summary": "Summary"}),
                 hide_index=True, use_container_width=True)
+        if v["summary"]:
+            st.markdown("**Literacy summary and next steps**")
+            st.write(v["summary"])
     if "numeracy" in rep["sections"]:
         st.markdown("#### Numeracy Progress")
         st.caption(BLURB["biin"])
