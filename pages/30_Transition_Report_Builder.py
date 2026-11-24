@@ -2665,6 +2665,40 @@ def _bst_incident_summary(incidents, criticals, start, end):
     }
 
 
+WOT_AI_MEANING = {
+    "hyper": "Hyperarousal (fight/flight) — out of the window, escalated",
+    "copingup": "Coping, early warning — leaving the window and escalating (the behaviours here ARE early warning signs)",
+    "wot": "Window of Tolerance — regulated, calm and ready to learn",
+    "copingdown": "Coping, early withdrawal — leaving the window and shutting down (the behaviours here ARE early warning signs)",
+    "hypo": "Hypoarousal (freeze/shutdown) — out of the window, withdrawn",
+}
+
+
+def wot_for_ai():
+    """The student's Window of Tolerance (as pulled into this report, else the latest in the WoT Builder), labelled so
+    the AI reads Context as triggers, Behaviour descriptors as early warning signs, and Interventions as what helps."""
+    wot = st.session_state.get("tr_wot")
+    if not wot and st.session_state.get("_tr_student"):
+        try:
+            wot = load_wot_report(st.session_state["_tr_student"])
+        except Exception:
+            wot = None
+    if not wot or not wot.get("data"):
+        return None
+    zones = {}
+    for z in WOT_ZONES:
+        d_ = wot["data"].get(z["id"]) or {}
+        items = {"context_triggers": d_.get("context") or [], "behaviour_descriptors": d_.get("behaviour") or [],
+                 "interventions_that_help": d_.get("interventions") or []}
+        if any(items.values()):
+            zones[WOT_AI_MEANING.get(z["id"], z["name"])] = {k: v for k, v in items.items() if v}
+    out = {"zones": zones} if zones else {}
+    reg = (st.session_state.get("tr_regulation") or "").strip()
+    if reg:
+        out["regulation_profile_notes"] = reg
+    return out or None
+
+
 def bst_context(initials, report_start=None, report_end=None):
     """Everything the AI drafts are allowed to use, for one student. Returns (context, problem)."""
     if _smartar_client() is None:
@@ -2701,6 +2735,7 @@ def bst_context(initials, report_start=None, report_end=None):
            "attendance": attendance, "incidents": incidents, "support_plan": plan,
            "strategy_trials": trials, "starting_profile": profile,
            "smartar_goals": st.session_state.get("tr_goal_digest", []),
+           "window_of_tolerance": wot_for_ai(),
            "strategies_already_in_this_report": {
                "teaching_strategies": list(st.session_state.get("tr_hits") or []),
                "restorative_strategies": list(st.session_state.get("tr_rp") or [])}}
@@ -2783,11 +2818,30 @@ AI_SYSTEM = ("You write sections of student reports for Cowandilla Learning Cent
              "education setting using the Berry Street Education Model (BSEM) and restorative practice. Write in "
              "Australian English, third person, warm, professional and strengths-based. Refer to the student ONLY by "
              "the initials given. Use ONLY facts in the data provided — never invent events, numbers, people or "
-             "strategies. If the data doesn't support something, leave it out. Never mention incident severity, severity "
+             "strategies. If the data doesn't support something, leave it out. The Window of Tolerance, where given, is the "
+             "record of the student's triggers (context), early warning signs (behaviour descriptors, especially in "
+             "the two Coping zones) and the interventions that help. NEVER say the student had no triggers, no early "
+             "warning signs or found nothing challenging: few or no incidents, or no critical incidents, means staff "
+             "supported the student to stay in or return to their window — not that nothing was hard for them. "
+             "Never mention incident severity, severity "
              "ratings or scores, or describe incidents as severe. Return ONLY valid JSON.")
 
 
 _SEVERITY_RX = re.compile(r"\bseverit|\bsevere", re.I)
+# claims the Window of Tolerance contradicts
+_NO_TRIGGER_RX = re.compile(
+    r"\b(?:no|without|lack of|absence of|did not (?:show|display|have|identify)|didn't (?:show|have))\s+(?:any\s+)?"
+    r"(?:clear\s+|noted\s+|identified\s+|identifiable\s+|recorded\s+|obvious\s+|specific\s+|known\s+)?"
+    r"(?:triggers?|early warning signs?|warning signs?|antecedents?|challenges|difficulties)"
+    r"|\bno\s+(?:particular\s+)?(?:situations?|contexts?)\s+(?:were|was)\s+(?:challenging|difficult)"
+    r"|\bdid not find [^.]{0,40}(?:challenging|difficult)", re.I)
+
+
+def _drop_sentences(text, rx):
+    out = []
+    for para_ in str(text or "").split("\n"):
+        out.append(" ".join(x for x in re.split(r"(?<=[.!?])\s+", para_) if not rx.search(x)))
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
 
 
 def _drop_severity(text):
@@ -2923,11 +2977,14 @@ def ai_draft(section, initials, ctx):
     else:
         prompt = (f"Data about student {initials}:\n{data}\n\nWrite the Overall Progress Summary as 3 short paragraphs "
                   "(about 200-280 words in total), elaborating on what the Behaviour Support Tool shows about the student:\n"
-                  "1) Who the student is and their behaviour profile: strengths and interests, the behaviours seen, the most "
-                  "common triggers, times, days and places, the likely functions of behaviour, early warning signs, and how "
+                  "1) Who the student is and their behaviour profile: strengths and interests; from the Window of "
+                  "Tolerance, the contexts/triggers that move them into the Coping zones and the early warning signs "
+                  "(behaviour descriptors) that show it; the behaviours seen, the most common triggers, times, days and "
+                  "places in the incident records, the likely functions of behaviour, and how "
                   "incidents changed from the first to the second half of the placement (frequency, critical "
                   "incidents, days since the last incident).\n"
-                  "2) What helped: support plan strategies and adjustments, staff responses, regulation/recovery supports, "
+                  "2) What helped: the interventions from the Window of Tolerance, support plan strategies and adjustments, "
+                  "staff responses, regulation/recovery supports, "
                   "strategy trials and what was learned (including anything that didn't help), and SMARTAR goal progress.\n"
                   "3) Attendance and engagement, then a forward-looking closing on readiness for transition.\n"
                   "Only include points the data supports; skip any that it doesn't. Separate paragraphs with a blank line. "
@@ -2943,6 +3000,12 @@ def ai_draft(section, initials, ctx):
         out["text"] = _text_from(out)
     if "text" in out:
         out["text"] = _drop_severity(out["text"])
+    if ctx.get("window_of_tolerance"):          # the WoT records triggers + early warning signs — never deny them
+        if out.get("text"):
+            out["text"] = _drop_sentences(out["text"], _NO_TRIGGER_RX)
+        for it in out.get("items") or []:
+            if isinstance(it, dict) and it.get("text"):
+                it["text"] = _drop_sentences(it["text"], _NO_TRIGGER_RX)
     if section == "hits":
         items = []
         for it in out.get("items") or []:
@@ -3597,6 +3660,7 @@ with st.sidebar:
     student = reg_by_id[picked]
     INITIALS = student["initials"]
     st.session_state["_tr_program"] = student.get("program") or ""
+    st.session_state["_tr_student"] = {"id": student.get("id"), "initials": INITIALS}
 
     # keep entered values even while a section is hidden (Modified Report) — Streamlit
     # otherwise drops a widget's value when the widget isn't shown
