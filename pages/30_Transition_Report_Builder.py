@@ -4522,37 +4522,59 @@ def build_docx(rep):
                 shd = OxmlElement("w:shd"); shd.set(qn("w:val"), "clear"); shd.set(qn("w:color"), "auto"); shd.set(qn("w:fill"), fill)
                 rPr.append(shd)
                 lg.add_run("  ")
-            bt = doc.add_table(rows=1 + len(rep["biin"]), cols=5)
+            # one block of rows per big idea; Big idea and Summary cells are merged down the block
+            comments = dict(rep["biin_comments"])
+            blocks = []
+            for bi_name, _ in BIIN:
+                rows_ = [r for r in rep["biin"] if r["big_idea"] == bi_name]
+                if rows_ or (comments.get(bi_name) or "").strip():
+                    blocks.append((bi_name, rows_ or [{"element": "Not assessed", "pre": "", "post": "", "progress": ""}],
+                                   (comments.get(bi_name) or "").strip()))
+            n_rows = sum(len(r_) for _, r_, _ in blocks)
+            bt = doc.add_table(rows=1 + n_rows, cols=6)
             bt.style = "Table Grid"
-            for j, h in enumerate(["Big idea", "Element", "Pre", "Post", "Progress"]):
+            bt.autofit = False
+            widths = [Cm(2.5), Cm(3.4), Cm(2.4), Cm(2.4), Cm(1.8), Cm(5.4)]
+            for j, h in enumerate(["Big idea", "Element", "Pre", "Post", "Progress", "Summary of outcome"]):
                 c = bt.cell(0, j)
                 run = c.paragraphs[0].add_run(h); run.bold = True; run.font.size = Pt(9)
                 shade(c, "EEF2EC")
-            prev = None
-            for i, row in enumerate(rep["biin"], start=1):
-                vals = [row["big_idea"] if row["big_idea"] != prev else "", row["element"], row["pre"] or "—",
-                        row["post"] or "—", row["progress"]]
-                prev = row["big_idea"]
-                for j, val in enumerate(vals):
-                    c = bt.cell(i, j)
-                    run = c.paragraphs[0].add_run(val); run.font.size = Pt(9)
-                    if j == 0 and val:
-                        run.bold = True
-                    if j in (2, 3) and val in BIIN_FILL:
-                        shade(c, BIIN_FILL[val])
+            trPr = bt.rows[0]._tr.get_or_add_trPr(); th_ = OxmlElement("w:tblHeader"); th_.set(qn("w:val"), "true"); trPr.append(th_)
+            ri = 1
+            for bi_name, rows_, comment in blocks:
+                first, last = ri, ri + len(rows_) - 1
+                for row in rows_:
+                    vals = [row["element"], row["pre"] or "—", row["post"] or "—", row["progress"] or ""]
+                    for j, val in enumerate(vals, start=1):
+                        c = bt.cell(ri, j)
+                        run = c.paragraphs[0].add_run(val); run.font.size = Pt(8.5)
+                        if row["element"] == "Not assessed":
+                            run.italic = True
+                        if j in (2, 3) and val in BIIN_FILL:
+                            shade(c, BIIN_FILL[val])
+                    tr_ = bt.rows[ri]._tr.get_or_add_trPr(); cs_ = OxmlElement("w:cantSplit"); tr_.append(cs_)
+                    ri += 1
+                bc = bt.cell(first, 0).merge(bt.cell(last, 0)) if last > first else bt.cell(first, 0)
+                br = bc.paragraphs[0].add_run(bi_name); br.bold = True; br.font.size = Pt(9)
+                sc = bt.cell(first, 5).merge(bt.cell(last, 5)) if last > first else bt.cell(first, 5)
+                for k_, ln in enumerate([x.strip() for x in comment.split("\n") if x.strip()] or [""]):
+                    p_ = sc.paragraphs[0] if k_ == 0 else sc.add_paragraph()
+                    p_.add_run(ln).font.size = Pt(8.5)
+                for cell_ in (bc, sc):
+                    cell_.vertical_alignment = 0            # top
+            for j, w in enumerate(widths):
+                bt.columns[j].width = w                       # grid widths (Word + LibreOffice honour these)
             for row_ in bt.rows:
-                for j, w in enumerate([Cm(3.6), Cm(5.4), Cm(2.9), Cm(2.9), Cm(2.6)]):
+                for j, w in enumerate(widths):
                     row_.cells[j].width = w
         else:
             para("", empty="Not assessed.")
-        any_comment = False
-        for bi_name, comment in rep["biin_comments"]:
-            if comment.strip():
-                any_comment = True
-                p = doc.add_paragraph()
-                p.paragraph_format.space_before = Pt(4)
-                p.add_run(f"{bi_name} — ").bold = True
-                p.add_run(comment.strip())
+            for bi_name, comment in rep["biin_comments"]:      # comments without any results entered
+                if comment.strip():
+                    p = doc.add_paragraph()
+                    p.paragraph_format.space_before = Pt(4)
+                    p.add_run(f"{bi_name} — ").bold = True
+                    p.add_run(comment.strip())
         if rep["numeracy"].strip():
             sub("Numeracy summary and next steps")
             paras(rep["numeracy"])
@@ -4931,16 +4953,37 @@ with tab2:
         st.markdown("#### Numeracy Progress")
         st.caption(BLURB["biin"])
         if rep["biin"]:
-            _fill = {k: "#" + v for k, v in BIIN_FILL.items()}
-            bdf = pd.DataFrame(rep["biin"]).rename(columns={"big_idea": "Big idea", "element": "Element", "pre": "Pre",
-                                                             "post": "Post", "progress": "Progress"})
-            st.dataframe(bdf.style.map(lambda v: f"background-color:{_fill[v]}" if v in _fill else "", subset=["Pre", "Post"]),
-                         hide_index=True, use_container_width=True)
+            import html as _h
+            _comments = dict(rep["biin_comments"])
+            td = "border:1px solid #cfd6cc;padding:5px;vertical-align:top"
+            html_ = ("<table style='width:100%;border-collapse:collapse;font-size:0.8rem'><tr>" +
+                     "".join(f"<th style='{td};background:#EEF2EC;text-align:left'>{h}</th>"
+                             for h in ["Big idea", "Element", "Pre", "Post", "Progress", "Summary of outcome"]) + "</tr>")
+            for bi_name, _ in BIIN:
+                rows_ = [r for r in rep["biin"] if r["big_idea"] == bi_name]
+                com = (_comments.get(bi_name) or "").strip()
+                if not rows_ and not com:
+                    continue
+                rows_ = rows_ or [{"element": "<i>Not assessed</i>", "pre": "", "post": "", "progress": ""}]
+                for k_, r in enumerate(rows_):
+                    html_ += "<tr>"
+                    if k_ == 0:
+                        html_ += f"<td rowspan='{len(rows_)}' style='{td};font-weight:600'>{_h.escape(bi_name)}</td>"
+                    html_ += f"<td style='{td}'>{r['element']}</td>"
+                    for v in (r["pre"], r["post"]):
+                        bg = "#" + BIIN_FILL[v] if v in BIIN_FILL else "transparent"
+                        html_ += f"<td style='{td};background:{bg}'>{_h.escape(v or '—')}</td>"
+                    html_ += f"<td style='{td}'>{_h.escape(r['progress'] or '')}</td>"
+                    if k_ == 0:
+                        html_ += (f"<td rowspan='{len(rows_)}' style='{td}'>"
+                                  + _h.escape(com).replace(chr(10), "<br>") + "</td>")
+                    html_ += "</tr>"
+            st.markdown(html_ + "</table>", unsafe_allow_html=True)
         else:
             st.write("_BIiN not assessed._")
-        for bi_name, comment in rep["biin_comments"]:
-            if comment.strip():
-                st.write(f"**{bi_name}** — {comment}")
+            for bi_name, comment in rep["biin_comments"]:
+                if comment.strip():
+                    st.write(f"**{bi_name}** — {comment}")
         if rep["numeracy"]:
             st.markdown("**Numeracy summary and next steps**")
             st.write(rep["numeracy"])
