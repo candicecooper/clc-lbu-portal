@@ -46,7 +46,6 @@ VEHICLES = {
 }
 WORKSITE = "Cowandilla Learning Centre — LBU"
 TABLE = "vehicle_log"
-TRIP_TYPES = ["Business", "Private"]
 BIG_TRIP_KM = 500  # warn (not block) above this
 
 
@@ -152,7 +151,7 @@ DISPLAY_COLS = {
     "trip_date": "Date", "vehicle": "Vehicle", "rego": "Rego", "driver": "Driver",
     "start_odo": "Start odo", "end_odo": "End odo", "total_km": "Total km",
     "from_location": "From", "to_location": "To", "purpose": "Purpose of trip",
-    "trip_type": "Private / Business", "fuel_notes": "Fuel / notes",
+    "fuel_notes": "Fuel / notes",
 }
 
 
@@ -189,14 +188,11 @@ def summary_table(df):
     for key, v in VEHICLES.items():
         sub = df[df["vehicle"] == key] if not df.empty else df
         km = (sub["end_odo"] - sub["start_odo"]) if not sub.empty else pd.Series(dtype=int)
-        bus = km[sub["trip_type"] == "Business"].sum() if not sub.empty else 0
-        prv = km[sub["trip_type"] == "Private"].sum() if not sub.empty else 0
         fuel = sub["fuel_cost"].fillna(0).sum() if not sub.empty and "fuel_cost" in sub else 0
         rows.append({
             "Vehicle": f"{v['label']} — {v['rego']}",
             "Trips": len(sub),
             "Total km": int(km.sum()) if len(km) else 0,
-            "Business km": int(bus), "Private km": int(prv),
             "Odometer start": int(sub["start_odo"].min()) if not sub.empty else None,
             "Odometer end": int(sub["end_odo"].max()) if not sub.empty else None,
             "Fuel cost": f"${fuel:,.2f}",
@@ -315,8 +311,8 @@ def build_word(df, period_text):
 
         heading("Trip entries")
         heads = ["Date", "Driver", "Start odo", "End odo", "Total km", "From", "To",
-                 "Purpose of trip", "Private / Business", "Fuel / notes"]
-        widths = [2.0, 3.0, 2.0, 2.0, 1.7, 3.2, 3.2, 4.6, 2.2, 2.8]
+                 "Purpose of trip", "Fuel / notes"]
+        widths = [2.0, 3.0, 2.0, 2.0, 1.7, 3.6, 3.6, 5.6, 3.6]
         rows = max(len(sub), 10)
         t = doc.add_table(rows=1 + rows + 1, cols=len(heads))
         t.style = "Table Grid"
@@ -335,7 +331,7 @@ def build_word(df, period_text):
                 pd.to_datetime(row["trip_date"]).strftime("%d/%m/%Y"), row["driver"],
                 int(row["start_odo"]), int(row["end_odo"]), km,
                 row.get("from_location"), row.get("to_location"), row.get("purpose"),
-                row.get("trip_type"), fuel_notes(row),
+                fuel_notes(row),
             ]
             for j, val in enumerate(vals):
                 cell_text(t.cell(i, j), val)
@@ -463,9 +459,7 @@ with tab_log:
         purpose = st.text_input("Purpose of trip",
                                 placeholder="e.g. PY excursion, student transport, collecting supplies")
 
-        c6, c7 = st.columns([1, 2])
-        trip_type = c6.radio("Private / Business", TRIP_TYPES, horizontal=True)
-        fuel_added = c7.checkbox("I added fuel on this trip")
+        fuel_added = st.checkbox("I added fuel on this trip")
         c8, c9 = st.columns(2)
         fuel_litres = c8.number_input("Litres (if fuel added)", min_value=0.0, step=0.1, format="%.1f")
         fuel_cost = c9.number_input("Cost $ (if fuel added)", min_value=0.0, step=0.01, format="%.2f")
@@ -498,7 +492,7 @@ with tab_log:
                 "trip_date": trip_date.isoformat(), "vehicle": vkey, "rego": VEHICLES[vkey]["rego"],
                 "driver": driver, "start_odo": int(start_odo), "end_odo": int(end_odo),
                 "from_location": from_loc.strip(), "to_location": to_loc.strip(),
-                "purpose": purpose.strip(), "trip_type": trip_type,
+                "purpose": purpose.strip(),
                 "fuel_added": bool(fuel_added),
                 "fuel_litres": float(fuel_litres) if fuel_added and fuel_litres else None,
                 "fuel_cost": float(fuel_cost) if fuel_added and fuel_cost else None,
@@ -603,8 +597,6 @@ with tab_admin:
                     f_from = a.text_input("From", value=r.get("from_location") or "")
                     f_to = b.text_input("To", value=r.get("to_location") or "")
                     f_purpose = st.text_input("Purpose", value=r.get("purpose") or "")
-                    f_type = st.radio("Private / Business", TRIP_TYPES, horizontal=True,
-                                      index=TRIP_TYPES.index(r.get("trip_type") or "Business"))
                     f_notes = st.text_area("Notes", value=r.get("notes") or "")
                     save = st.form_submit_button("💾 Save changes", type="primary")
                 if save:
@@ -617,7 +609,7 @@ with tab_admin:
                                 "end_odo": int(f_end), "driver": f_driver.strip(),
                                 "vehicle": f_vehicle, "rego": VEHICLES[f_vehicle]["rego"],
                                 "from_location": f_from.strip(), "to_location": f_to.strip(),
-                                "purpose": f_purpose.strip(), "trip_type": f_type,
+                                "purpose": f_purpose.strip(),
                                 "notes": f_notes.strip() or None,
                             }).eq("id", pick).execute()
                             st.session_state["_vl_notice"] = "✅ Entry updated."
