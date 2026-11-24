@@ -1714,19 +1714,29 @@
       }
       if(key === "they") return toks.map(function(t){ return t.t; }).join("");
       // 2) they / them / their / theirs / themselves -> he/she forms
+      var subjActive = false; // a converted subject is still "in force" ("he's hungry or hasn't eaten")
       for(i = 0; i < toks.length; i++){
         var tk = toks[i];
-        if(!tk.w || tk.done) continue;
+        if(!tk.w){ if(/[.,;:!?()\u2014\u2013]/.test(tk.t)) subjActive = false; continue; }
+        if(tk.done) continue;
         lw = pnLower(tk.t);
+        if(subjActive && (lw === "and" || lw === "or" || lw === "but")){
+          var cj = pnNextWord(toks, i);
+          if(cj !== -1 && !toks[cj].done && PN_TO_SINGULAR[pnLower(toks[cj].t)]){
+            toks[cj] = { w:true, t:pnMatchCase(toks[cj].t, PN_TO_SINGULAR[pnLower(toks[cj].t)]), done:true };
+          }
+          continue;
+        }
         var rep = null;
         if(lw === "they"){
+          subjActive = true;
           rep = P.subj;
           var vi = pnVerbIndex(toks, i);
           if(vi !== -1 && !toks[vi].done){ toks[vi] = { w:true, t:pnSingularVerb(toks[vi].t), done:true }; }
         }
-        else if(lw === "they're" || lw === "they've") rep = P.subj + "'s";
-        else if(lw === "they'd") rep = P.subj + "'d";
-        else if(lw === "they'll") rep = P.subj + "'ll";
+        else if(lw === "they're" || lw === "they've"){ rep = P.subj + "'s"; subjActive = true; }
+        else if(lw === "they'd"){ rep = P.subj + "'d"; subjActive = true; }
+        else if(lw === "they'll"){ rep = P.subj + "'ll"; subjActive = true; }
         else if(lw === "them") rep = P.obj;
         else if(lw === "their") rep = P.poss;
         else if(lw === "theirs") rep = P.possPron;
@@ -2023,7 +2033,13 @@
           COLS.forEach(function(c){
             if(Array.isArray(data[z.id][c])){
               obj[z.id][c] = data[z.id][c].map(function(it){
-                return (typeof it === "string") ? { text: it, src: it } : it;
+                if(typeof it === "string") return { text: it, orig: it };
+                // early version of the pronoun update kept the original wording in "src", which the
+                // Behaviour Support sync also uses (src:"bst") — move it to "orig"
+                if(it && typeof it.src === "string" && it.src !== "bst" && it.src !== "bst-edited" && it.orig === undefined){
+                  it.orig = it.src; delete it.src;
+                }
+                return it;
               }).filter(function(it){ return it && typeof it.text === "string" && it.text.trim(); });
             }
           });
@@ -2416,7 +2432,7 @@
           var edited = text.textContent.trim();
           if(edited && edited !== item.text){
             item.text = state.pronouns ? convertToStudentPronouns(edited, state.pronouns) : edited;
-            item.src = null; // hand-edited: keep the teacher's wording from now on
+            item.orig = null; // hand-edited: keep the teacher's wording from now on
           }
           text.textContent = item.text;
         });
@@ -2484,14 +2500,14 @@
       renderReport();
       return true;
     }
-    list.push({ text: convertToStudentPronouns(text, state.pronouns), src: text, custom: !!custom });
+    list.push({ text: convertToStudentPronouns(text, state.pronouns), orig: text, custom: !!custom });
     renderReport();
     renderBank();
     return true;
   }
 
   function itemMatches(it, text){
-    return it.src === text || it.text === text ||
+    return it.orig === text || it.text === text ||
       (state.pronouns && it.text === convertToStudentPronouns(text, state.pronouns));
   }
   function previewText(text){
@@ -2516,10 +2532,18 @@
     var changed = 0;
     ZONES.forEach(function(z){ COLS.forEach(function(c){
       state.items[z.id][c].forEach(function(it){
-        var next = it.src
-          ? convertToStudentPronouns(it.src, state.pronouns)
+        // a line from the Behaviour Support sync that nobody has reworded: keep its synced_text in
+        // step, so the sync knows a pronoun change is not a staff edit
+        var untouchedSync = typeof it.synced_text === "string" && it.text === it.synced_text;
+        if(untouchedSync && !it.orig) it.orig = it.text;
+        var next = it.orig
+          ? convertToStudentPronouns(it.orig, state.pronouns)
           : convertToStudentPronouns(swapGenderedPronouns(it.text, state.pronouns), state.pronouns);
-        if(next !== it.text){ it.text = next; changed++; }
+        if(next !== it.text){
+          it.text = next;
+          if(untouchedSync) it.synced_text = next;
+          changed++;
+        }
       });
     }); });
     return changed;
