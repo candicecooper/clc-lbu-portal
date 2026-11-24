@@ -2814,6 +2814,23 @@ def ai_draft(section, initials, ctx):
                   "Sounds-Write and in Word Aware vocabulary, concrete enough for the next teacher to act on.\n"
                   "Only use the results given; if a skill wasn't assessed, don't comment on it. Separate the paragraphs "
                   'with a blank line. Return JSON: {"text": "<paragraphs>"}')
+    elif section == "biin":
+        prompt = (f"Big Ideas in Number (BIiN) assessment results for student {initials}:\n{data}\n\n"
+                  "For EACH big idea listed, write a comment of 2-3 sentences for the report: what the student can do now "
+                  "in that big idea (naming the elements mastered or developing, and growth from pre to post where both "
+                  "are given), then the next step in that big idea's learning progression. Use the exact big idea names "
+                  "given and only the results given. Return JSON: "
+                  '{"items": [{"name": "<big idea, exactly as given>", "text": "<2-3 sentences>"}]}')
+    elif section == "numeracy":
+        prompt = (f"Big Ideas in Number (BIiN) assessment results for student {initials}:\n{data}\n\n"
+                  "Write the Numeracy summary for the report as two short paragraphs (about 120-180 words in total):\n"
+                  "1) The student's current numeracy ability across the big ideas assessed (trusting the count, place "
+                  "value, multiplicative thinking, partitioning as relevant) — strengths first, then what is still "
+                  "developing, and growth from pre to post where both results exist.\n"
+                  "2) Start with 'Next steps:' — the next progression in the student's number learning, concrete "
+                  "enough for the next teacher to act on.\n"
+                  "Only use the results given; don't comment on big ideas that weren't assessed. Separate the paragraphs "
+                  'with a blank line. Return JSON: {"text": "<paragraphs>"}')
     elif section == "recommendations":
         prompt = (f"Data about student {initials}:\n{data}\n\nWrite Transition Recommendations for the staff at the school "
                   f"{initials} is moving to. Give 6-10 specific, practical recommendations drawn ONLY from the data: what to put "
@@ -2852,6 +2869,15 @@ def ai_draft(section, initials, ctx):
                 els = [e for e in HITS_ELEMENTS[nm] if e.lower() in {str(x).strip().lower() for x in it.get("elements") or []}]
                 items.append({"name": nm, "elements": els, "text": str(it["text"]).strip()})
         return {"items": items}
+    if section == "biin":
+        names = [b for b, _ in BIIN]
+        assessed = {x["big_idea"] for x in ctx.get("big_ideas_in_number") or []}
+        items = []
+        for it in out.get("items") or []:
+            nm = next((n_ for n_ in names if isinstance(it, dict) and n_.lower() == str(it.get("name", "")).strip().lower()), None)
+            if nm and nm in assessed and it.get("text") and nm not in [x["name"] for x in items]:
+                items.append({"name": nm, "text": str(it["text"]).strip()})
+        return {"items": items}
     if section == "sw":
         names = [sk for sk, _ in SOUNDS_WRITE]
         items = []
@@ -2880,7 +2906,7 @@ def ai_draft(section, initials, ctx):
     return res
 
 
-LITERACY_SECTIONS = ("sw", "literacy")
+LITERACY_SECTIONS = ("sw", "literacy", "biin", "numeracy")   # drafted from scores, not Behaviour Support data
 
 
 def _pct(score, mx):
@@ -2910,16 +2936,36 @@ def literacy_context(initials):
             "score_bands": "Mastered 90-100%, Developing 70-89%, Needs improvement under 70%"}
 
 
+def numeracy_context(initials):
+    """Only the BIiN results entered in this report."""
+    out = []
+    for bi, (big_idea, elements) in enumerate(BIIN):
+        rows = st.session_state.get(f"tr_biin{bi}_latest") or st.session_state.get(f"tr_biin{bi}_base") or []
+        els = []
+        for (code, name), r in zip(elements, rows):
+            pre, post = str(r.get("Pre") or "").strip(), str(r.get("Post") or "").strip()
+            if pre or post:
+                els.append({"element": f"{code} {name}", "pre": pre or None, "post": post or None})
+        if els:
+            out.append({"big_idea": big_idea, "elements_assessed": els,
+                        "teacher_comment": (st.session_state.get(f"tr_biin_c_{bi}") or "").strip() or None})
+    return {"student": initials, "program": st.session_state.get("_tr_program") or "", "big_ideas_in_number": out,
+            "result_scale": "Mastered (90-100%), Developing (70-80%), Needs improvement (under 70%)"}
+
+
 def run_ai_draft(section, initials, report_start, report_end):
     """Button callback: build the context, ask the AI, keep the draft for review."""
     st.session_state.pop(f"tr_aiedit_{section}", None)
     if section in LITERACY_SECTIONS:
         try:
-            ctx = literacy_context(initials)
-            if section == "sw" and not ctx["sounds_write"]:
+            ctx = numeracy_context(initials) if section in ("biin", "numeracy") else literacy_context(initials)
+            if section in ("biin", "numeracy") and not ctx["big_ideas_in_number"]:
+                st.session_state[f"tr_ai_{section}"] = {"error": "Set Pre and/or Post results for at least one BIiN element first."}
+                return
+            if section == "sw" and not ctx.get("sounds_write"):
                 st.session_state["tr_ai_sw"] = {"error": "Enter at least one Pre or Post score in the Sounds-Write table first."}
                 return
-            if section == "literacy" and not ctx["sounds_write"] and not ctx["word_aware_vocabulary"]:
+            if section == "literacy" and not ctx.get("sounds_write") and not ctx.get("word_aware_vocabulary"):
                 st.session_state["tr_ai_literacy"] = {"error": "Enter the Word Aware and/or Sounds-Write scores first."}
                 return
             d_ = ai_draft(section, initials, ctx)
@@ -2970,6 +3016,17 @@ def accept_ai_draft(section):
         discard_ai_draft(section)
         st.session_state["tr_ai_added_note"] = "Added to the Summary column — check the wording in the table."
         return
+    if section == "biin":
+        names = [b for b, _ in BIIN]
+        for n_, it in enumerate(d_.get("items") or []):
+            if editing and not st.session_state.get(f"tr_aikeep_{section}_{n_}", True):
+                continue
+            text = ((st.session_state.get(f"tr_aitext_{section}_{n_}") if editing else it["text"]) or "").strip()
+            if text and it["name"] in names:
+                _append(f"tr_biin_c_{names.index(it['name'])}", text)
+        discard_ai_draft(section)
+        st.session_state["tr_ai_added_note"] = "Added to the comments under each big idea — check the wording."
+        return
     if section in ("hits", "restorative"):
         list_key, opts = ("tr_hits", HITS_OPTIONS) if section == "hits" else ("tr_rp", RP_OPTIONS)
         chosen = list(st.session_state.get(list_key) or [])
@@ -2998,7 +3055,8 @@ def accept_ai_draft(section):
             if text.strip():
                 _append("tr_att_comment", text.strip())
         elif text.strip():
-            _append({"recommendations": "tr_recs", "literacy": "tr_vocab_summary"}.get(section, "tr_summary"), text.strip())
+            _append({"recommendations": "tr_recs", "literacy": "tr_vocab_summary", "numeracy": "tr_numeracy"}
+                    .get(section, "tr_summary"), text.strip())
     discard_ai_draft(section)
     st.session_state["tr_ai_added_note"] = "Added to the report — check the wording below."
 
@@ -3013,7 +3071,7 @@ def discard_ai_draft(section):
 def edit_ai_draft(section):
     d_ = st.session_state.get(f"tr_ai_{section}") or {}
     st.session_state[f"tr_aiedit_{section}"] = True
-    if section in ("hits", "restorative", "sw"):
+    if section in ("hits", "restorative", "sw", "biin"):
         for n_, it in enumerate(d_.get("items") or []):
             st.session_state[f"tr_aitext_{section}_{n_}"] = it["text"]
             st.session_state[f"tr_aikeep_{section}_{n_}"] = True
@@ -3026,7 +3084,8 @@ def ai_draft_box(section, initials, report_start, report_end):
     d_ = st.session_state.get(f"tr_ai_{section}")
     lit = section in LITERACY_SECTIONS
     if not d_:
-        st.button({"sw": "✨ Draft skill summaries from the scores", "literacy": "✨ Draft literacy summary and next steps"}
+        st.button({"sw": "✨ Draft skill summaries from the scores", "literacy": "✨ Draft literacy summary and next steps",
+                   "biin": "✨ Draft a comment for each big idea", "numeracy": "✨ Draft numeracy summary and next steps"}
                   .get(section, "✨ Draft from Behaviour Support data"), key=f"tr_aibtn_{section}",
                   on_click=run_ai_draft, args=(section, initials, report_start, report_end),
                   help=("Uses AI to suggest wording from the assessment scores entered above. " if lit else
@@ -3043,7 +3102,7 @@ def ai_draft_box(section, initials, report_start, report_end):
         st.markdown(("**✨ AI draft from the assessment scores**" if lit else "**✨ AI draft from Behaviour Support data**")
                     + " — *a suggestion only; check it before adding.*")
         editing = st.session_state.get(f"tr_aiedit_{section}")
-        if section in ("hits", "restorative", "sw"):
+        if section in ("hits", "restorative", "sw", "biin"):
             for n_, it in enumerate(d_.get("items") or []):
                 if editing:
                     st.checkbox(f"Include **{it['name']}**", key=f"tr_aikeep_{section}_{n_}")
@@ -3056,7 +3115,7 @@ def ai_draft_box(section, initials, report_start, report_end):
                 st.markdown(f"**From attendance records:** {d_['days_attended']} of {d_['expected_days']} expected days attended "
                             "(these numbers will fill the Days Attended / Total Days boxes).")
             if editing:
-                st.text_area("Draft", key=f"tr_aitext_{section}_0", height=260 if section in ("summary", "recommendations", "literacy") else 130,
+                st.text_area("Draft", key=f"tr_aitext_{section}_0", height=260 if section in ("summary", "recommendations", "literacy", "numeracy") else 130,
                              label_visibility="collapsed")
             elif d_.get("text"):
                 st.markdown("\n\n".join(f"*{ln_.strip()}*" for ln_ in d_["text"].split("\n") if ln_.strip()))
@@ -3601,8 +3660,12 @@ with tab1:
                 st.session_state[f"tr_biin{bi}_latest"] = ed[["Pre", "Post"]].fillna("").to_dict("records")
                 st.text_area(f"Comments — {big_idea}", key=f"tr_biin_c_{bi}", height=90,
                              placeholder=f"What the student can do in {big_idea.lower()}, and what's next…")
-        st.text_area("Overall numeracy comments", key="tr_numeracy", height=110,
-                     placeholder="Overall progress, engagement, and the approaches that supported numeracy learning…")
+        ai_draft_box("biin", INITIALS, placement_start, placement_end)
+        st.markdown("**Numeracy summary — Big Ideas in Number**")
+        st.caption("The student's current numeracy ability and the next progression in their learning.")
+        ai_draft_box("numeracy", INITIALS, placement_start, placement_end)
+        st.text_area("Numeracy summary", key="tr_numeracy", height=150, label_visibility="collapsed",
+                     placeholder="Current ability across the big ideas… Next steps: …")
         st.markdown("---")
 
     if inc("hits"):
@@ -4343,9 +4406,8 @@ def build_docx(rep):
                 p.add_run(f"{bi_name} — ").bold = True
                 p.add_run(comment.strip())
         if rep["numeracy"].strip():
-            para(rep["numeracy"])
-        elif not any_comment and rep["biin"]:
-            pass
+            sub("Numeracy summary and next steps")
+            paras(rep["numeracy"])
 
     if "hits" in rep["sections"]:
         heading("Pedagogical Strategies (HITS)")
@@ -4732,6 +4794,7 @@ with tab2:
             if comment.strip():
                 st.write(f"**{bi_name}** — {comment}")
         if rep["numeracy"]:
+            st.markdown("**Numeracy summary and next steps**")
             st.write(rep["numeracy"])
     if "hits" in rep["sections"]:
         st.markdown("#### Pedagogical Strategies (HITS)")
