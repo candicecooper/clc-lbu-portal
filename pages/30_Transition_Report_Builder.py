@@ -2890,8 +2890,50 @@ def _rewrite_without_scores(items, initials):
     return items
 
 
+def is_senior_years(program=None):
+    p_ = str(program if program is not None else st.session_state.get("_tr_program") or "").upper()
+    return p_.startswith("SY") or "SENIOR" in p_
+
+
+SY_LENS = (
+    "This student is in the SENIOR YEARS (SY) program and is moving to, or returning to, a HIGH SCHOOL. Apply a "
+    "secondary-school lens and age-respectful language throughout. Frame supports around high school structures: a "
+    "timetable with several subject teachers, moving between classrooms, home group/mentor teacher, year level "
+    "coordinator, wellbeing leader or student services, SSO support in class, and flexible or modified timetables. "
+    "Use secondary terms — e.g. 'break-out space', 'somewhere to retreat to', 'a quiet space in student services', "
+    "'time-out or exit pass', 'check-in with a trusted adult or mentor', 'self-directed regulation strategies', "
+    "'movement break', 'headphones', 'personal timetable or task list' — and NEVER primary-school terms such as 'calm "
+    "down corner/space', 'calm corner', 'sensory corner', 'brain breaks', 'sticker or reward charts', 'visual "
+    "timetable', 'First/Then board', 'carpet time' or 'class teacher'. Emphasise student agency, being involved in "
+    "their own plan, discreet supports that avoid embarrassment in front of peers, and building independence.")
+PRIMARY_LENS = ("This student is in a PRIMARY program (Junior Primary or Primary Years) and is moving to a primary "
+                "school: frame supports around a primary classroom and class teacher, using age-appropriate language.")
+# a last-resort swap of the most common primary terms in SY drafts
+SY_TERM_SWAPS = [
+    (r"\bcalm[- ]?down (?:corner|space|area|room|zone)s?\b", "break-out space"),
+    (r"\bcalm (?:corner|area)s?\b", "break-out space"),
+    (r"\b(?:quiet|sensory|cosy) corners?\b", "quiet space to retreat to"),
+    (r"\bbrain breaks?\b", "movement breaks"),
+    (r"\bvisual (?:timetable|schedule)s?\b", "personal timetable"),
+    (r"\b(?:first[ /-]?then|now[ /-]?next) (?:board|chart|card)s?\b", "task checklist"),
+    (r"\b(?:sticker|reward|star) charts?\b", "goal-tracking system"),
+    (r"\bclass(?:room)? teachers?\b", "subject teachers"),
+    (r"\bcarpet time\b", "group time"),
+]
+
+
+def apply_lens_terms(text, program=None):
+    if not is_senior_years(program) or not text:
+        return text
+    for rx, new in SY_TERM_SWAPS:
+        text = re.sub(rx, lambda m: (new[0].upper() + new[1:])
+                      if (m.start() == 0 or m.string[:m.start()].rstrip()[-1:] in ".!?\n") else new, text, flags=re.I)
+    return text
+
+
 def ai_draft(section, initials, ctx):
     """Ask Groq for one section. Returns a dict shaped for that section (validated)."""
+    ctx = dict(ctx, program=ctx.get("program") or st.session_state.get("_tr_program") or "")
     data = json.dumps(ctx, default=str)
     if section == "hits":
         menu = json.dumps(HITS_ELEMENTS)
@@ -2989,7 +3031,15 @@ def ai_draft(section, initials, ctx):
                   "3) Attendance and engagement, then a forward-looking closing on readiness for transition.\n"
                   "Only include points the data supports; skip any that it doesn't. Separate paragraphs with a blank line. "
                   'Return JSON: {"text": "<paragraphs>"}')
-    out = _parse_json(groq_ai_call(prompt, system=AI_SYSTEM, max_tokens=1800 if section in ("summary", "recommendations") else 1200))
+    system_ = AI_SYSTEM + " " + (SY_LENS if is_senior_years(ctx.get("program")) else PRIMARY_LENS)
+    out = _parse_json(groq_ai_call(prompt, system=system_, max_tokens=1800 if section in ("summary", "recommendations") else 1200))
+    for it in out.get("items") or []:                  # SY: secondary wording
+        if isinstance(it, dict) and isinstance(it.get("text"), str):
+            it["text"] = apply_lens_terms(it["text"], ctx.get("program"))
+    if isinstance(out.get("items"), list):
+        out["items"] = [apply_lens_terms(x, ctx.get("program")) if isinstance(x, str) else x for x in out["items"]]
+    for k_ in [k for k, v in out.items() if isinstance(v, str)]:
+        out[k_] = apply_lens_terms(out[k_], ctx.get("program"))
     for it in out.get("items") or []:                  # no severity anywhere in a draft
         if isinstance(it, dict) and "text" in it:
             it["text"] = _drop_severity(it["text"])
