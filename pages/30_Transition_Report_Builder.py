@@ -2736,7 +2736,14 @@ def groq_ai_call(prompt, max_tokens=1200, temperature=0.2, system=None):
                 kw = dict(model=model, messages=messages, max_tokens=tokens, temperature=temperature)
                 if model == "qwen/qwen3.6-27b":
                     kw["reasoning_effort"] = "none"
-                return client.chat.completions.create(**kw).choices[0].message.content.strip()
+                elif model.startswith("openai/gpt-oss"):
+                    kw["reasoning_effort"] = "low"       # leave the token budget for the answer, not the thinking
+                    kw["max_tokens"] = tokens + 1500
+                content = (client.chat.completions.create(**kw).choices[0].message.content or "").strip()
+                if not content:
+                    last_err = RuntimeError(f"{model} returned an empty reply")
+                    break                                 # try the next model
+                return content
             except Exception as e:
                 last_err = e
                 if "413" in str(e) or "too large" in str(e).lower():
@@ -2747,9 +2754,29 @@ def groq_ai_call(prompt, max_tokens=1200, temperature=0.2, system=None):
 
 
 def _parse_json(raw):
+    """JSON from a model reply. Copes with code fences, raw line breaks inside strings, and — when there is no
+    JSON at all — keeps the plain text as {"text": ...} so a written answer isn't lost."""
     raw = (raw or "").replace("```json", "").replace("```", "").strip()
     s_, e_ = raw.find("{"), raw.rfind("}")
-    return json.loads(raw[s_:e_ + 1]) if s_ != -1 and e_ > s_ else {}
+    if s_ != -1 and e_ > s_:
+        try:
+            return json.loads(raw[s_:e_ + 1], strict=False)
+        except Exception:
+            pass
+    return {"text": raw} if raw and not raw.startswith("{") else {}
+
+
+def _text_from(out):
+    """The draft text whatever the model called it: 'text', 'summary', 'literacy_summary', a list of paragraphs…"""
+    if not isinstance(out, dict):
+        return str(out or "").strip()
+    for k in ("text", "summary", "literacy_summary", "numeracy_summary", "paragraphs", "content", "draft"):
+        v = out.get(k)
+        if v:
+            return "\n\n".join(_flat(v)) if not isinstance(v, str) else v.strip()
+    strs = [v for v in out.values() if isinstance(v, str) and len(v.strip()) > 20]
+    lists = [v for v in out.values() if isinstance(v, list) and v and all(isinstance(x, str) for x in v)]
+    return strs[0].strip() if strs else ("\n\n".join(lists[0]) if lists else "")
 
 
 AI_SYSTEM = ("You write sections of student reports for Cowandilla Learning Centre, a trauma-informed alternative "
@@ -2770,6 +2797,43 @@ def _drop_severity(text):
         sents = re.split(r"(?<=[.!?])\s+", para_)
         out.append(" ".join(x for x in sents if not _SEVERITY_RX.search(x)))
     return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
+
+
+_SCORE_RX = re.compile(r"\d+\s*(?:/|out of)\s*\d+|\d+(?:\.\d+)?\s*(?:%|per ?cent)|\bscor(?:e|ed|ing)\b", re.I)
+
+
+def _no_scores(text):
+    """Last resort: strip a score, fraction or percentage (and the words that introduce it) from a sentence."""
+    num = r"\d+\s*(?:/|out of)\s*\d+|\d+(?:\.\d+)?\s*(?:%|per ?cent)"
+    t = re.sub(r"\s*\((?:[^()]*?(?:" + num + r")[^()]*?)\)", "", text, flags=re.I)        # "(12/14)", "(86%)"
+    t = re.sub(r",?\s*\b(?:with a score of|a score of|scoring|scored|achieving|achieved|obtaining|on)\s+(?:"
+               + num + r")(?:\s+overall)?", "", t, flags=re.I)
+    t = re.sub(r"\b(?:" + num + r")\b", "", t, flags=re.I)
+    t = re.sub(r"\s{2,}", " ", t)
+    return re.sub(r"\s+([.,;:])", r"\1", t).strip()
+
+
+def _rewrite_without_scores(items, initials):
+    """Ask the AI once more to reword any skill summary that still quotes a score; regex clean-up as the fallback."""
+    bad = [it for it in items if _SCORE_RX.search(it["text"])]
+    if bad:
+        try:
+            ask = ("Rewrite each of these report sentences so they contain NO scores, numbers, fractions or percentages. "
+                   f"Describe the level in words instead (e.g. '{initials} demonstrates a proficient ability to…', "
+                   "'is developing…', 'is secure in…'). Keep the meaning and the next step. Return JSON: "
+                   '{"items": [{"name": "<same name>", "text": "<rewritten>"}]}\n\n'
+                   + json.dumps([{"name": it["name"], "text": it["text"]} for it in bad]))
+            fixed = {str(x.get("name")): str(x.get("text") or "") for x in
+                     (_parse_json(groq_ai_call(ask, system=AI_SYSTEM)).get("items") or []) if isinstance(x, dict)}
+            for it in bad:
+                if fixed.get(it["name"], "").strip():
+                    it["text"] = fixed[it["name"]].strip()
+        except Exception:
+            pass
+    for it in items:
+        if _SCORE_RX.search(it["text"]):
+            it["text"] = _no_scores(it["text"])
+    return items
 
 
 def ai_draft(section, initials, ctx):
@@ -2797,11 +2861,15 @@ def ai_draft(section, initials, ctx):
                   'attended (it is shown separately). Return JSON: {"text": "<2-3 sentences>"}')
     elif section == "sw":
         prompt = (f"Sounds-Write phonics assessment results for student {initials}:\n{data}\n\n"
-                  "For EACH skill listed, write a 'summary of outcome' of 1-2 sentences for a report table: what the score "
-                  "shows the student can do now in that skill (and the growth from pre to post if both are given), then the "
-                  "next step for that skill in Sounds-Write terms (e.g. consolidating the initial code, moving into the "
-                  "extended code, two- and multi-syllable words, automaticity). Use the exact skill names given. Base the "
-                  "judgement on the scores and percentages; don't invent scores. Return JSON: "
+                  "For EACH skill listed, write a 'summary of outcome' of 1-2 sentences for a report table, starting with "
+                  f"the student's initials, e.g. '{initials} demonstrates a proficient ability to blend…' or '{initials} is "
+                  "developing…'. Describe the level of skill in WORDS ONLY — e.g. emerging, developing, consolidating, "
+                  "proficient, secure — and any growth from pre to post as improvement in words. Do NOT include any score, "
+                  "number, fraction or percentage, and don't quote the band names (Mastered/Developing/Needs improvement). "
+                  "Then give the next step for that skill in Sounds-Write terms (e.g. consolidating the initial code, "
+                  "moving into the extended code, two- and multi-syllable words, automaticity). Use the exact skill names "
+                  f"given. Write in the PRESENT tense throughout (e.g. '{initials} demonstrates…', '{initials} is "
+                  "developing…') — never past tense such as 'demonstrated' or 'was able to'. Return JSON: "
                   '{"items": [{"name": "<skill, exactly as given>", "text": "<1-2 sentences>"}]}')
     elif section == "literacy":
         prompt = (f"Literacy assessment results for student {initials}:\n{data}\n\n"
@@ -2812,14 +2880,22 @@ def ai_draft(section, initials, ctx):
                   "and the growth from pre to post where both scores exist.\n"
                   "2) Start with 'Next steps:' — the next progression in the student's learning: what to teach next in "
                   "Sounds-Write and in Word Aware vocabulary, concrete enough for the next teacher to act on.\n"
+                  "Describe ability in words, not scores or percentages, and don't list the skill names as a list. "
+                  f"Write in the PRESENT tense throughout (e.g. '{initials} demonstrates…', '{initials} is developing…') — "
+                  "never past tense. "
                   "Only use the results given; if a skill wasn't assessed, don't comment on it. Separate the paragraphs "
                   'with a blank line. Return JSON: {"text": "<paragraphs>"}')
     elif section == "biin":
         prompt = (f"Big Ideas in Number (BIiN) assessment results for student {initials}:\n{data}\n\n"
-                  "For EACH big idea listed, write a comment of 2-3 sentences for the report: what the student can do now "
-                  "in that big idea (naming the elements mastered or developing, and growth from pre to post where both "
-                  "are given), then the next step in that big idea's learning progression. Use the exact big idea names "
-                  "given and only the results given. Return JSON: "
+                  "For EACH big idea listed, write a comment of 2-3 sentences for the report, starting with the student's "
+                  f"initials. Describe what the student can DO in plain words — e.g. '{initials} shows confidence in "
+                  f"identifying and ordering numbers to 100 and is developing efficient ways to count larger collections' — "
+                  "rather than listing the element names or codes again (they're already in the table above). Describe "
+                  "the level in words only and any growth from pre to post as improvement in words; don't quote the result "
+                  "labels (Mastered/Developing/Needs improvement). Then give the next step in that big idea's learning "
+                  f"progression. Write in the PRESENT tense throughout (e.g. '{initials} demonstrates…', '{initials} is "
+                  "developing…') — never past tense. Use the exact big idea names given and only the results given. "
+                  "Return JSON: "
                   '{"items": [{"name": "<big idea, exactly as given>", "text": "<2-3 sentences>"}]}')
     elif section == "numeracy":
         prompt = (f"Big Ideas in Number (BIiN) assessment results for student {initials}:\n{data}\n\n"
@@ -2829,6 +2905,10 @@ def ai_draft(section, initials, ctx):
                   "developing, and growth from pre to post where both results exist.\n"
                   "2) Start with 'Next steps:' — the next progression in the student's number learning, concrete "
                   "enough for the next teacher to act on.\n"
+                  "Describe what the student can do in plain words rather than listing element names or codes, and don't "
+                  "quote the result labels. "
+                  f"Write in the PRESENT tense throughout (e.g. '{initials} demonstrates…', '{initials} is developing…') — "
+                  "never past tense. "
                   "Only use the results given; don't comment on big ideas that weren't assessed. Separate the paragraphs "
                   'with a blank line. Return JSON: {"text": "<paragraphs>"}')
     elif section == "recommendations":
@@ -2859,6 +2939,8 @@ def ai_draft(section, initials, ctx):
     if isinstance(out.get("items"), list):
         out["items"] = [(_drop_severity(x) if isinstance(x, str) else x) for x in out["items"]]
         out["items"] = [x for x in out["items"] if not (isinstance(x, str) and not x.strip())]
+    if section not in ("hits", "restorative", "sw", "biin", "recommendations") and not out.get("text"):
+        out["text"] = _text_from(out)
     if "text" in out:
         out["text"] = _drop_severity(out["text"])
     if section == "hits":
@@ -2876,7 +2958,9 @@ def ai_draft(section, initials, ctx):
         for it in out.get("items") or []:
             nm = next((n_ for n_ in names if isinstance(it, dict) and n_.lower() == str(it.get("name", "")).strip().lower()), None)
             if nm and nm in assessed and it.get("text") and nm not in [x["name"] for x in items]:
-                items.append({"name": nm, "text": str(it["text"]).strip()})
+                txt = re.sub(r"\s*\(\s*\d\.\d[^()]*\)", "", str(it["text"]))     # "(2.1 Number naming)"
+                txt = re.sub(r"\b\d\.\d\s+", "", txt)                               # "2.1 Number naming" -> "Number naming"
+                items.append({"name": nm, "text": re.sub(r"\s{2,}", " ", txt).strip()})
         return {"items": items}
     if section == "sw":
         names = [sk for sk, _ in SOUNDS_WRITE]
@@ -2888,7 +2972,7 @@ def ai_draft(section, initials, ctx):
             if nm and it.get("text") and nm not in [x["name"] for x in items]:
                 items.append({"name": nm, "text": str(it["text"]).strip()})
         assessed = {x["skill"] for x in ctx.get("sounds_write") or []}
-        return {"items": [x for x in items if x["name"] in assessed]}
+        return {"items": _rewrite_without_scores([x for x in items if x["name"] in assessed], initials)}
     if section == "restorative":
         items = []
         for it in out.get("items") or []:
