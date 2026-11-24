@@ -16,12 +16,18 @@ This module adds the student's Behaviour Support data into that report:
     settings it came up in and what helped the student settle
 
 Rules that keep staff in charge of the document:
-  * Synced lines are tagged {"src": "bst", "key": ..., "synced_text": ...}.
-    Lines staff add in the Builder are never touched.
-  * A synced line staff REMOVE in the Builder is remembered and not re-added.
-  * A synced line staff REWORD in the Builder becomes theirs and is left alone.
-  * A synced line nobody has touched is removed if the data no longer supports it
-    (e.g. an incident was deleted), so the report stays truthful.
+  * New synced lines arrive tagged {"src": "bst", "key": ..., "synced_text": ...} and
+    are shown highlighted in the Builder for staff to check.
+  * Staff check each one: KEEP (src -> "bst-kept"), EDIT (src -> "bst-edited") or
+    DELETE (the Builder records the key in wot_bst_sync.dismissed_keys on Save).
+    Once checked, a line is the staff's: this module never changes, removes or
+    re-adds it, so nobody has to re-check it on every sync.
+  * Lines staff add in the Builder are never touched.
+  * Only un-checked lines ("bst") are managed here: removed if the data no longer
+    supports them (e.g. an incident was deleted), pronouns kept up to date.
+  * A deletion only counts when the Builder recorded it. A synced line that is simply
+    missing (e.g. a Builder tab saved an older copy over a sync) is added back for
+    checking rather than silently lost.
   * The Window of Tolerance zone itself is never written to.
   * Every synced line is written with the student's own pronouns (the Builder's
     per-student setting, wot_builder_reports.pronouns) instead of "they / their /
@@ -361,14 +367,8 @@ def merge(report_data: dict | None, desired: dict, synced_keys: set, dismissed_k
     dismissed = set(dismissed_keys)
     added = removed = kept = converted = 0
 
-    present = set()
-    for z in SYNC_ZONES:
-        for c in COLS:
-            for it in data[z][c]:
-                if it.get("src") == "bst" and it.get("key"):
-                    present.add(it["key"])
-    # synced before, not there now -> a teacher removed it in the Builder
-    dismissed |= (set(synced_keys) - present)
+    # Deletions are recorded explicitly by the Builder (dismissed_keys) — a line that is
+    # merely missing is NOT treated as deleted, so a stale save can't silently drop lines.
 
     want_keys = set()
     for z in SYNC_ZONES:
@@ -398,6 +398,7 @@ def merge(report_data: dict | None, desired: dict, synced_keys: set, dismissed_k
                 keep.append(it)
             lst[:] = keep
             have_text = {norm(i.get("text")).lower() for i in lst}
+            have_text |= {norm(i.get("orig")).lower() for i in lst if i.get("orig")}
             have_keys = {i.get("key") for i in lst if i.get("key")}
             for k, t in want.items():
                 shown = convert_pronouns(t, pronouns) if pronouns else t
@@ -414,10 +415,13 @@ def merge(report_data: dict | None, desired: dict, synced_keys: set, dismissed_k
             for it in data[z][c]:
                 if it.get("src") == "bst" and it.get("key"):
                     now_synced.add(it["key"])
+    from_bst = sum(1 for z in SYNC_ZONES for c in COLS for it in data[z][c]
+                   if str(it.get("src") or "").startswith("bst"))
     # forget dismissals for lines the data no longer produces at all
     dismissed &= want_keys
     return {"data": data, "synced_keys": sorted(now_synced), "dismissed_keys": sorted(dismissed),
-            "added": added, "removed": removed, "kept_by_staff": kept, "converted": converted}
+            "added": added, "removed": removed, "kept_by_staff": kept, "converted": converted,
+            "to_check": len(now_synced), "from_bst": from_bst}
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -484,4 +488,5 @@ def sync_student(initials: str, wot_all: dict, client=None) -> dict:
             "kept_by_staff": res["kept_by_staff"], "converted": res["converted"],
             "pronouns": pronouns, "created": created,
             "register_name": stu.get("full_name") or stu.get("initials"),
-            "report_id": (rep or {}).get("id"), "total_synced": len(res["synced_keys"])}
+            "report_id": (rep or {}).get("id"), "total_synced": res["from_bst"],
+            "to_check": res["to_check"]}
