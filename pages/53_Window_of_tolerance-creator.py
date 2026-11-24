@@ -1,3 +1,8 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Window of Tolerance Builder</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -298,6 +303,9 @@
   }
   .ex-row:hover .arrow, .ex-row:focus-visible .arrow{ opacity:1; }
   .ex-row.used{ opacity:.45; }
+  .ex-row.data-match{ opacity:.5; box-shadow:inset 3px 0 0 var(--accent); }
+  .ex-row .data-tag{ flex:none; margin-left:6px; padding:0 6px; font-size:10px; line-height:16px; border-radius:8px;
+    background:var(--accent-wash); color:var(--accent); font-weight:600; }
   .ex-row.flash{ animation:flashAdd .5s ease; }
   @keyframes flashAdd{
     0%{ background:var(--accent-wash); }
@@ -959,6 +967,8 @@
 
 </style>
 
+</head>
+<body>
 <div class="screen active" id="screenTeacher">
   <div class="center-shell">
     <div class="gate-card">
@@ -1049,7 +1059,7 @@
         </div>
         <label class="explainer-toggle" for="chkExplainer">
           <input type="checkbox" id="chkExplainer">
-          <span><b>Include Window of Tolerance explanation notes</b><br>Adds a one-page staff explanation as its own page at the end of the print and download.</span>
+          <span><b>Include Window of Tolerance explanation notes</b><br>Adds a one-page explanation as its own page at the end of the print and download.</span>
         </label>
         <div class="toolbar-actions">
           <button class="btn primary" id="btnSave">Save</button>
@@ -1117,7 +1127,6 @@
         <p class="ex-eyebrow">Cowandilla Learning Centre — Learning and Behaviour Unit</p>
         <h1 class="ex-title">Understanding the Window of Tolerance</h1>
       </div>
-      <p class="ex-tag">Staff explanation notes</p>
     </div>
 
     <h2>What it is</h2>
@@ -2365,13 +2374,61 @@
     return col;
   }
 
+  // ---- close-match check against lines synced from the Behaviour Support Tool ----
+  // Same rule as the portal's wot_builder_sync matching: shared key words (stopwords
+  // dropped, simple stemming), overlap >= 60% of the shorter phrase, at least 2 shared
+  // words, and Jaccard >= 0.34 — tuned to catch "Muttering under their breath" ~
+  // "Muttering or comments under the breath" without loose false matches.
+  var SIM_STOP = {};
+  ("a an the to of or and in on at for with by from is are be being their they them his her its it this " +
+   "that as into not yet any no up out down off over than then when your you our we us i me my " +
+   "she him hers himself herself themselves").split(" ")
+    .forEach(function(w){ SIM_STOP[w] = 1; });
+  var SIM_SAME = { goes:"go", going:"go", went:"go", gone:"go", does:"do", doing:"do", did:"do",
+                   says:"say", saying:"say", said:"say", gets:"get", getting:"get", got:"get" };
+  function simStem(w){
+    if(SIM_SAME[w]) return SIM_SAME[w];
+    var sufs = ["ing","edly","ed","es","s","ly"];
+    for(var i=0;i<sufs.length;i++){
+      if(w.length > 4 && w.slice(-sufs[i].length) === sufs[i]) return w.slice(0, -sufs[i].length);
+    }
+    return w;
+  }
+  function simTokens(t){
+    var out = {};
+    String(t||"").toLowerCase().replace(/\([^)]*\)/g," ").replace(/[^a-z']+/g," ").split(" ")
+      .forEach(function(w){ if(w.length > 2 && !SIM_STOP[w]) out[simStem(w)] = 1; });
+    return Object.keys(out);
+  }
+  function phrasesMatch(a, b){
+    var A = simTokens(a), B = simTokens(b);
+    if(!A.length || !B.length) return false;
+    var setB = {}; B.forEach(function(w){ setB[w] = 1; });
+    var shared = A.filter(function(w){ return setB[w]; }).length;
+    var union = A.length + B.length - shared;
+    return shared >= 2 && shared / Math.min(A.length, B.length) >= 0.6 && shared / union >= 0.34;
+  }
+  function syncedMatch(zoneId, colKey, text){
+    var list = state.items[zoneId][colKey];
+    for(var i=0;i<list.length;i++){
+      var it = list[i];
+      if(/^bst/.test(it.src || "") && phrasesMatch(it.text, text)) return it;
+    }
+    return null;
+  }
+
   function makeExRow(zone, colKey, text){
     var already = state.items[zone.id][colKey].some(function(it){ return itemMatches(it, text); });
+    var match = already ? null : syncedMatch(zone.id, colKey, previewText(text));
     var row = document.createElement("button");
     row.type = "button";
-    row.className = "ex-row" + (already ? " used" : "");
-    row.innerHTML = '<span>'+escapeHtml(previewText(text))+'</span><span class="arrow" aria-hidden="true">→</span>';
-    row.title = already ? "Already added — click to add again" : "Add to report";
+    row.className = "ex-row" + (already ? " used" : "") + (match ? " data-match" : "");
+    row.innerHTML = '<span>'+escapeHtml(previewText(text))+'</span>' +
+      (match ? '<span class="data-tag">from data</span>' : '') +
+      '<span class="arrow" aria-hidden="true">→</span>';
+    row.title = already ? "Already added — click to add again"
+      : match ? ("Already in the report from the Behaviour Support Tool as: \u201c" + match.text + "\u201d — click to add this wording as well")
+      : "Add to report";
     row.addEventListener("click", function(){ addItem(zone.id, colKey, text, false); flash(row); });
     return row;
   }
@@ -2518,6 +2575,7 @@
           }
           text.textContent = item.text;
         });
+        if(toCheck) line.title = "Added from the Behaviour Support Tool's data. Keep it, reword it or delete it — once checked it stays as you leave it.";
         var remove = document.createElement("button");
         remove.className = "remove";
         remove.setAttribute("aria-label","Remove line");
@@ -3296,3 +3354,6 @@
   }
 })();
 </script>
+
+</body>
+</html>
