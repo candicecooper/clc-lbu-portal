@@ -929,6 +929,18 @@
   }
   .archive-fields .field{ flex:1; min-width:120px; }
 
+  /* ---------- lines from the Behaviour Support Tool waiting to be checked ---------- */
+  .rline.to-check{ background:var(--copingup-wash); box-shadow:inset 3px 0 0 var(--copingup); flex-wrap:wrap; }
+  .rline .check-tag{ flex:0 0 100%; order:-1; font-size:10.5px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; color:var(--copingup); }
+  .rline .keep{ flex:0 0 auto; border:1px solid var(--copingup); background:var(--surface); color:var(--copingup);
+    border-radius:6px; font-size:11.5px; font-weight:700; padding:2px 8px; cursor:pointer; font-family:var(--font-body); }
+  .rline .keep:hover{ background:var(--copingup); color:#fff; }
+  .review-bar{ display:none; align-items:center; gap:10px; flex-wrap:wrap; background:var(--copingup-wash); color:var(--ink);
+    border:1px solid var(--copingup); border-radius:9px; padding:8px 12px; font-size:12.5px; margin:0 0 10px; }
+  .review-bar.show{ display:flex; }
+  .review-bar b{ color:var(--copingup); }
+  @media print{ .review-bar{ display:none !important; } }
+
   /* ---------- student pronouns ---------- */
   .pronoun-field{ display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin:0 0 10px; font-size:12.5px; color:var(--ink-soft); }
   .pronoun-field .lbl{ font-weight:600; margin-right:2px; }
@@ -1014,6 +1026,10 @@
       <div class="report-toolbar">
         <h2>Your report</h2>
         <div class="save-status" id="saveStatus"></div>
+        <div class="review-bar" id="reviewBar">
+          <span id="reviewBarText"></span>
+          <button type="button" class="btn small" id="btnKeepAll">Keep all as they are</button>
+        </div>
         <div class="pronoun-field" id="pronounField" data-unset="true">
           <span class="lbl">Pronouns for this student:</span>
           <button type="button" data-pn="he" aria-pressed="false">He / him</button>
@@ -2008,6 +2024,7 @@
     currentReportId = null;
     currentReportStatus = "draft";
     state.items = blankItems();
+    pendingDismissKeys = {};
     state.pronouns = normalisePronounKey(s.pronouns); // used if the student register ever stores pronouns
     lastSavedSnapshot = null;
     manualStudentName = "";
@@ -2175,6 +2192,7 @@
       currentReportStatus = res.data.status;
       lastSavedSnapshot = snapshotNow();
       reportsIndex[currentStudent.id] = { id: res.data.id, student_register_id: currentStudent.id, status: res.data.status, updated_at: res.data.updated_at };
+      recordDismissals();
       setSaveStatus(pronounColumnMissing
         ? "Saved just now. (Pronoun choice is kept on this device only until the database has a “pronouns” column.)"
         : "Saved just now.", "ok");
@@ -2188,6 +2206,9 @@
 
   document.getElementById("btnClear").addEventListener("click", function(){
     if(!window.confirm("Clear every line from " + studentDisplayName() + "'s report? This can't be undone unless you've saved a previous version.")) return;
+    ZONES.forEach(function(z){ COLS.forEach(function(c){
+      state.items[z.id][c].forEach(function(it){ if(it.key) pendingDismissKeys[it.key] = true; });
+    }); });
     state.items = blankItems();
     renderReport();
     saveReport();
@@ -2404,6 +2425,59 @@
     });
     renderPrintSheet();
     renderPrintMap();
+    renderReviewBar();
+  }
+
+  // ================= CHECKING LINES FROM THE BEHAVIOUR SUPPORT TOOL =================
+  // The sync adds lines tagged src:"bst". Until a teacher checks them they are shown highlighted.
+  // Keep -> "bst-kept", edit -> "bst-edited", delete -> key recorded in wot_bst_sync.dismissed_keys
+  // on Save. The sync (wot_builder_sync.py) only ever changes or removes un-checked "bst" lines,
+  // so anything a teacher has checked stays exactly as they left it.
+  var pendingDismissKeys = {};
+  function linesToCheck(){
+    var n = 0;
+    ZONES.forEach(function(z){ COLS.forEach(function(c){
+      state.items[z.id][c].forEach(function(it){ if(it.src === "bst") n++; });
+    }); });
+    return n;
+  }
+  function renderReviewBar(){
+    var bar = document.getElementById("reviewBar");
+    if(!bar) return;
+    var n = linesToCheck();
+    bar.classList.toggle("show", n > 0);
+    document.getElementById("reviewBarText").innerHTML = "<b>" + n + " line" + (n === 1 ? "" : "s") +
+      " from the Behaviour Support Tool</b> to check (highlighted below). Keep, edit or delete each one, then Save — checked lines stay as you leave them.";
+  }
+  document.getElementById("btnKeepAll").addEventListener("click", function(){
+    var n = linesToCheck();
+    if(!n || !window.confirm("Keep all " + n + " highlighted line" + (n === 1 ? "" : "s") + " exactly as they are?")) return;
+    ZONES.forEach(function(z){ COLS.forEach(function(c){
+      state.items[z.id][c].forEach(function(it){ if(it.src === "bst") it.src = "bst-kept"; });
+    }); });
+    renderReport();
+    setSaveStatus("All lines kept — click Save to confirm.", "busy");
+  });
+  function okToShareWithUnchecked(action){
+    var n = linesToCheck();
+    return !n || window.confirm(n + " line" + (n === 1 ? " from the Behaviour Support Tool hasn't" : "s from the Behaviour Support Tool haven't") +
+      " been checked yet (highlighted in the report). " + action + " anyway?");
+  }
+  // After a successful save, tell the sync which of its lines staff deleted, so they never come back.
+  function recordDismissals(){
+    var keys = Object.keys(pendingDismissKeys);
+    if(!keys.length || !sb || !currentStudent) return;
+    var rid = String(currentStudent.id);
+    sb.from("wot_bst_sync").select("dismissed_keys").eq("student_register_id", rid).limit(1).then(function(res){
+      if(res.error) return; // sync not set up: nothing to record
+      var have = (res.data && res.data[0] && res.data[0].dismissed_keys) || [];
+      var merged = have.slice();
+      keys.forEach(function(k){ if(merged.indexOf(k) === -1) merged.push(k); });
+      return sb.from("wot_bst_sync").upsert({ student_register_id: rid, student_initials: currentStudent.initials,
+        dismissed_keys: merged }, { onConflict: "student_register_id" }).then(function(r2){
+          if(!r2.error) keys.forEach(function(k){ delete pendingDismissKeys[k]; });
+        });
+    }).catch(function(){ /* tried again on the next save */ });
   }
 
   function renderReportColumn(zone, colKey){
@@ -2422,7 +2496,14 @@
     } else {
       items.forEach(function(item, idx){
         var line = document.createElement("div");
-        line.className = "rline";
+        var toCheck = item.src === "bst";
+        line.className = "rline" + (toCheck ? " to-check" : "");
+        if(toCheck){
+          var tag = document.createElement("span");
+          tag.className = "check-tag";
+          tag.textContent = "From Behaviour Support · check, then keep, edit or delete";
+          line.appendChild(tag);
+        }
         var text = document.createElement("div");
         text.className = "text";
         text.contentEditable = "true";
@@ -2433,6 +2514,7 @@
           if(edited && edited !== item.text){
             item.text = state.pronouns ? convertToStudentPronouns(edited, state.pronouns) : edited;
             item.orig = null; // hand-edited: keep the teacher's wording from now on
+            if(item.src === "bst"){ item.src = "bst-edited"; renderReport(); renderBank(); return; } // checked: theirs now
           }
           text.textContent = item.text;
         });
@@ -2441,11 +2523,21 @@
         remove.setAttribute("aria-label","Remove line");
         remove.innerHTML = "×";
         remove.addEventListener("click", function(){
+          if(item.key) pendingDismissKeys[item.key] = true; // a Behaviour Support line: never send it again
           items.splice(idx,1);
           renderReport();
           renderBank();
         });
         line.appendChild(text);
+        if(toCheck){
+          var keep = document.createElement("button");
+          keep.type = "button";
+          keep.className = "keep";
+          keep.textContent = "✓ Keep";
+          keep.title = "This line is right — keep it as it is";
+          keep.addEventListener("click", function(){ item.src = "bst-kept"; renderReport(); });
+          line.appendChild(keep);
+        }
         line.appendChild(remove);
         wrap.appendChild(line);
       });
@@ -2779,6 +2871,7 @@
   }
 
   document.getElementById("btnPrint").addEventListener("click", function(){
+    if(!okToShareWithUnchecked("Print")) return;
     renderPrintSheet();
     renderPrintMap();
     fitPrintElementToOnePage(activePrintElement());
@@ -2786,6 +2879,7 @@
   });
 
   document.getElementById("btnDownload").addEventListener("click", function(){
+    if(!okToShareWithUnchecked("Download")) return;
     var html = buildArchiveSnapshotHtml(includeExplainer);
     var studentSlug = (currentStudent ? currentStudent.initials : "student").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/(^-|-$)/g,"");
     var fileName = "window-of-tolerance-" + (studentSlug || "report") + ".html";
@@ -3065,6 +3159,7 @@
   var archiveError = document.getElementById("archiveError");
 
   document.getElementById("btnArchive").addEventListener("click", function(){
+    if(!okToShareWithUnchecked("Archive")) return;
     archiveError.textContent = "";
     archiveMsg.textContent = "";
     var ty = getCurrentTermYear();
