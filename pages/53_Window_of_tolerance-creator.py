@@ -929,6 +929,22 @@
   }
   .archive-fields .field{ flex:1; min-width:120px; }
 
+  /* ---------- student pronouns ---------- */
+  .pronoun-field{ display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin:0 0 10px; font-size:12.5px; color:var(--ink-soft); }
+  .pronoun-field .lbl{ font-weight:600; margin-right:2px; }
+  .pronoun-field button, .pn-choices button{
+    font-family:var(--font-body); font-size:12.5px; font-weight:600; padding:6px 12px; border-radius:20px;
+    border:1px solid var(--border); background:var(--surface); color:var(--ink-soft); cursor:pointer;
+  }
+  .pronoun-field button[aria-pressed="true"]{ background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
+  .pronoun-field button:focus-visible, .pn-choices button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+  .pronoun-field .pn-warn{ display:none; font-size:11.5px; font-weight:600; color:var(--copingup); background:var(--copingup-wash); border-radius:20px; padding:4px 10px; }
+  .pronoun-field[data-unset="true"] .pn-warn{ display:inline-block; }
+  .pronoun-field[data-unset="true"] button{ border-color:var(--copingup); }
+  .pn-choices{ display:flex; gap:10px; flex-wrap:wrap; margin:6px 0 4px; }
+  .pn-choices button{ font-size:14px; padding:10px 18px; }
+  .pn-choices button:hover{ border-color:var(--accent); color:var(--accent); }
+
 </style>
 
 <div class="screen active" id="screenTeacher">
@@ -998,6 +1014,13 @@
       <div class="report-toolbar">
         <h2>Your report</h2>
         <div class="save-status" id="saveStatus"></div>
+        <div class="pronoun-field" id="pronounField" data-unset="true">
+          <span class="lbl">Pronouns for this student:</span>
+          <button type="button" data-pn="he" aria-pressed="false">He / him</button>
+          <button type="button" data-pn="she" aria-pressed="false">She / her</button>
+          <button type="button" data-pn="they" aria-pressed="false">They / them</button>
+          <span class="pn-warn">Choose before adding lines</span>
+        </div>
         <div class="print-style-toggle" id="printStyleToggle">
           <span class="lbl">Print layout:</span>
           <button type="button" id="btnStyleGrid" aria-pressed="true">Grid template</button>
@@ -1138,6 +1161,21 @@
     <div class="bank-manage" id="bankManageBody"></div>
     <div class="overlay-actions">
       <button class="btn" id="btnCloseBank">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="pronounOverlay">
+  <div class="overlay-card" style="width:min(480px,100%);">
+    <h3 id="pronounOverlayTitle">Which pronouns does this student use?</h3>
+    <p class="hint">Every line added to this report will be written with these pronouns instead of “they”, “their”, “the student” or “the child”. You can change it later from the report panel and the lines will update.</p>
+    <div class="pn-choices">
+      <button type="button" data-pn="he">He / him</button>
+      <button type="button" data-pn="she">She / her</button>
+      <button type="button" data-pn="they">They / them</button>
+    </div>
+    <div class="overlay-actions">
+      <button class="btn" id="btnClosePronoun">Cancel</button>
     </div>
   </div>
 </div>
@@ -1550,6 +1588,214 @@
     return obj;
   }
 
+  // ================= PRONOUN ENGINE =================
+  // Every line that enters a report (example click, "Add your own…", an edit, a saved or
+  // imported report being opened) passes through convertToStudentPronouns() so it reads with
+  // this student's own pronouns rather than "they / their / the student / the child".
+  // Rule-based on purpose: instant, works offline, needs no AI key in the browser, and gives
+  // the same result every time. Text inside quotation marks (the student's own words, or
+  // a staff script like "I can see you're…") is never changed.
+  var PRONOUN_SETS = {
+    he:   { subj:"he",   obj:"him",  poss:"his",   possPron:"his",    refl:"himself",    label:"He / him" },
+    she:  { subj:"she",  obj:"her",  poss:"her",   possPron:"hers",   refl:"herself",    label:"She / her" },
+    they: { subj:"they", obj:"them", poss:"their", possPron:"theirs", refl:"themselves", label:"They / them" }
+  };
+  var PN_NOUNS = { student:1, child:1, learner:1, kid:1 };
+  var PN_ADVERBS = { also:1, often:1, still:1, just:1, really:1, usually:1, always:1, never:1, sometimes:1,
+    only:1, already:1, even:1, actually:1, quickly:1, slowly:1, suddenly:1, rarely:1, generally:1,
+    typically:1, frequently:1, mostly:1, then:1, now:1, all:1, both:1, first:1, finally:1, clearly:1 };
+  var PN_KEEP_VERBS = { can:1, could:1, will:1, would:1, should:1, may:1, might:1, must:1, shall:1,
+    "can't":1, "couldn't":1, "won't":1, "wouldn't":1, "shouldn't":1, "mustn't":1, "cannot":1,
+    had:1, did:1, felt:1, got:1, went:1, said:1, made:1, came:1, knew:1, saw:1, took:1, found:1,
+    left:1, lost:1, ran:1, sat:1, stood:1, thought:1, told:1, gave:1, kept:1, began:1, heard:1,
+    "hadn't":1, "didn't":1, hit:1, put:1, set:1, let:1, cut:1, "needn't":1 };
+  var PN_TO_SINGULAR = { are:"is", were:"was", have:"has", "do":"does", "don't":"doesn't", "aren't":"isn't",
+    "weren't":"wasn't", "haven't":"hasn't", go:"goes" };
+  var PN_TO_PLURAL = { is:"are", was:"were", has:"have", does:"do", "doesn't":"don't", "isn't":"aren't",
+    "wasn't":"weren't", "hasn't":"haven't", goes:"go" };
+  // words after "her" that mean it is the object ("give her time"), not the possessive ("her turn")
+  var PN_HER_OBJ_NEXT = { to:1, and:1, or:1, but:1, with:1, "for":1, from:1, at:1, "in":1, on:1, up:1, down:1,
+    out:1, off:1, back:1, away:1, over:1, into:1, onto:1, a:1, an:1, the:1, that:1, "this":1, these:1, those:1,
+    "if":1, when:1, "while":1, until:1, before:1, after:1, again:1, too:1, as:1, so:1, by:1, about:1,
+    around:1, through:1, once:1, now:1, know:1, feel:1, some:1, any:1, enough:1, more:1, less:1,
+    gently:1, calmly:1, quietly:1, slowly:1, alone:1, "is":1, was:1, will:1, can:1, "isn't":1, has:1 };
+  var PN_GIVE_VERBS = { give:1, gives:1, offer:1, offers:1, show:1, shows:1, tell:1, tells:1, allow:1, allows:1,
+    let:1, lets:1, help:1, helps:1, ask:1, asks:1, remind:1, reminds:1, praise:1, send:1, teach:1, lend:1,
+    bring:1, get:1, hand:1, pass:1, call:1, calls:1, leave:1, see:1, hear:1, thank:1, support:1, invite:1 };
+
+  function pnMatchCase(src, out){
+    if(!src || !out) return out;
+    if(src.length > 1 && src === src.toUpperCase()) return out.toUpperCase();
+    if(src.charAt(0) === src.charAt(0).toUpperCase() && src.charAt(0) !== src.charAt(0).toLowerCase()){
+      return out.charAt(0).toUpperCase() + out.slice(1);
+    }
+    return out;
+  }
+  function pnLower(w){ return w.toLowerCase().replace(/’/g,"'"); }
+  function pnTokenise(seg){
+    var toks = [], re = /([A-Za-z]+(?:['’][A-Za-z]+)?)|([^A-Za-z]+)/g, m;
+    while((m = re.exec(seg))){ toks.push(m[1] ? { w:true, t:m[1] } : { w:false, t:m[2] }); }
+    return toks;
+  }
+  // index of the next word token, only if separated by plain spaces (no punctuation in between)
+  function pnNextWord(toks, i){
+    var j = i + 1;
+    if(j < toks.length && !toks[j].w){ if(/^[ \t]+$/.test(toks[j].t)) j++; else return -1; }
+    return (j < toks.length && toks[j].w) ? j : -1;
+  }
+  function pnPrevWord(toks, i){
+    var j = i - 1;
+    if(j >= 0 && !toks[j].w){ if(/^[ \t]+$/.test(toks[j].t)) j--; else return -1; }
+    return (j >= 0 && toks[j].w) ? j : -1;
+  }
+  // skip adverbs ("they often feel") to reach the verb
+  function pnVerbIndex(toks, i){
+    var j = pnNextWord(toks, i), guard = 0;
+    while(j !== -1 && PN_ADVERBS[pnLower(toks[j].t)] && guard++ < 3) j = pnNextWord(toks, j);
+    return j;
+  }
+  function pnSingularVerb(v){
+    var lv = pnLower(v);
+    if(PN_KEEP_VERBS[lv] || (/ed$/.test(lv) && !/eed$/.test(lv))) return v;
+    if(PN_TO_SINGULAR[lv]) return pnMatchCase(v, PN_TO_SINGULAR[lv]);
+    if(/['’]/.test(lv)) return v;
+    if(/(s|x|z|ch|sh|o)$/.test(lv)) return v + "es";
+    if(/[^aeiou]y$/.test(lv)) return v.slice(0,-1) + "ies";
+    return v + "s";
+  }
+  function pnPluralVerb(v){
+    var lv = pnLower(v);
+    if(PN_KEEP_VERBS[lv] || (/ed$/.test(lv) && !/eed$/.test(lv))) return v;
+    if(PN_TO_PLURAL[lv]) return pnMatchCase(v, PN_TO_PLURAL[lv]);
+    if(/['’]/.test(lv)) return v;
+    if(lv.length > 4 && /ies$/.test(lv)) return v.slice(0,-3) + "y";
+    if(/(ss|x|z|ch|sh|o)es$/.test(lv)) return v.slice(0,-2);
+    if(/[^su]s$/.test(lv) && !/(ss|us|is)$/.test(lv)) return v.slice(0,-1);
+    return v;
+  }
+  var PN_SUBJ_LEAD = { "if":1, when:1, "while":1, because:1, until:1, unless:1, before:1, after:1, so:1,
+    and:1, that:1, as:1, where:1, once:1, whether:1, or:1, but:1 };
+
+  // run fn over every un-quoted stretch of text, leaving quoted speech untouched
+  function pnEachUnquoted(text, fn){
+    var parts = String(text).split(/(“[^”]*”|"[^"]*")/);
+    for(var i = 0; i < parts.length; i += 2){ parts[i] = fn(parts[i]); }
+    return parts.join("");
+  }
+
+  // neutral / generic -> this student's pronouns
+  function convertToStudentPronouns(text, key){
+    var P = PRONOUN_SETS[key];
+    if(!P || !text) return text;
+    return pnEachUnquoted(text, function(seg){
+      var toks = pnTokenise(seg), i, j, lw;
+      // 1) "the student's / this child / the student" -> pronoun
+      for(i = 0; i < toks.length; i++){
+        if(!toks[i].w) continue;
+        lw = pnLower(toks[i].t);
+        if(lw !== "the" && lw !== "this") continue;
+        j = pnNextWord(toks, i);
+        if(j === -1) continue;
+        var nm = pnLower(toks[j].t).match(/^([a-z]+)('s)?$/);
+        if(!nm || !PN_NOUNS[nm[1]]) continue;
+        var out, isSubj = false;
+        if(nm[2]){ out = P.poss; }
+        else {
+          var p = pnPrevWord(toks, i);
+          isSubj = (p === -1 && i === 0) || (p !== -1 && PN_SUBJ_LEAD[pnLower(toks[p].t)]);
+          out = isSubj ? P.subj : P.obj;
+        }
+        toks[i] = { w:true, t:pnMatchCase(toks[i].t, out), done:true };
+        toks.splice(i + 1, j - i);
+        if(isSubj && key === "they"){
+          var v = pnVerbIndex(toks, i);
+          if(v !== -1) toks[v] = { w:true, t:pnPluralVerb(toks[v].t), done:true };
+        }
+      }
+      if(key === "they") return toks.map(function(t){ return t.t; }).join("");
+      // 2) they / them / their / theirs / themselves -> he/she forms
+      for(i = 0; i < toks.length; i++){
+        var tk = toks[i];
+        if(!tk.w || tk.done) continue;
+        lw = pnLower(tk.t);
+        var rep = null;
+        if(lw === "they"){
+          rep = P.subj;
+          var vi = pnVerbIndex(toks, i);
+          if(vi !== -1 && !toks[vi].done){ toks[vi] = { w:true, t:pnSingularVerb(toks[vi].t), done:true }; }
+        }
+        else if(lw === "they're" || lw === "they've") rep = P.subj + "'s";
+        else if(lw === "they'd") rep = P.subj + "'d";
+        else if(lw === "they'll") rep = P.subj + "'ll";
+        else if(lw === "them") rep = P.obj;
+        else if(lw === "their") rep = P.poss;
+        else if(lw === "theirs") rep = P.possPron;
+        else if(lw === "themselves" || lw === "themself") rep = P.refl;
+        if(rep){ toks[i] = { w:true, t:pnMatchCase(tk.t, rep), done:true }; }
+      }
+      return toks.map(function(t){ return t.t; }).join("");
+    });
+  }
+
+  // he/she forms -> another pronoun set. Only used when staff deliberately change a
+  // student's pronouns (or to make a saved phrase reusable for any student).
+  function swapGenderedPronouns(text, key){
+    var P = PRONOUN_SETS[key];
+    if(!P || !text) return text;
+    return pnEachUnquoted(text, function(seg){
+      var toks = pnTokenise(seg);
+      for(var i = 0; i < toks.length; i++){
+        var tk = toks[i];
+        if(!tk.w || tk.done) continue;
+        var lw = pnLower(tk.t), rep = null, n = pnNextWord(toks, i), p = pnPrevWord(toks, i);
+        var nextIsContent = n !== -1 && !PN_HER_OBJ_NEXT[pnLower(toks[n].t)] && !/ly$/.test(pnLower(toks[n].t));
+        if(lw === "he" || lw === "she"){
+          rep = P.subj;
+          if(key === "they"){
+            var vi = pnVerbIndex(toks, i);
+            if(vi !== -1){ toks[vi] = { w:true, t:pnPluralVerb(toks[vi].t), done:true }; }
+          }
+        }
+        else if(lw === "he's" || lw === "she's"){
+          if(key === "they"){
+            var nx = n !== -1 ? pnLower(toks[n].t) : "";
+            rep = ((/(ed|en)$/.test(nx) && !/eed$/.test(nx)) || nx === "got" || nx === "been" || nx === "had" || nx === "done" || nx === "gone" || nx === "made") ? "they've" : "they're";
+          } else rep = P.subj + "'s";
+        }
+        else if(lw === "he'd" || lw === "she'd") rep = P.subj + "'d";
+        else if(lw === "he'll" || lw === "she'll") rep = P.subj + "'ll";
+        else if(lw === "him") rep = P.obj;
+        else if(lw === "himself" || lw === "herself") rep = P.refl;
+        else if(lw === "hers") rep = P.possPron;
+        else if(lw === "his") rep = nextIsContent ? P.poss : P.possPron;
+        else if(lw === "her"){
+          var afterGive = p !== -1 && PN_GIVE_VERBS[pnLower(toks[p].t)];
+          rep = (nextIsContent && !afterGive) ? P.poss : P.obj;
+        }
+        if(rep){ toks[i] = { w:true, t:pnMatchCase(tk.t, rep), done:true }; }
+      }
+      return toks.map(function(t){ return t.t; }).join("");
+    });
+  }
+
+  // best guess at pronouns already used in a saved report (used only when none is recorded)
+  function inferPronounsFromItems(items){
+    var he = 0, she = 0;
+    ZONES.forEach(function(z){ COLS.forEach(function(c){
+      (items[z.id][c] || []).forEach(function(it){
+        pnEachUnquoted(it.text || "", function(seg){
+          var m;
+          m = seg.match(/\b(he|him|his|himself|he's)\b/gi); if(m) he += m.length;
+          m = seg.match(/\b(she|her|hers|herself|she's)\b/gi); if(m) she += m.length;
+          return seg;
+        });
+      });
+    }); });
+    if(he >= 2 && she === 0) return "he";
+    if(she >= 2 && he === 0) return "she";
+    return null;
+  }
+
   // ---------------- app-level state ----------------
   var teacherName = null;
   var currentStudent = null;
@@ -1563,7 +1809,9 @@
   var studentsCache = [];
   var lastSavedSnapshot = null;
 
-  var state = { items: blankItems() };
+  var state = { items: blankItems(), pronouns: null };
+  var pronounColumnMissing = false; // set if wot_builder_reports has no "pronouns" column yet
+  function snapshotNow(){ return JSON.stringify({ items: state.items, pronouns: state.pronouns }); }
 
   var bank = {};
   ZONES.forEach(function(z){ bank[z.id] = { context:[], behaviour:[], interventions:[] }; });
@@ -1742,7 +1990,7 @@
   // ================= OPEN / LOAD A STUDENT'S REPORT =================
   function hasUnsavedChanges(){
     if(lastSavedSnapshot === null) return false;
-    try{ return JSON.stringify(state.items) !== lastSavedSnapshot; }catch(e){ return false; }
+    try{ return snapshotNow() !== lastSavedSnapshot; }catch(e){ return false; }
   }
 
   function openStudent(s){
@@ -1750,6 +1998,7 @@
     currentReportId = null;
     currentReportStatus = "draft";
     state.items = blankItems();
+    state.pronouns = normalisePronounKey(s.pronouns); // used if the student register ever stores pronouns
     lastSavedSnapshot = null;
     manualStudentName = "";
     var printNameInput = document.getElementById("printStudentName");
@@ -1759,6 +2008,7 @@
     document.getElementById("studentHeadingProgram").textContent = s.program ? ("· " + s.program) : "";
     document.getElementById("offlineBanner").classList.remove("show");
     setSaveStatus("", "");
+    renderPronounField();
 
     showScreen("screenBuilder");
     loadBankForTeacher();
@@ -1771,7 +2021,11 @@
       ZONES.forEach(function(z){
         if(data[z.id]){
           COLS.forEach(function(c){
-            if(Array.isArray(data[z.id][c])) obj[z.id][c] = data[z.id][c];
+            if(Array.isArray(data[z.id][c])){
+              obj[z.id][c] = data[z.id][c].map(function(it){
+                return (typeof it === "string") ? { text: it, src: it } : it;
+              }).filter(function(it){ return it && typeof it.text === "string" && it.text.trim(); });
+            }
           });
         }
       });
@@ -1782,7 +2036,7 @@
   function cacheKeyForCurrentStudent(){ return CACHE_PREFIX + currentStudent.id; }
   function cacheReportLocally(){
     try{
-      localStorage.setItem(cacheKeyForCurrentStudent(), JSON.stringify({ items: state.items, printStyle: printStyle, savedAt: Date.now() }));
+      localStorage.setItem(cacheKeyForCurrentStudent(), JSON.stringify({ items: state.items, pronouns: state.pronouns, printStyle: printStyle, savedAt: Date.now() }));
     }catch(e){ /* ignore */ }
   }
   function loadFromLocalCache(showBanner){
@@ -1791,6 +2045,7 @@
       if(raw){
         var parsed = JSON.parse(raw);
         state.items = mergeItems(parsed.items);
+        if(!state.pronouns && normalisePronounKey(parsed.pronouns)) state.pronouns = normalisePronounKey(parsed.pronouns);
         if(parsed.printStyle === "map" || parsed.printStyle === "grid"){ printStyle = parsed.printStyle; applyPrintStyle(); }
         if(showBanner) document.getElementById("offlineBanner").classList.add("show");
       }
@@ -1800,8 +2055,7 @@
   function loadReportForCurrentStudent(){
     if(!sb){
       loadFromLocalCache(true);
-      lastSavedSnapshot = JSON.stringify(state.items);
-      renderBank(); renderReport();
+      finishLoad();
       return;
     }
     sb.from("wot_builder_reports")
@@ -1819,6 +2073,7 @@
             currentReportId = row.id;
             currentReportStatus = row.status || "draft";
             state.items = mergeItems(row.data);
+            if(normalisePronounKey(row.pronouns)) state.pronouns = normalisePronounKey(row.pronouns);
             if(row.print_style === "map" || row.print_style === "grid") printStyle = row.print_style;
             applyPrintStyle();
             cacheReportLocally();
@@ -1826,14 +2081,30 @@
             loadFromLocalCache(false);
           }
         }
-        lastSavedSnapshot = JSON.stringify(state.items);
-        renderBank(); renderReport();
+        finishLoad();
       })
       .catch(function(){
         loadFromLocalCache(true);
-        lastSavedSnapshot = JSON.stringify(state.items);
-        renderBank(); renderReport();
+        finishLoad();
       });
+  }
+
+  // Runs after every report open (database, local copy, or data another tool wrote into the
+  // report). Converts any generic wording already in the report to this student's pronouns.
+  function finishLoad(){
+    var recordedPronouns = state.pronouns;
+    if(!state.pronouns) state.pronouns = inferPronounsFromItems(state.items);
+    lastSavedSnapshot = JSON.stringify({ items: state.items, pronouns: recordedPronouns });
+    var changed = applyPronounsToAllItems();
+    renderPronounField();
+    renderBank(); renderReport();
+    if(changed > 0){
+      setSaveStatus("Updated " + changed + " line" + (changed === 1 ? "" : "s") + " to use " + PRONOUN_SETS[state.pronouns].label.toLowerCase() + " — click Save to keep this.", "busy");
+    } else if(!state.pronouns && usedCount() > 0){
+      askForPronouns(null);
+    } else if(state.pronouns && !recordedPronouns){
+      setSaveStatus("Pronouns set to " + PRONOUN_SETS[state.pronouns].label + " from the wording already in this report — check this is right, then Save.", "busy");
+    }
   }
 
   // ================= SAVE =================
@@ -1860,15 +2131,25 @@
       updated_by: teacherName,
       updated_at: nowIso
     };
-    var query;
-    if(currentReportId){
-      query = sb.from("wot_builder_reports").update(payload).eq("id", currentReportId).select().single();
-    } else {
+    if(!pronounColumnMissing) payload.pronouns = state.pronouns;
+    if(!currentReportId){
       payload.created_by = teacherName;
       payload.status = "draft";
-      query = sb.from("wot_builder_reports").insert(payload).select().single();
     }
-    query.then(function(res){
+    function runSave(){
+      return currentReportId
+        ? sb.from("wot_builder_reports").update(payload).eq("id", currentReportId).select().single()
+        : sb.from("wot_builder_reports").insert(payload).select().single();
+    }
+    runSave().then(function(res){
+      // if the database doesn't have the "pronouns" column yet, save everything else anyway
+      if(res.error && !pronounColumnMissing && /pronouns/i.test(res.error.message || "")){
+        pronounColumnMissing = true;
+        delete payload.pronouns;
+        return runSave();
+      }
+      return res;
+    }).then(function(res){
       if(res.error){
         setSaveStatus("Couldn't save — check your connection and try again.", "err");
         if(onDone) onDone(false);
@@ -1876,9 +2157,11 @@
       }
       currentReportId = res.data.id;
       currentReportStatus = res.data.status;
-      lastSavedSnapshot = JSON.stringify(state.items);
+      lastSavedSnapshot = snapshotNow();
       reportsIndex[currentStudent.id] = { id: res.data.id, student_register_id: currentStudent.id, status: res.data.status, updated_at: res.data.updated_at };
-      setSaveStatus("Saved just now.", "ok");
+      setSaveStatus(pronounColumnMissing
+        ? "Saved just now. (Pronoun choice is kept on this device only until the database has a “pronouns” column.)"
+        : "Saved just now.", "ok");
       if(onDone) onDone(true);
     }).catch(function(){
       setSaveStatus("Couldn't save — check your connection and try again.", "err");
@@ -2046,23 +2329,23 @@
   }
 
   function makeExRow(zone, colKey, text){
-    var already = state.items[zone.id][colKey].some(function(it){ return it.text === text; });
+    var already = state.items[zone.id][colKey].some(function(it){ return itemMatches(it, text); });
     var row = document.createElement("button");
     row.type = "button";
     row.className = "ex-row" + (already ? " used" : "");
-    row.innerHTML = '<span>'+escapeHtml(text)+'</span><span class="arrow" aria-hidden="true">→</span>';
+    row.innerHTML = '<span>'+escapeHtml(previewText(text))+'</span><span class="arrow" aria-hidden="true">→</span>';
     row.title = already ? "Already added — click to add again" : "Add to report";
     row.addEventListener("click", function(){ addItem(zone.id, colKey, text, false); flash(row); });
     return row;
   }
 
   function makeMineRow(zone, colKey, phrase){
-    var already = state.items[zone.id][colKey].some(function(it){ return it.text === phrase.text; });
+    var already = state.items[zone.id][colKey].some(function(it){ return itemMatches(it, phrase.text); });
     var row = document.createElement("div");
     row.className = "ex-row mine" + (already ? " used" : "");
     var txt = document.createElement("span");
     txt.className = "txt";
-    txt.textContent = phrase.text;
+    txt.textContent = previewText(phrase.text);
     var arrow = document.createElement("span");
     arrow.className = "arrow";
     arrow.setAttribute("aria-hidden","true");
@@ -2130,7 +2413,11 @@
         text.spellcheck = false;
         text.textContent = item.text;
         text.addEventListener("blur", function(){
-          item.text = text.textContent.trim() || item.text;
+          var edited = text.textContent.trim();
+          if(edited && edited !== item.text){
+            item.text = state.pronouns ? convertToStudentPronouns(edited, state.pronouns) : edited;
+            item.src = null; // hand-edited: keep the teacher's wording from now on
+          }
           text.textContent = item.text;
         });
         var remove = document.createElement("button");
@@ -2166,8 +2453,9 @@
     function commit(){
       var v = input.value.trim();
       if(!v) return;
+      if(!state.pronouns){ askForPronouns(commit); return; }
       addItem(zone.id, colKey, v, true);
-      addToPersonalBank(zone.id, colKey, v);
+      addToPersonalBank(zone.id, colKey, neutraliseForBank(v));
       input.value = "";
       renderBank();
     }
@@ -2187,15 +2475,143 @@
   }
 
   function addItem(zoneId, colKey, text, custom){
-    var list = state.items[zoneId][colKey];
-    if(!custom && list.some(function(it){ return it.text === text; })){
-      renderReport();
-      return;
+    if(!state.pronouns){
+      askForPronouns(function(){ addItem(zoneId, colKey, text, custom); });
+      return false;
     }
-    list.push({ text:text, custom:!!custom });
+    var list = state.items[zoneId][colKey];
+    if(!custom && list.some(function(it){ return itemMatches(it, text); })){
+      renderReport();
+      return true;
+    }
+    list.push({ text: convertToStudentPronouns(text, state.pronouns), src: text, custom: !!custom });
     renderReport();
     renderBank();
+    return true;
   }
+
+  function itemMatches(it, text){
+    return it.src === text || it.text === text ||
+      (state.pronouns && it.text === convertToStudentPronouns(text, state.pronouns));
+  }
+  function previewText(text){
+    return state.pronouns ? convertToStudentPronouns(text, state.pronouns) : text;
+  }
+
+  // ================= STUDENT PRONOUNS: state + UI =================
+  function normalisePronounKey(v){
+    if(!v) return null;
+    var t = String(v).toLowerCase().replace(/\s+/g,"");
+    if(t === "he" || t.indexOf("he/") === 0 || t === "him" || t === "his") return "he";
+    if(t === "she" || t.indexOf("she/") === 0 || t === "her") return "she";
+    if(t === "they" || t.indexOf("they/") === 0 || t === "them") return "they";
+    return null;
+  }
+
+  // Convert every line in the report to the current pronouns. Lines that came from an example
+  // (or from another tool) are rebuilt from their original wording; lines a teacher has typed or
+  // edited are converted in place. Returns how many lines changed.
+  function applyPronounsToAllItems(){
+    if(!state.pronouns) return 0;
+    var changed = 0;
+    ZONES.forEach(function(z){ COLS.forEach(function(c){
+      state.items[z.id][c].forEach(function(it){
+        var next = it.src
+          ? convertToStudentPronouns(it.src, state.pronouns)
+          : convertToStudentPronouns(swapGenderedPronouns(it.text, state.pronouns), state.pronouns);
+        if(next !== it.text){ it.text = next; changed++; }
+      });
+    }); });
+    return changed;
+  }
+
+  function setPronouns(key){
+    if(!PRONOUN_SETS[key] || key === state.pronouns) return;
+    var hadPrevious = !!state.pronouns;
+    var count = usedCount();
+    if(hadPrevious && count > 0 && !window.confirm("Change this report to " + PRONOUN_SETS[key].label + "? All " + count + " line" + (count === 1 ? "" : "s") + " will be updated to match.")){
+      renderPronounField();
+      return;
+    }
+    state.pronouns = key;
+    var changed = applyPronounsToAllItems();
+    try{ if(currentStudent) cacheReportLocally(); }catch(e){ /* ignore */ }
+    renderPronounField();
+    renderBank(); renderReport();
+    if(changed > 0){
+      setSaveStatus("Updated " + changed + " line" + (changed === 1 ? "" : "s") + " to " + PRONOUN_SETS[key].label + ". Lines you typed or edited yourself are worth a quick read — then Save.", "busy");
+    } else {
+      setSaveStatus("Pronouns set to " + PRONOUN_SETS[key].label + " — click Save to keep this.", "busy");
+    }
+  }
+
+  function renderPronounField(){
+    var field = document.getElementById("pronounField");
+    if(!field) return;
+    field.setAttribute("data-unset", state.pronouns ? "false" : "true");
+    var btns = field.querySelectorAll("button[data-pn]");
+    for(var i = 0; i < btns.length; i++){
+      btns[i].setAttribute("aria-pressed", btns[i].getAttribute("data-pn") === state.pronouns ? "true" : "false");
+    }
+  }
+  (function(){
+    var field = document.getElementById("pronounField");
+    if(!field) return;
+    var btns = field.querySelectorAll("button[data-pn]");
+    for(var i = 0; i < btns.length; i++){
+      btns[i].addEventListener("click", function(){ setPronouns(this.getAttribute("data-pn")); });
+    }
+  })();
+
+  var pronounOverlay = document.getElementById("pronounOverlay");
+  var pendingAfterPronouns = null;
+  function askForPronouns(then){
+    pendingAfterPronouns = then || null;
+    var title = document.getElementById("pronounOverlayTitle");
+    if(title) title.textContent = "Which pronouns does " + (currentStudent ? currentStudent.initials : "this student") + " use?";
+    pronounOverlay.classList.add("open");
+    var first = pronounOverlay.querySelector(".pn-choices button");
+    if(first) first.focus();
+  }
+  (function(){
+    var btns = pronounOverlay.querySelectorAll(".pn-choices button[data-pn]");
+    for(var i = 0; i < btns.length; i++){
+      btns[i].addEventListener("click", function(){
+        pronounOverlay.classList.remove("open");
+        setPronouns(this.getAttribute("data-pn"));
+        var next = pendingAfterPronouns; pendingAfterPronouns = null;
+        if(next) next();
+      });
+    }
+    document.getElementById("btnClosePronoun").addEventListener("click", function(){
+      pendingAfterPronouns = null;
+      pronounOverlay.classList.remove("open");
+    });
+    pronounOverlay.addEventListener("click", function(e){
+      if(e.target === pronounOverlay){ pendingAfterPronouns = null; pronounOverlay.classList.remove("open"); }
+    });
+  })();
+
+  // A saved phrase should work for any future student, so it's stored in neutral form
+  // (he/she -> they) and converted again for whichever student it's added to next.
+  function neutraliseForBank(text){
+    return (state.pronouns === "he" || state.pronouns === "she") ? swapGenderedPronouns(text, "they") : text;
+  }
+
+  // Entry point for other portal tools (e.g. a Behaviour Support Tool import) to add lines.
+  // Everything still goes through addItem, so pronouns are always applied.
+  window.wotBuilder = {
+    addLines: function(zoneId, colKey, texts){
+      if(!state.items[zoneId] || !state.items[zoneId][colKey]) return false;
+      (Array.isArray(texts) ? texts : [texts]).forEach(function(t){
+        if(t && String(t).trim()) addItem(zoneId, colKey, String(t).trim(), false);
+      });
+      return true;
+    },
+    convert: function(text, key){ return convertToStudentPronouns(text, normalisePronounKey(key) || state.pronouns); },
+    getPronouns: function(){ return state.pronouns; },
+    setPronouns: function(key){ setPronouns(normalisePronounKey(key)); }
+  };
 
   // ================= PRINT STYLE CHOICE =================
   var PRINT_STYLE_KEY = "wot-builder-print-style-v2";
@@ -2480,6 +2896,7 @@
   function buildExportText(){
     var lines = [];
     lines.push("Personalised Window of Tolerance — " + studentDisplayName());
+    if(state.pronouns) lines.push("Pronouns: " + PRONOUN_SETS[state.pronouns].label);
     lines.push("");
     ZONES.forEach(function(zone){
       lines.push(zone.label.toUpperCase());
