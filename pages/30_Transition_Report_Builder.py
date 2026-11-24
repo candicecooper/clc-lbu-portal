@@ -1791,7 +1791,7 @@ SAVED_KEY_RE = re.compile(
     r"^(report_type|sections|report_date|pstart|pend|teacher|school|vocab_(type|pre|post|summary)|numeracy|"
     r"biin_c_\d+|hits|hits_el_\d+|hits_c_\d+|rp|rp_comments|rp_c_\d+|wot|wotz_\w+|regulation|goal_sel|goal_known|"
     r"g_current_.+|days_att|days_tot|att_comment|att_table|att_table_on|summary|recs|app_recs|apps|app_title_\w+|"
-    r"app_text_\w+|uploads|voice_text|voice_files|sm_override|finalised)$")
+    r"app_text_\w+|uploads|voice_text|voice_files|lens|sm_override|finalised)$")
 DATE_KEYS = ("report_date", "pstart", "pend")
 EDITORS = ["sw", "biin0", "biin1", "biin2", "biin3"]
 
@@ -2890,9 +2890,56 @@ def _rewrite_without_scores(items, initials):
     return items
 
 
+def _program_says_sy(text):
+    """True / False from a program or year-level value, None if it doesn't say. SA high school starts at Year 7."""
+    t = str(text or "").strip().upper()
+    if not t:
+        return None
+    if t.startswith("SY") or any(w in t for w in ("SENIOR", "SECONDARY", "HIGH SCHOOL", "HIGH")):
+        return True
+    if t.startswith(("JP", "PY")) or any(w in t for w in ("JUNIOR", "PRIMARY", "RECEPTION")):
+        return False
+    m_ = re.search(r"(?:YEAR|YR|Y)\s*(\d{1,2})|^(\d{1,2})$", t)
+    if m_:
+        return int(m_.group(1) or m_.group(2)) >= 7
+    return None
+
+
+def detect_senior_years():
+    """Best guess at the report's lens: register program, then the Behaviour Support record (program / year level),
+    then the enrolled school's name. Returns (is_sy, reason)."""
+    v = _program_says_sy(st.session_state.get("_tr_program"))
+    if v is not None:
+        return v, f"program in the Student Register: {st.session_state.get('_tr_program')}"
+    stu_ = st.session_state.get("_tr_student") or {}
+    ck = f"_tr_bst_prog_{stu_.get('initials')}"
+    if ck not in st.session_state:
+        try:
+            row = bst_find_student(stu_.get("initials") or "") if stu_.get("initials") else None
+        except Exception:
+            row = None
+        st.session_state[ck] = (row or {}).get("program"), (row or {}).get("year_level")
+    bprog, byear = st.session_state[ck]
+    for val, src in ((bprog, "program in the Behaviour Support Tool"), (byear, "year level in the Behaviour Support Tool")):
+        v = _program_says_sy(val)
+        if v is not None:
+            return v, f"{src}: {val}"
+    school = str(st.session_state.get("tr_school") or "")
+    if re.search(r"high school|secondary|senior|\bcollege\b|\b7\s*-\s*12\b", school, re.I):
+        return True, f"enrolled school: {school}"
+    return False, "no program recorded — assumed primary"
+
+
 def is_senior_years(program=None):
-    p_ = str(program if program is not None else st.session_state.get("_tr_program") or "").upper()
-    return p_.startswith("SY") or "SENIOR" in p_
+    """The lens the AI drafts use. A choice made in the sidebar always wins."""
+    choice = st.session_state.get("tr_lens")
+    if choice in ("High school (SY)", "Primary school (JP/PY)"):
+        return choice.startswith("High")
+    if program:
+        v = _program_says_sy(program)
+        if v is not None:
+            return v
+    return detect_senior_years()[0]
 
 
 SY_LENS = (
@@ -2923,7 +2970,7 @@ SY_TERM_SWAPS = [
 
 
 def apply_lens_terms(text, program=None):
-    if not is_senior_years(program) or not text:
+    if not text or not (_program_says_sy(program) if program else is_senior_years()):
         return text
     for rx, new in SY_TERM_SWAPS:
         text = re.sub(rx, lambda m: (new[0].upper() + new[1:])
@@ -3031,15 +3078,17 @@ def ai_draft(section, initials, ctx):
                   "3) Attendance and engagement, then a forward-looking closing on readiness for transition.\n"
                   "Only include points the data supports; skip any that it doesn't. Separate paragraphs with a blank line. "
                   'Return JSON: {"text": "<paragraphs>"}')
-    system_ = AI_SYSTEM + " " + (SY_LENS if is_senior_years(ctx.get("program")) else PRIMARY_LENS)
+    sy_ = is_senior_years(ctx.get("program"))
+    system_ = AI_SYSTEM + " " + (SY_LENS if sy_ else PRIMARY_LENS)
+    ctx["program"] = "SY" if sy_ else (ctx.get("program") or "Primary")
     out = _parse_json(groq_ai_call(prompt, system=system_, max_tokens=1800 if section in ("summary", "recommendations") else 1200))
     for it in out.get("items") or []:                  # SY: secondary wording
         if isinstance(it, dict) and isinstance(it.get("text"), str):
-            it["text"] = apply_lens_terms(it["text"], ctx.get("program"))
+            it["text"] = apply_lens_terms(it["text"], "SY" if sy_ else "PY")
     if isinstance(out.get("items"), list):
-        out["items"] = [apply_lens_terms(x, ctx.get("program")) if isinstance(x, str) else x for x in out["items"]]
+        out["items"] = [apply_lens_terms(x, "SY" if sy_ else "PY") if isinstance(x, str) else x for x in out["items"]]
     for k_ in [k for k, v in out.items() if isinstance(v, str)]:
-        out[k_] = apply_lens_terms(out[k_], ctx.get("program"))
+        out[k_] = apply_lens_terms(out[k_], "SY" if sy_ else "PY")
     for it in out.get("items") or []:                  # no severity anywhere in a draft
         if isinstance(it, dict) and "text" in it:
             it["text"] = _drop_severity(it["text"])
@@ -3297,6 +3346,7 @@ def ai_draft_box(section, initials, report_start, report_end):
         return
     with st.container(border=True):
         st.markdown(("**✨ AI draft from the assessment scores**" if lit else "**✨ AI draft from Behaviour Support data**")
+                    + f" · {'🏫 high school (SY) lens' if is_senior_years() else 'primary school lens'}"
                     + " — *a suggestion only; check it before adding.*")
         editing = st.session_state.get(f"tr_aiedit_{section}")
         if section in ("hits", "restorative", "sw", "biin"):
@@ -3776,6 +3826,13 @@ with st.sidebar:
     st.markdown("---")
     lc_teacher = st.text_input("LC Teacher Name", key="tr_teacher")
     enrolled_school = st.text_input("Enrolled School", key="tr_school")
+    _sy_guess, _sy_why = detect_senior_years()
+    st.radio("AI drafts are written for", ["Automatic", "Primary school (JP/PY)", "High school (SY)"], key="tr_lens",
+             horizontal=False,
+             help="Sets the lens for every AI draft (language, supports, recommendations). 'Automatic' uses the "
+                  "student's program.")
+    if S("lens", "Automatic") == "Automatic":
+        st.caption(f"Automatic → **{'High school (SY)' if _sy_guess else 'Primary school'}** ({_sy_why}).")
 
 
 tab1, tab2, tab3 = st.tabs(["📝 Report Sections", "👁️ Preview", "💾 Generate"])
