@@ -31,6 +31,7 @@ import os
 import smtplib
 import time
 import urllib.request
+import uuid
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from html import escape
@@ -150,6 +151,11 @@ MANAGER_EMAIL = "candice.cooper330@schools.sa.edu.au"
 
 ALERT_EMAILS_TO = ["candice.cooper330@schools.sa.edu.au", "annette.balestrin13@schools.sa.edu.au"]
 
+# Receipt-logged copy: when a staff member lodges a return, these inboxes get
+# an email showing the details plus the uploaded receipt image(s) inline.
+# Override with a RECEIPT_EMAIL_TO setting (comma-separated) if needed.
+RECEIPT_COPY_TO = ["clcadmin281@schools.sa.edu.au", "candice.cooper330@schools.sa.edu.au"]
+
 # Where the portal lives — used to build the "go straight to approval" links
 # in alert emails. Override with a PORTAL_BASE_URL setting if it ever moves.
 DEFAULT_PORTAL_BASE_URL = "https://clc-lbu-portal.onrender.com"
@@ -180,7 +186,8 @@ def approval_link(section_key: str) -> str:
     return f"{base}/{PAGE_SLUG}?go={section_key}"
 
 
-def _alert_html(heading: str, rows: list, link: str | None, link_label: str, note: str) -> str:
+def _alert_html(heading: str, rows: list, link: str | None, link_label: str, note: str,
+                image_urls: list | None = None) -> str:
     """HTML body, same look as the Hazard Report alert (heading + table).
     Everything staff typed is escaped so it can't inject markup."""
     def tr(k, v):
@@ -194,11 +201,23 @@ def _alert_html(heading: str, rows: list, link: str | None, link_label: str, not
                      f"<p style='color:#555;font-size:12px'>Or paste this into your browser: "
                      f"{escape(link)}<br>The admin password is needed to approve.</p>")
     note_html = f"<p>{escape(note)}</p>" if note else ""
+    img_html = ""
+    if image_urls:
+        parts = ["<h3 style='margin:16px 0 6px'>Uploaded receipt(s)</h3>"]
+        for n, u in enumerate(image_urls, start=1):
+            eu = escape(u, quote=True)
+            if u.split("?")[0].lower().endswith(".pdf"):
+                parts.append(f"<p>📄 Receipt {n} (PDF): <a href='{eu}'>open the PDF</a></p>")
+            else:
+                parts.append(f"<p style='margin:8px 0'>Receipt {n}:<br>"
+                             f"<a href='{eu}'><img src='{eu}' alt='Receipt {n}' "
+                             "style='max-width:480px;width:100%;border:1px solid #ddd;border-radius:6px'></a></p>")
+        img_html = "".join(parts)
     return (
         "<div style='font-family:Segoe UI,Arial,sans-serif;font-size:14px'>"
         f"<h2 style='margin:0 0 8px'>{escape(heading)}</h2>"
         f"<table style='border-collapse:collapse;border:1px solid #ddd'>{''.join(tr(k, v) for k, v in rows)}</table>"
-        f"{note_html}{link_html}</div>"
+        f"{note_html}{img_html}{link_html}</div>"
     )
 
 
@@ -250,7 +269,8 @@ def _send_via_smtp(user: str, pw: str, host: str, port: int, recipients: list, m
 
 
 def send_alert_email(subject: str, heading: str, rows: list, link: str | None = None,
-                     link_label: str = "Review & approve", note: str = "") -> tuple[bool, str]:
+                     link_label: str = "Review & approve", note: str = "",
+                     to: list | None = None, image_urls: list | None = None) -> tuple[bool, str]:
     """Email alert when a request/return is lodged. Never raises — an alert
     failure must not block a staff member's submission. Returns (sent, message)
     so the admin "Send test alert" button can show what actually went wrong.
@@ -268,8 +288,11 @@ def send_alert_email(subject: str, heading: str, rows: list, link: str | None = 
         PORTAL_BASE_URL      optional, defaults to DEFAULT_PORTAL_BASE_URL
     """
     try:
-        override = _cfg("ALERT_EMAIL_TO")
-        to_addrs = [a.strip() for a in override.split(",") if a.strip()] if override else ALERT_EMAILS_TO
+        if to is not None:
+            to_addrs = list(to)
+        else:
+            override = _cfg("ALERT_EMAIL_TO")
+            to_addrs = [a.strip() for a in override.split(",") if a.strip()] if override else ALERT_EMAILS_TO
         if not to_addrs:
             return False, "No alert recipients configured."
 
@@ -281,7 +304,7 @@ def send_alert_email(subject: str, heading: str, rows: list, link: str | None = 
             return False, ("No email route is set up — add EMAIL_WEBHOOK_URL and EMAIL_WEBHOOK_TOKEN "
                            "(same ones the Hazard Report tool uses) in Render > Environment.")
 
-        html = _alert_html(heading, rows, link, link_label, note)
+        html = _alert_html(heading, rows, link, link_label, note, image_urls)
 
         # 1. Web route (works on Render) if it has been set up
         if webhook:
@@ -360,10 +383,26 @@ def upload_receipts(files, staff_name: str) -> list[str]:
     urls = []
     for i, file in enumerate(files):
         ext = file.name.split(".")[-1]
-        path = f"{safe_name}/{datetime.now().strftime('%Y%m%d_%H%M%S')}_{i}.{ext}"
+        # short random part so an admin adding receipts later in the same
+        # second as an earlier upload can never collide with an existing file
+        path = f"{safe_name}/{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}_{i}.{ext}"
         _retry(lambda: sb.storage.from_(BUCKET_NAME).upload(path, file.getvalue(), {"content-type": file.type}))
         urls.append(sb.storage.from_(BUCKET_NAME).get_public_url(path))
     return urls
+
+
+def _row_receipt_urls(row) -> list[str]:
+    """All receipt links stored on a return row (new multi-file column first,
+    falling back to the original single receipt_url)."""
+    urls = row.get("receipt_urls")
+    if isinstance(urls, list) and urls:
+        return [u for u in urls if u]
+    single = row.get("receipt_url")
+    return [single] if isinstance(single, str) and single else []
+
+
+def _is_pdf_url(url: str) -> bool:
+    return url.split("?")[0].lower().endswith(".pdf")
 
 
 # ---- requests (Form 1) ----------------------------------------------------
@@ -574,6 +613,110 @@ def build_funding_request_pdf(data: dict) -> bytes:
     doc.build(story)
     buf.seek(0)
     return buf.getvalue()
+
+
+def render_return_editor(row, staff_list: list, card_list: list):
+    """Admin editor for one card return (View & Download Forms): fix any detail
+    staff entered, and remove, add to, or replace the receipt uploads.
+
+    Removing a receipt only unlinks it from this return — the file itself is
+    left in Supabase Storage, so nothing financial is ever destroyed by an
+    edit. Status isn't editable here on purpose: approving stays in
+    Admin > Approve Returns, which also closes the linked card request."""
+    rid = int(row["id"])
+    ver = st.session_state.get(f"vd_ver_{rid}", 0)  # bumped after each save so the form/uploader reset
+    current_urls = _row_receipt_urls(row)
+
+    # Keep a deleted staff member / card visible so saving can't silently swap them.
+    staff_opts = list(staff_list)
+    if row["staff_member"] not in staff_opts:
+        staff_opts.insert(0, row["staff_member"])
+    existing_cards = row.get("card_names") if isinstance(row.get("card_names"), list) else []
+    card_opts = list(card_list) + [c for c in existing_cards if c not in card_list]
+    receipt_dt = pd.to_datetime(row.get("receipt_date"), errors="coerce")
+    receipt_default = receipt_dt.date() if pd.notna(receipt_dt) else date.today()
+
+    with st.form(f"vd_edit_form_{rid}_{ver}"):
+        st.markdown(f"**Editing return #{rid}**")
+        e_staff = st.selectbox("Staff Member", staff_opts, index=staff_opts.index(row["staff_member"]),
+                               key=f"vdstaff_{rid}_{ver}")
+        st.write("Card(s)")
+        e_cards = card_tickboxes(card_opts, f"vdcards_{rid}_{ver}", preselected=existing_cards)
+        e_date = st.date_input("Date on receipt", value=receipt_default, key=f"vddate_{rid}_{ver}")
+        e_total = st.number_input(
+            "Total on receipt ($)", min_value=0.0, step=0.01, format="%.2f",
+            value=float(row["total_amount"]), key=f"vdtotal_{rid}_{ver}",
+        )
+        e_notes = st.text_area("Notes", value=row.get("notes") or "", key=f"vdnotes_{rid}_{ver}")
+
+        st.markdown("**Receipts on file**")
+        remove_flags = {}
+        if not current_urls:
+            st.caption("No receipts on file yet.")
+        for n, url in enumerate(current_urls, start=1):
+            c1, c2 = st.columns([3, 1])
+            with c1:
+                if _is_pdf_url(url):
+                    st.markdown(f"📄 [Receipt {n} (PDF)]({url})")
+                else:
+                    st.image(url, caption=f"Receipt {n}", width=240)
+            with c2:
+                remove_flags[url] = st.checkbox("Remove", key=f"vdrm_{rid}_{ver}_{n}")
+        new_files = st.file_uploader(
+            "Add or replace receipts (photo, screenshot, or PDF)",
+            type=["png", "jpg", "jpeg", "pdf"],
+            accept_multiple_files=True,
+            key=f"vdup_{rid}_{ver}",
+        )
+        mode = st.radio(
+            "New files should…",
+            ["Be added to the receipts above", "Replace all the receipts above"],
+            key=f"vdmode_{rid}_{ver}",
+        )
+        st.caption("Tick \"Remove\" to drop a single receipt. Removed receipts are unlinked from this "
+                   "return but the file stays in storage.")
+        b1, b2 = st.columns(2)
+        save = b1.form_submit_button("Save changes", type="primary")
+        cancel = b2.form_submit_button("Cancel")
+
+    if cancel:
+        st.session_state["vd_edit_id"] = None
+        st.rerun()
+
+    if save:
+        replace_all = mode.startswith("Replace")
+        kept = [] if replace_all else [u for u in current_urls if not remove_flags.get(u)]
+        if not e_cards:
+            st.error("Tick at least one card.")
+        elif e_total <= 0:
+            st.error("Enter the total on the receipt.")
+        elif replace_all and not new_files:
+            st.error("Choose the replacement files, or switch to \"Be added to the receipts above\".")
+        elif not kept and not new_files:
+            st.error("A return needs at least one receipt — add a new file before removing the last one.")
+        else:
+            try:
+                with st.spinner("Saving…"):
+                    new_urls = upload_receipts(new_files, e_staff) if new_files else []
+                    final_urls = kept + new_urls
+                    update_submission(rid, {
+                        "staff_member": e_staff,
+                        "card_names": e_cards,
+                        "receipt_date": e_date.isoformat(),
+                        "total_amount": e_total,
+                        "notes": e_notes,
+                        "receipt_url": final_urls[0],
+                        "receipt_urls": final_urls,
+                    })
+            except Exception as e:
+                st.error(f"Couldn't save the changes — {e}")
+                return
+            # the cached PDF was built from the old details/receipts
+            st.session_state.pop(f"pdf_bytes_{rid}", None)
+            st.session_state[f"vd_ver_{rid}"] = ver + 1
+            st.session_state["vd_edit_id"] = None
+            st.session_state["vd_flash"] = f"Return #{rid} updated — regenerate the form to download the new version."
+            st.rerun()
 
 
 def build_return_form_pdf(row: dict) -> bytes:
@@ -846,6 +989,22 @@ with tab_return:
                 ],
                 link=approval_link("returns"),
                 link_label="Sight the receipt & approve",
+            )
+            _rc = _cfg("RECEIPT_EMAIL_TO")
+            send_alert_email(
+                f"🧾 Receipt logged – {ret_staff} – ${total_amount:.2f}",
+                "Credit Card Receipt Logged",
+                [
+                    ("Staff member", ret_staff),
+                    ("Card(s)", ", ".join(linked_request.get("card_names") or [])),
+                    ("Receipt date", format_date(receipt_date.isoformat())),
+                    ("Total on receipt", f"${total_amount:.2f}"),
+                    ("Notes", notes),
+                    ("Logged at", format_dt(now_iso())),
+                ],
+                note="For your records — this return is now waiting for sign-off in the Admin section.",
+                to=[a.strip() for a in _rc.split(",") if a.strip()] if _rc else RECEIPT_COPY_TO,
+                image_urls=receipt_urls,
             )
             st.success(f"Return submitted for {ret_staff} — awaiting admin sign-off.")
 
@@ -1264,6 +1423,9 @@ with tab_admin:
         dl_status = st.selectbox(
             "Filter by status", ["All", RET_PENDING, RET_APPROVED, RET_RETURNED], key="dl_filter"
         )
+        _flash = st.session_state.pop("vd_flash", None)
+        if _flash:
+            st.success(_flash)
         dl_df = fetch_submissions(None if dl_status == "All" else dl_status)
         if dl_df.empty:
             st.write("No returns to show.")
@@ -1276,13 +1438,14 @@ with tab_admin:
                     )
                     st.caption(
                         f"Receipt dated {format_date(row.get('receipt_date'))} · "
-                        f"submitted {format_dt(row.get('submitted_at'))}"
+                        f"submitted {format_dt(row.get('submitted_at'))} · "
+                        f"📎 {len(_row_receipt_urls(row))} receipt(s)"
                     )
                     if row.get("notes"):
                         st.write(row["notes"])
 
                     pdf_key = f"pdf_bytes_{row['id']}"
-                    gen_col, dl_col = st.columns([1, 1])
+                    gen_col, dl_col, edit_col = st.columns([1, 1, 1])
                     with gen_col:
                         if st.button("📄 Generate form", key=f"gen_{row['id']}"):
                             with st.spinner("Building form with receipt attached..."):
@@ -1299,6 +1462,13 @@ with tab_admin:
                                 mime="application/pdf",
                                 key=f"dl_{row['id']}",
                             )
+                    with edit_col:
+                        if st.button("✏️ Edit details & receipts", key=f"vd_editbtn_{row['id']}"):
+                            st.session_state["vd_edit_id"] = int(row["id"])
+
+                    # only one editor is open at a time, so a long list stays quick
+                    if st.session_state.get("vd_edit_id") == int(row["id"]):
+                        render_return_editor(row, STAFF_LIST, CARD_LIST)
 
     elif admin_section == "Log Funding Spend":
         cur_label, cur_start, cur_end = get_current_term()
