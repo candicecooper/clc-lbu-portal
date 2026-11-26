@@ -3441,7 +3441,7 @@ ATT_TYPE_HELP = {
     "Arrived late": "Missed the start of the day",
     "Different sessions": "Attended a different mix of sessions to usual",
     "Extra day": "Attended on a day they don't usually",
-    "No school": "Holiday, closure or student-free day (not counted as expected attendance)",
+    "No school": "School closed to all students (pupil free day, public holiday or closure). Not counted as expected attendance. Not for a student's own absence.",
 }
 ATT_ESCALATION_REASON = "Day end: avoid potential escalation"
 ATT_RESET_REASON = "Day end: needs reset"
@@ -3709,8 +3709,13 @@ def render_attendance_tracking(student_id):
     mon = _att_monday(ss[dk])
     fri = mon + timedelta(days=4)
     st.markdown(f"#### Week of {mon.strftime('%-d %b')} – {fri.strftime('%-d %b %Y')}")
-    st.caption("Tick the sessions the student **attended**. They start from the usual pattern, so on a normal week there is "
-               "nothing to change and nothing to save. Only days that differ are recorded.")
+    st.caption("Tick the sessions the student **attended**. Each day starts from the usual weekly pattern, but **the pattern is only a "
+               "starting point: you can change any day or session to match what actually happened** (an extra day, a different mix of "
+               "sessions, leaving early, or not attending). On a normal week there is nothing to change and nothing to save; only days "
+               "that differ are recorded.")
+    st.info("**No school** means the school was closed to **all** students that day: a **pupil free day, public holiday, school "
+            "closure or other student-free day**. It is not counted in expected attendance. For a day this student missed, "
+            "leave **No school** unticked and untick all the sessions instead, so it is recorded as an absence.")
 
     # ── 2. the week grid ──
     days = [mon + timedelta(days=i) for i in range(5)]
@@ -3721,9 +3726,11 @@ def render_attendance_tracking(student_id):
         base_key = f"attw_{student_id}_{mon.isoformat()}_{ATT_DAYS[i]}"
         with cols[i]:
             st.markdown(f"**{ATT_DAYS[i]}** · {d.strftime('%-d %b')}")
-            planned_txt = " ".join(ATT_SESSION_LABEL[x] for x in ATT_SESSIONS if x in info[i]["planned"]) or "not usual day"
+            planned_txt = " ".join(ATT_SESSION_LABEL[x] for x in ATT_SESSIONS if x in info[i]["planned"]) or "not a usual day (tick sessions to record an extra day)"
             st.caption(f"Usual: {planned_txt}" + (f" · from {info[i]['expected_start']}" if info[i]["expected_start"] and info[i]["planned"] else ""))
-            ns = st.checkbox("No school", value=info[i]["no_school"], key=f"{base_key}_ns")
+            ns = st.checkbox("No school", value=info[i]["no_school"], key=f"{base_key}_ns",
+                             help="Pupil free day, public holiday, school closure: the school was closed to everyone. "
+                                  "Not for this student's own absence; untick all sessions for that.")
             no_school[i] = ns
             got = []
             for s in ATT_SESSIONS:
