@@ -3545,6 +3545,19 @@ def attendance_current_starts(state, on=None) -> dict:
     return {d: (chosen.get("starts") or {}).get(d, "") for d in ATT_DAYS}
 
 
+def attendance_current_transition(state, on=None) -> dict:
+    """Weekdays the usual pattern marks as transition days (time at the receiving school) on a date."""
+    on = on or date.today()
+    vers = sorted(state.get("schedule", []), key=lambda v: v["from"])
+    if not vers:
+        return {d: False for d in ATT_DAYS}
+    chosen = vers[0]
+    for v in vers:
+        if v["from"] <= on.isoformat():
+            chosen = v
+    return {d: bool((chosen.get("transition") or {}).get(d)) for d in ATT_DAYS}
+
+
 def _att_minutes(hhmm):
     """Minutes after midnight for '9:00', '10:15', '1:30' (school hours: 1-6 are pm). None if not a time."""
     m = re.match(r"^\s*(\d{1,2}):(\d{2})\s*$", hhmm or "")
@@ -3567,7 +3580,8 @@ def attendance_day(state, d) -> dict:
     actual = planned
     if exc:
         actual = [] if exc.get("type") == "Absent" else [x for x in ATT_SESSIONS if x in (exc.get("sessions") or [])]
-    is_tr = bool(exc and exc.get("reason") == ATT_TRANSITION_REASON)
+    pattern_tr = bool((not exc) and d.weekday() < 5 and attendance_current_transition(state, d).get(ATT_DAYS[d.weekday()]))
+    is_tr = bool(exc and exc.get("reason") == ATT_TRANSITION_REASON) or pattern_tr
     if is_tr:
         planned = list(actual)   # time at the receiving school is planned, so it is neither expected here nor 'lost'
     exp_start = attendance_current_starts(state, d).get(ATT_DAYS[d.weekday()], "") if d.weekday() < 5 else ""
@@ -3814,7 +3828,8 @@ def render_attendance_tracking(student_id):
     with st.expander("📅 Usual weekly pattern (change only when the student's days or times change)", expanded=not state["schedule"]):
         cur = attendance_current_days(state, mon)
         _cs = attendance_current_starts(state, mon)
-        st.caption("In force for this week: " + " · ".join(f"{d} {_att_sess_text(cur[d])}" + (f" from {_cs[d]}" if _cs.get(d) else "") for d in ATT_DAYS))
+        _ctr = attendance_current_transition(state, mon)
+        st.caption("In force for this week: " + " · ".join(f"{d} {_att_sess_text(cur[d])}" + (f" from {_cs[d]}" if _cs.get(d) else "") + (" (transition)" if _ctr.get(d) else "") for d in ATT_DAYS))
         for dname in ATT_DAYS:
             if f"att_sched_{student_id}_{mon.isoformat()}_{dname}" not in ss:
                 ss[f"att_sched_{student_id}_{mon.isoformat()}_{dname}"] = cur[dname]
@@ -3835,6 +3850,16 @@ def render_attendance_tracking(student_id):
         for i, dname in enumerate(ATT_DAYS):
             new_days[dname] = pcols[i].multiselect(ATT_DAYS_FULL[i], ATT_SESSIONS,
                                                    key=f"att_sched_{student_id}_{mon.isoformat()}_{dname}")
+        cur_tr = attendance_current_transition(state, mon)
+        st.caption("**Transition days:** tick a day if the student usually spends it (or the rest of it) at the receiving school. "
+                   "Tick the CLC sessions above that they attend, or leave them empty for a full day away. Transition days are not "
+                   "counted as absences, and they show as Transition in the attendance table and the Transition Report.")
+        tcols = st.columns(5)
+        new_tr = {}
+        for i, dname in enumerate(ATT_DAYS):
+            new_tr[dname] = tcols[i].checkbox(f"{dname} transition", value=cur_tr.get(dname, False),
+                                              key=f"att_sched_{student_id}_{mon.isoformat()}_tr_{dname}",
+                                              help="Usual transition day at the receiving school")
         cur_starts = attendance_current_starts(state, mon)
         st.caption("Usual arrival time, only for days the student is expected later than the normal start (leave empty for the normal start). "
                    "A later arrival than this is recorded as a late arrival.")
@@ -3851,7 +3876,8 @@ def render_attendance_tracking(student_id):
         if st.button("💾 Save usual pattern", key=f"att_save_sched_{student_id}", use_container_width=True):
             start = mon.isoformat() if scope.startswith("From") else "2000-01-01"
             ver = {"from": start, "days": {d: [x for x in ATT_SESSIONS if x in new_days[d]] for d in ATT_DAYS}, "note": notes,
-                   "starts": {d: t for d, t in new_starts.items() if t and _att_minutes(t) is not None}}
+                   "starts": {d: t for d, t in new_starts.items() if t and _att_minutes(t) is not None},
+                   "transition": {d: True for d, on_ in new_tr.items() if on_}}
             if start == "2000-01-01":
                 state["schedule"] = [ver]
             else:
@@ -3866,7 +3892,7 @@ def render_attendance_tracking(student_id):
         if state["schedule"]:
             st.markdown("**Pattern history** (the pattern in force on each date is used for the analysis)")
             for v in sorted(state["schedule"], key=lambda v: v["from"], reverse=True):
-                txt = " · ".join(f"{d} {_att_sess_text(v['days'].get(d, []))}" for d in ATT_DAYS)
+                txt = " · ".join(f"{d} {_att_sess_text(v['days'].get(d, []))}" + (" (transition)" if (v.get('transition') or {}).get(d) else "") for d in ATT_DAYS)
                 c1, c2 = st.columns([6, 1])
                 c1.markdown(f"From **{v['from'] if v['from'] != '2000-01-01' else 'the start'}**: {txt}")
                 if c2.button("Remove", key=f"att_rmv_{student_id}_{v['from']}"):
