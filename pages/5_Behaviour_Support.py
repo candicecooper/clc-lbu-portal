@@ -3735,7 +3735,7 @@ def render_attendance_tracking(student_id):
     days = [mon + timedelta(days=i) for i in range(5)]
     info = [attendance_day(state, d) for d in days]
     cols = st.columns(5)
-    chosen, no_school, arrived, late_min = {}, {}, {}, {}
+    chosen, no_school, arrived, late_min, trans_tick, why_reason = {}, {}, {}, {}, {}, {}
     for i, d in enumerate(days):
         base_key = f"attw_{student_id}_{mon.isoformat()}_{ATT_DAYS[i]}"
         with cols[i]:
@@ -3751,6 +3751,22 @@ def render_attendance_tracking(student_id):
                 if st.checkbox(ATT_SESSION_LABEL[s], value=(s in info[i]["actual"]), key=f"{base_key}_{s}", disabled=ns):
                     got.append(s)
             chosen[i] = [] if ns else got
+            trans_tick[i] = st.checkbox("Transition (not at CLC)", value=bool(info[i].get("transition")) and not ns,
+                                        key=f"{base_key}_tr", disabled=ns,
+                                        help="The student is at the receiving school for this day, or the part of it not ticked above. "
+                                             "Not counted as an absence. Shows as Transition in the attendance table and the Transition Report.")
+            if not ns and not got and (info[i]["planned"] or info[i]["exc"]):   # a usual day that was missed
+                _why_opts = {"Sick": "Illness", "Transition": ATT_TRANSITION_REASON, "Appointment": "Appointment",
+                             "Family / personal": "Family / personal", "Other": "Other"}
+                _ex_r = (info[i]["exc"] or {}).get("reason")
+                _why_default = ("Transition" if (trans_tick[i] or _ex_r == ATT_TRANSITION_REASON) else
+                                next((k for k, v in _why_opts.items() if v == _ex_r), "Sick"))
+                _why = st.selectbox("Why not attending?", list(_why_opts), index=list(_why_opts).index(_why_default),
+                                    key=f"{base_key}_why",
+                                    help="None of AM / Mid / PM is ticked, so choose the reason this day was missed at CLC.")
+                why_reason[i] = _why_opts[_why]
+                if _why == "Transition":
+                    trans_tick[i] = True
             exp_t = info[i]["expected_start"] or "9:00"
             arr_in = st.text_input("Arrived at (if late)", value=(info[i]["exc"] or {}).get("arrived", ""), key=f"{base_key}_arr",
                                    placeholder=f"expected {exp_t}", disabled=ns,
@@ -3770,6 +3786,10 @@ def render_attendance_tracking(student_id):
             typ = None            # a non-attending day that is also "no school" needs no record
         if not no_school[i] and late_min.get(i, 0) > 0 and typ in (None, "Arrived late"):
             typ = "Arrived late"   # all sessions attended, but arrived after the expected time
+        if not no_school[i] and bool(trans_tick.get(i)) != bool(info[i].get("transition")):
+            # transition ticked (or a usual-pattern transition day un-ticked) -> this date needs its own record
+            if typ is None:
+                typ = ("Absent" if not chosen[i] else "Different sessions") if trans_tick.get(i) else "Different sessions"
         if typ:
             changes[i] = typ
     details = {}
@@ -3790,15 +3810,25 @@ def render_attendance_tracking(student_id):
                 continue
             dflt = ex.get("reason") if same and ex.get("reason") in ATT_REASONS else {
                 "Finished early": ATT_ESCALATION_REASON, "Absent": "Illness"}.get(typ, "Other")
+            if trans_tick.get(i):
+                dflt = ATT_TRANSITION_REASON
             c1, c2, c3 = st.columns([2.2, 1.2, 2.6])
             rk = f"attwr_{student_id}_{mon.isoformat()}_{ATT_DAYS[i]}"
-            reason = c1.selectbox("Reason", ATT_REASONS, index=ATT_REASONS.index(dflt), key=f"{rk}_r")
+            if typ == "Absent" and i in why_reason:
+                reason = why_reason[i]      # chosen in the day's "Why not attending?" box
+                c1.markdown(f"Reason: **{reason}**")
+            else:
+                reason = c1.selectbox("Reason", ATT_REASONS, index=ATT_REASONS.index(dflt), key=f"{rk}_r")
             left = ""
             if typ == "Finished early":
                 left = c2.text_input("Left at (e.g. 11:30)", value=ex.get("left", "") if same else "", key=f"{rk}_l").strip()
             
             note = c3.text_input("Note (optional)", value=ex.get("note", "") if same else "", key=f"{rk}_n",
                                  placeholder="e.g. Left after recess when signs of escalation appeared")
+            if trans_tick.get(i):
+                reason = ATT_TRANSITION_REASON      # the Transition tick decides the reason
+            elif reason == ATT_TRANSITION_REASON:
+                reason = "Other"                    # un-ticked: no longer a transition day
             details[i] = {"reason": reason, "note": note, "left": left}
 
     if st.button("💾 Save this week", type="primary", key=f"att_save_week_{student_id}", use_container_width=True):
@@ -3857,7 +3887,7 @@ def render_attendance_tracking(student_id):
         tcols = st.columns(5)
         new_tr = {}
         for i, dname in enumerate(ATT_DAYS):
-            new_tr[dname] = tcols[i].checkbox(f"{dname} transition", value=cur_tr.get(dname, False),
+            new_tr[dname] = tcols[i].checkbox(f"{dname}: transition day (not at CLC)", value=cur_tr.get(dname, False),
                                               key=f"att_sched_{student_id}_{mon.isoformat()}_tr_{dname}",
                                               help="Usual transition day at the receiving school")
         cur_starts = attendance_current_starts(state, mon)
