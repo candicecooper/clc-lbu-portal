@@ -7,7 +7,10 @@ Leadership can log meetings, PD, SDDs and other commitments as
 Proposed / Scheduled / Confirmed / Cancelled, with where they will occur,
 then view each 2027 term week-by-week to plan ahead (starting with Term 1).
 
-Supabase table: leadership_planning_events  (see leadership_planning_schema.sql)
+Supabase tables: leadership_planning_events, leadership_planning_drafts,
+leadership_day_plans, leadership_plans, leadership_planning_files
+(see leadership_planning_schema.sql, day_planner_table.sql, plans_and_documents.sql)
+Storage bucket: leadership-planning (private) for uploaded documents.
 Uses the main portal Supabase project (SUPABASE_URL / SUPABASE_KEY).
 """
 from __future__ import annotations
@@ -128,6 +131,10 @@ TIME_SLOTS = [NO_TIME] + [
 ]
 
 WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+
+VIEW_CAL, VIEW_PLANS, VIEW_DAY = "📅 Term calendar", "📂 Plans", "🗒️ Day Planner"
+VIEW_ADD, VIEW_LIST, VIEW_EXPORT = "➕ Add item", "📝 Review & edit", "⬇️ Export"
+VIEWS = [VIEW_CAL, VIEW_PLANS, VIEW_DAY, VIEW_ADD, VIEW_LIST, VIEW_EXPORT]
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STYLES
@@ -615,6 +622,7 @@ def _init_form(prefix: str, ex: dict, draft: dict | None):
     vals = _defaults(ex)
     if draft and draft.get("data"):
         vals = _clean_draft_values(draft["data"], vals)
+    if draft and draft.get("data") and not st.session_state.get("lp_quiet_restore"):
         who = f" by {draft['saved_by']}" if draft.get("saved_by") else ""
         st.session_state[f"{prefix}_restored"] = f"{_fmt_ts(draft.get('updated_at'))}{who}".strip()
     for k, v in vals.items():
@@ -964,6 +972,7 @@ def render_day_planner(events: list[dict]):
     c1, c2, c3 = st.columns([1.2, 1.6, 1.2])
     with c1:
         d = st.date_input("Pick a date", key="dp_date", format="DD/MM/YYYY")
+    st.session_state["dp_date_keep"] = d
     plan_index = load_day_plan_index()
     with c2:
         upcoming = sorted(x for x in plan_index if x >= date.today())
@@ -993,12 +1002,35 @@ def render_day_planner(events: list[dict]):
     if day_events:
         st.markdown("**Already on the calendar this day**")
         st.markdown("".join(chip_html(r) for r in day_events), unsafe_allow_html=True)
-    if st.button("➕ Add a calendar item on this date", key="dp_add_item"):
+    all_plans, _perr = load_plans()
+    linked_plans = plans_for_date(all_plans, d) if not _perr else []
+    if linked_plans:
+        st.markdown("**Part of plan:**")
+        cols = st.columns(min(len(linked_plans), 4))
+        for i, p in enumerate(linked_plans):
+            if cols[i % len(cols)].button(f"📂 {p.get('title') or 'Untitled'}", key=f"dp_goplan_{p['id']}",
+                                          help="Open this plan's overview"):
+                go_to(VIEW_PLANS, p["id"])
+
+    b1, b2, b3 = st.columns([1.3, 1.6, 1])
+    if b1.button("➕ Add a calendar item on this date", key="dp_add_item"):
         st.session_state["lp_prefill_date"] = d
         st.session_state["lp_new_reset"] = True
-        st.session_state["lp_flash"] = (f"The ➕ Add item form is set to {d.strftime('%a %d %b')} "
-                                        "— open that tab to fill it in.")
-        st.rerun()
+        go_to(VIEW_ADD)
+    unlinked = [p for p in all_plans if p not in linked_plans] if not _perr else []
+    if unlinked:
+        names = {p["id"]: p.get("title") or "Untitled" for p in unlinked}
+        pick = b2.selectbox("Link this day to a plan", [""] + list(names), key=f"dp_linkpick_{d.isoformat()}",
+                            format_func=lambda x: names.get(x, "Link this day to a plan…"),
+                            label_visibility="collapsed")
+        if b3.button("🔗 Link", key="dp_link_btn", disabled=not pick):
+            p = next(x for x in unlinked if x["id"] == pick)
+            e = update_plan(pick, {"linked_dates": sorted(set((p.get("linked_dates") or []) + [d.isoformat()]))})
+            if e:
+                st.error(f"Could not link: {e}")
+            else:
+                st.session_state.pop("pl_loaded_id", None)
+                _dp_rerun()
 
     st.divider()
     c1, c2 = st.columns([2, 1])
@@ -1107,6 +1139,9 @@ def render_day_planner(events: list[dict]):
             st.session_state["dp_last_saved"] = payload
             st.session_state["dp_saved_note"] = f"✓ Auto-saved {_now_hm()}"
 
+    st.markdown("#### 📎 Documents for this day")
+    render_documents("day", d.isoformat(), f"dpdoc_{d.isoformat()}", _dp_rerun)
+
     st.divider()
     f1, f2, f3 = st.columns([2, 1.4, 1.4])
     f1.caption(st.session_state.get("dp_saved_note") or "Auto-saves as you go — nothing to press.")
@@ -1139,9 +1174,10 @@ def render_day_planner(events: list[dict]):
                     st.session_state["dp_del_confirm"] = True
                     _dp_rerun()
             else:
-                st.warning("Delete everything planned for this day?")
+                st.warning("Delete everything planned for this day, including its documents?")
                 if st.button("Yes, clear it", key="dp_del_yes", type="primary"):
                     st.session_state.pop("dp_del_confirm", None)
+                    delete_all_files("day", d.isoformat())
                     err = delete_day_plan(d)
                     if err:
                         st.error(f"Could not delete: {err}")
@@ -1151,6 +1187,708 @@ def render_day_planner(events: list[dict]):
                 if st.button("Keep it", key="dp_del_no"):
                     st.session_state.pop("dp_del_confirm", None)
                     _dp_rerun()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DOCUMENTS — shared upload/list component (Plans + Day Planner)
+#
+#  • Files go to the private Supabase Storage bucket `leadership-planning`.
+#  • A row per file in leadership_planning_files records what it belongs to
+#    (parent_type = 'plan' | 'day', parent_key = plan id | ISO date).
+#  • Links are short-lived signed URLs, so nothing is publicly reachable.
+# ══════════════════════════════════════════════════════════════════════════════
+BUCKET = "leadership-planning"
+FILES_TABLE = "leadership_planning_files"
+MAX_UPLOAD_MB = 50  # Supabase Storage default per-file limit
+
+FILE_ICONS = {
+    "pdf": "📕", "doc": "📘", "docx": "📘", "xls": "📗", "xlsx": "📗", "csv": "📗",
+    "ppt": "📙", "pptx": "📙", "png": "🖼️", "jpg": "🖼️", "jpeg": "🖼️", "gif": "🖼️",
+    "txt": "📄", "zip": "🗜️", "mp4": "🎞️", "mov": "🎞️", "mp3": "🎧", "m4a": "🎧",
+}
+
+
+def _is_missing(err: str | None) -> bool:
+    e = (err or "").lower()
+    return any(s in e for s in ("does not exist", "pgrst205", "schema cache", "bucket not found",
+                                "not found"))
+
+
+def _human_size(n) -> str:
+    try:
+        n = float(n or 0)
+    except Exception:
+        return ""
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return ""
+
+
+def list_files(parent_type: str, parent_key: str) -> tuple[list[dict], str | None]:
+    sb = get_supabase()
+    if sb is None:
+        return [], "Supabase credentials not found."
+    try:
+        res = (sb.table(FILES_TABLE).select("*")
+               .eq("parent_type", parent_type).eq("parent_key", parent_key).execute())
+    except Exception as e:
+        return [], str(e)
+    rows = res.data or []
+    return sorted(rows, key=lambda r: str(r.get("uploaded_at") or "")), None
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def file_counts(parent_type: str) -> dict:
+    """{parent_key: number of files} for one parent type."""
+    sb = get_supabase()
+    if sb is None:
+        return {}
+    try:
+        res = sb.table(FILES_TABLE).select("parent_key").eq("parent_type", parent_type).execute()
+    except Exception:
+        return {}
+    out: dict = {}
+    for r in res.data or []:
+        out[r["parent_key"]] = out.get(r["parent_key"], 0) + 1
+    return out
+
+
+@st.cache_data(ttl=3000, show_spinner=False)
+def signed_url(path: str) -> str | None:
+    sb = get_supabase()
+    if sb is None:
+        return None
+    try:
+        res = sb.storage.from_(BUCKET).create_signed_url(path, 3600)
+    except Exception:
+        return None
+    if isinstance(res, dict):
+        return res.get("signedURL") or res.get("signedUrl") or res.get("signed_url")
+    return getattr(res, "signed_url", None) or getattr(res, "signedURL", None)
+
+
+def upload_files(parent_type: str, parent_key: str, files: list) -> list[str]:
+    """Upload each file; returns a list of error messages (empty = all good)."""
+    import re
+    sb = get_supabase()
+    if sb is None:
+        return ["Supabase credentials not found."]
+    errors = []
+    who = st.session_state.get("lp_entered_by") or None
+    for f in files:
+        size = getattr(f, "size", None) or len(f.getvalue())
+        if size > MAX_UPLOAD_MB * 1024 * 1024:
+            errors.append(f"{f.name}: larger than {MAX_UPLOAD_MB} MB — save it to OneDrive/SharePoint "
+                          "and add it as a link instead.")
+            continue
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", f.name).strip("_")[:120] or "file"
+        path = f"{parent_type}/{parent_key}/{uuid.uuid4().hex[:8]}_{safe}"
+        mime = f.type or "application/octet-stream"
+        try:
+            sb.storage.from_(BUCKET).upload(path, f.getvalue(),
+                                            {"content-type": mime, "upsert": "false"})
+        except Exception as e:
+            errors.append(f"{f.name}: {e}")
+            continue
+        try:
+            sb.table(FILES_TABLE).insert({
+                "id": str(uuid.uuid4()),
+                "parent_type": parent_type,
+                "parent_key": parent_key,
+                "file_name": f.name,
+                "storage_path": path,
+                "mime_type": mime,
+                "size_bytes": size,
+                "uploaded_by": who,
+                "uploaded_at": _utcnow_iso(),
+            }).execute()
+        except Exception as e:
+            errors.append(f"{f.name}: uploaded but not recorded ({e})")
+            try:
+                sb.storage.from_(BUCKET).remove([path])
+            except Exception:
+                pass
+    file_counts.clear()
+    return errors
+
+
+def delete_file(row: dict) -> str | None:
+    sb = get_supabase()
+    if sb is None:
+        return "Supabase credentials not found."
+    try:
+        sb.storage.from_(BUCKET).remove([row["storage_path"]])
+    except Exception:
+        pass  # still remove the record so it doesn't linger
+    try:
+        sb.table(FILES_TABLE).delete().eq("id", row["id"]).execute()
+    except Exception as e:
+        return str(e)
+    file_counts.clear()
+    return None
+
+
+def delete_all_files(parent_type: str, parent_key: str):
+    rows, err = list_files(parent_type, parent_key)
+    if not err:
+        for r in rows:
+            delete_file(r)
+
+
+def render_documents(parent_type: str, parent_key: str, key_prefix: str, rerun):
+    rows, err = list_files(parent_type, parent_key)
+    if err:
+        if _is_missing(err):
+            st.warning("📎 Document uploads aren't set up yet — run `plans_and_documents.sql` in Supabase "
+                       "(it creates the `leadership_planning_files` table and the storage bucket).")
+        else:
+            st.error(f"Could not load documents: {err}")
+        return
+
+    if not rows:
+        st.caption("No documents yet.")
+    for r in rows:
+        ext = (r.get("file_name") or "").rsplit(".", 1)[-1].lower()
+        icon = FILE_ICONS.get(ext, "📎")
+        url = signed_url(r["storage_path"])
+        name = html.escape(r.get("file_name") or "file")
+        meta = " · ".join(x for x in (_human_size(r.get("size_bytes")),
+                                      r.get("uploaded_by") or "",
+                                      _fmt_ts(r.get("uploaded_at"))) if x)
+        c1, c2 = st.columns([6, 1])
+        link = f'<a href="{url}" target="_blank">{name}</a>' if url else name
+        c1.markdown(f"{icon} {link}<br><span style='font-size:0.75rem;color:#64748b'>{html.escape(meta)}</span>",
+                    unsafe_allow_html=True)
+        ck = f"{key_prefix}_del_{r['id']}"
+        if not st.session_state.get(ck):
+            if c2.button("🗑", key=f"{ck}_btn", help="Remove this document"):
+                st.session_state[ck] = True
+                rerun()
+        else:
+            if c2.button("Confirm", key=f"{ck}_yes", type="primary"):
+                st.session_state.pop(ck, None)
+                e = delete_file(r)
+                if e:
+                    st.error(f"Could not remove: {e}")
+                else:
+                    rerun()
+            if c2.button("Keep", key=f"{ck}_no"):
+                st.session_state.pop(ck, None)
+                rerun()
+
+    ver_key = f"{key_prefix}_upver"
+    ver = st.session_state.get(ver_key, 0)
+    picked = st.file_uploader("Add documents (Word, PDF, Excel, PowerPoint, images…)",
+                              accept_multiple_files=True, key=f"{key_prefix}_up_{ver}",
+                              help=f"Up to {MAX_UPLOAD_MB} MB each. Files are private to the confidential area.")
+    if picked:
+        if st.button(f"⬆️ Upload {len(picked)} file{'s' if len(picked) != 1 else ''}",
+                     key=f"{key_prefix}_upbtn_{ver}", type="primary"):
+            with st.spinner("Uploading…"):
+                errors = upload_files(parent_type, parent_key, picked)
+            st.session_state[ver_key] = ver + 1  # clears the picker
+            if errors:
+                st.session_state[f"{key_prefix}_uperr"] = errors
+            rerun()
+    for e in st.session_state.pop(f"{key_prefix}_uperr", []) or []:
+        st.error(e)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PLANS — overviews that don't need a date, with dated days linked to them
+#
+#  • One row per plan in leadership_plans. `linked_dates` lists the ISO dates
+#    of its Day Planner pages, so each day keeps its own timetable/notes/docs.
+#  • Auto-saves like the Day Planner; documents attach to the plan itself.
+# ══════════════════════════════════════════════════════════════════════════════
+PLANS_TABLE = "leadership_plans"
+PLAN_STATUSES = ["Idea", "Drafting", "Proposed", "Confirmed", "In progress", "Complete", "On hold"]
+PLAN_STATUS_STYLE = {
+    "Idea": ("#F1F5F9", "#334155", "#94A3B8"),
+    "Drafting": ("#FEF3C7", "#92400E", "#F59E0B"),
+    "Proposed": ("#FFEDD5", "#9A3412", "#FB923C"),
+    "Confirmed": ("#D1FAE5", "#065F46", "#10B981"),
+    "In progress": ("#DBEAFE", "#1E3A8A", "#3B82F6"),
+    "Complete": ("#E0E7FF", "#3730A3", "#6366F1"),
+    "On hold": ("#F1F5F9", "#64748B", "#CBD5E1"),
+}
+PLAN_CATEGORIES = [
+    "Professional development", "Meeting series", "School development day", "Project / initiative",
+    "Event", "Network / partner", "Planning / admin", "Other",
+]
+PLAN_TERMS = ["Term 1", "Term 2", "Term 3", "Term 4", "Whole year", "Not yet decided"]
+PLAN_TASK_COLS = ["done", "task", "owner", "due"]
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def load_plans() -> tuple[list[dict], str | None]:
+    sb = get_supabase()
+    if sb is None:
+        return [], "no_credentials"
+    try:
+        res = sb.table(PLANS_TABLE).select("*").order("updated_at", desc=True).execute()
+    except Exception as e:
+        return [], str(e)
+    return res.data or [], None
+
+
+def create_plan(title: str) -> tuple[str | None, str | None]:
+    sb = get_supabase()
+    if sb is None:
+        return None, "Supabase credentials not found."
+    pid = str(uuid.uuid4())
+    now = _utcnow_iso()
+    who = st.session_state.get("lp_entered_by") or None
+    try:
+        sb.table(PLANS_TABLE).insert({
+            "id": pid, "title": title, "status": "Idea", "category": PLAN_CATEGORIES[0],
+            "terms": [], "overview": "", "links": [], "tasks": [], "linked_dates": [],
+            "created_by": who, "updated_by": who, "created_at": now, "updated_at": now,
+        }).execute()
+    except Exception as e:
+        return None, str(e)
+    load_plans.clear()
+    return pid, None
+
+
+def update_plan(pid: str, payload: dict) -> str | None:
+    sb = get_supabase()
+    if sb is None:
+        return "Supabase credentials not found."
+    row = dict(payload)
+    row["updated_at"] = _utcnow_iso()
+    row["updated_by"] = st.session_state.get("lp_entered_by") or None
+    try:
+        sb.table(PLANS_TABLE).update(row).eq("id", pid).execute()
+    except Exception as e:
+        return str(e)
+    load_plans.clear()
+    return None
+
+
+def delete_plan(pid: str) -> str | None:
+    sb = get_supabase()
+    if sb is None:
+        return "Supabase credentials not found."
+    delete_all_files("plan", pid)
+    try:
+        sb.table(PLANS_TABLE).delete().eq("id", pid).execute()
+    except Exception as e:
+        return str(e)
+    load_plans.clear()
+    return None
+
+
+def load_day_plans_for(dates: list[str]) -> dict:
+    """{iso date: day plan row} for the given dates."""
+    if not dates:
+        return {}
+    sb = get_supabase()
+    if sb is None:
+        return {}
+    try:
+        res = sb.table(DAY_TABLE).select("*").in_("plan_date", dates).execute()
+    except Exception:
+        return {}
+    return {str(r["plan_date"])[:10]: r for r in res.data or []}
+
+
+def plans_for_date(plans: list[dict], d: date) -> list[dict]:
+    iso = d.isoformat()
+    return [p for p in plans if iso in (p.get("linked_dates") or [])]
+
+
+def status_pill(status: str, styles: dict) -> str:
+    bg, fg, bd = styles.get(status, ("#F1F5F9", "#334155", "#94A3B8"))
+    return (f'<span class="lp-pill" style="background:{bg};color:{fg};border-color:{bd};">'
+            f'{html.escape(status or "")}</span>')
+
+
+def go_to(view: str, arg=None):
+    """Switch the page view on the next run (e.g. open a day or a plan)."""
+    st.session_state["lp_goto"] = (view, arg)
+    st.rerun()
+
+
+def build_plan_docx(plan: dict, days: dict, events: list[dict], doc_names: list[str]) -> bytes | None:
+    try:
+        from docx import Document
+        from docx.shared import Pt, Cm, RGBColor
+    except Exception:
+        return None
+    doc = Document()
+    sec = doc.sections[0]
+    for side in ("left_margin", "right_margin", "top_margin", "bottom_margin"):
+        setattr(sec, side, Cm(1.8))
+    doc.styles["Normal"].font.name = "Calibri"
+    doc.styles["Normal"].font.size = Pt(10.5)
+
+    h = doc.add_heading(plan.get("title") or "Plan", level=1)
+    h.runs[0].font.color.rgb = RGBColor(0x1A, 0x7A, 0x7A)
+    meta = [plan.get("status"), plan.get("category"), ", ".join(plan.get("terms") or [])]
+    if plan.get("lead"):
+        meta.append(f"Lead: {plan['lead']}")
+    doc.add_paragraph("   ·   ".join(x for x in meta if x) + "   ·   CONFIDENTIAL — leadership only")
+
+    if plan.get("overview"):
+        doc.add_heading("Overview", level=2)
+        for line in plan["overview"].splitlines():
+            doc.add_paragraph(line)
+
+    tasks = plan.get("tasks") or []
+    if tasks:
+        doc.add_heading("Actions", level=2)
+        for r in tasks:
+            extra = ", ".join(x for x in (r.get("owner"), r.get("due")) if x)
+            doc.add_paragraph(f"{'☑' if r.get('done') else '☐'} {r.get('task')}"
+                              + (f" ({extra})" if extra else ""))
+
+    linked = sorted(plan.get("linked_dates") or [])
+    if linked:
+        doc.add_heading("Days", level=2)
+        for iso in linked:
+            d = _to_date(iso)
+            dp = days.get(iso) or {}
+            doc.add_heading(f"{d.strftime('%A %d %B %Y')} — {term_and_week_for(d)}", level=3)
+            if dp.get("focus"):
+                doc.add_paragraph(dp["focus"])
+            if dp.get("location"):
+                doc.add_paragraph(f"Where: {dp['location']}")
+            for r in events_on(events, d):
+                doc.add_paragraph(f"Calendar: {fmt_time(r) or 'All day'} — {r.get('title')} "
+                                  f"({r.get('status')})", style="List Bullet")
+            for r in _sort_tt(dp.get("timetable") or []):
+                t = "–".join(x for x in (r.get("start"), r.get("end")) if x)
+                bits = " · ".join(x for x in (r.get("who"), r.get("where")) if x)
+                doc.add_paragraph(f"{t}  {r.get('activity') or ''}" + (f"  ({bits})" if bits else ""),
+                                  style="List Bullet")
+            if dp.get("notes"):
+                doc.add_paragraph(dp["notes"])
+
+    links = plan.get("links") or []
+    if links:
+        doc.add_heading("Links", level=2)
+        for r in links:
+            doc.add_paragraph(f"{r.get('label') or r.get('url')}: {r.get('url')}", style="List Bullet")
+    if doc_names:
+        doc.add_heading("Attached documents (in the portal)", level=2)
+        for n in doc_names:
+            doc.add_paragraph(n, style="List Bullet")
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
+def _pl_payload(plan: dict) -> dict:
+    return {
+        "title": (plan.get("title") or "").strip(),
+        "category": plan.get("category") or PLAN_CATEGORIES[0],
+        "status": plan.get("status") or PLAN_STATUSES[0],
+        "terms": list(plan.get("terms") or []),
+        "lead": (plan.get("lead") or "").strip(),
+        "overview": plan.get("overview") or "",
+        "links": _rows(plan.get("links") or [], LINK_COLS),
+        "tasks": _rows(plan.get("tasks") or [], PLAN_TASK_COLS),
+        "linked_dates": sorted(set(plan.get("linked_dates") or [])),
+    }
+
+
+def _pl_load_into_state(plan: dict):
+    if st.session_state.get("pl_loaded_id") == plan["id"]:
+        return
+    p = _pl_payload(plan)
+    st.session_state["pl_loaded_id"] = plan["id"]
+    st.session_state["pl_title"] = p["title"]
+    st.session_state["pl_category"] = p["category"] if p["category"] in PLAN_CATEGORIES else PLAN_CATEGORIES[-1]
+    st.session_state["pl_status"] = p["status"] if p["status"] in PLAN_STATUSES else PLAN_STATUSES[0]
+    st.session_state["pl_terms"] = [t for t in p["terms"] if t in PLAN_TERMS]
+    st.session_state["pl_lead"] = p["lead"]
+    st.session_state["pl_overview"] = p["overview"]
+    st.session_state["pl_links_base"] = p["links"]
+    st.session_state["pl_tasks_base"] = p["tasks"]
+    st.session_state["pl_dates"] = p["linked_dates"]
+    st.session_state["pl_ver"] = st.session_state.get("pl_ver", 0) + 1
+    st.session_state["pl_last_saved"] = p
+    st.session_state["pl_saved_note"] = (f"Last saved {_fmt_ts(plan.get('updated_at'))}"
+                                         + (f" by {plan['updated_by']}" if plan.get("updated_by") else ""))
+
+
+def _pl_rerun():
+    try:
+        st.rerun(scope="fragment")
+    except Exception:
+        st.rerun()
+
+
+@_fragment
+def render_plans(events: list[dict]):
+    plans, err = load_plans()
+    if err:
+        if _is_missing(err):
+            st.error(f"The `{PLANS_TABLE}` table hasn't been found yet — run `plans_and_documents.sql` "
+                     "in Supabase (same project as the calendar), then press Retry.")
+        else:
+            st.error(f"Could not load plans: {err}")
+        if st.button("🔄 Retry", key="pl_retry"):
+            load_plans.clear()
+            _pl_rerun()
+        return
+
+    open_id = st.session_state.get("pl_open_id")
+    current = next((p for p in plans if p["id"] == open_id), None)
+
+    # ── List of plans ─────────────────────────────────────────────────────────
+    if current is None:
+        c1, c2 = st.columns([3, 1])
+        new_title = c1.text_input("New plan", key="pl_new_title", label_visibility="collapsed",
+                                  placeholder="Name a new plan, e.g. 2027 Team Commitment PD series")
+        if c2.button("➕ Create plan", key="pl_create", type="primary", use_container_width=True):
+            pid, e = create_plan((new_title or "").strip() or "Untitled plan")
+            if e:
+                st.error(f"Could not create the plan: {e}")
+            else:
+                st.session_state["pl_open_id"] = pid
+                st.session_state.pop("pl_new_title", None)
+                _pl_rerun()
+
+        f1, f2, f3 = st.columns([1.4, 1.4, 2])
+        sf = f1.multiselect("Status", PLAN_STATUSES, key="pl_f_status",
+                            default=[s for s in PLAN_STATUSES if s not in ("Complete",)])
+        tf = f2.multiselect("Term", PLAN_TERMS, key="pl_f_terms", placeholder="Any term")
+        q = f3.text_input("Search plans", key="pl_f_q", placeholder="Title, lead, overview…").strip().lower()
+        shown = [p for p in plans
+                 if p.get("status") in sf
+                 and (not tf or set(tf) & set(p.get("terms") or []))
+                 and (not q or q in " ".join(str(p.get(k) or "") for k in ("title", "lead", "overview")).lower())]
+        if not plans:
+            st.info("No plans yet. Name one above and press ➕ Create plan — you can add the overview now "
+                    "and dates later.")
+        elif not shown:
+            st.caption("No plans match these filters.")
+
+        counts = file_counts("plan")
+        for p in shown:
+            dates = sorted(p.get("linked_dates") or [])
+            future = [x for x in dates if x >= date.today().isoformat()]
+            next_txt = (f"Next day: {_to_date(future[0]).strftime('%a %d %b')}" if future
+                        else ("No days added yet" if not dates else "All days past"))
+            open_tasks = sum(1 for t in (p.get("tasks") or []) if not t.get("done") and t.get("task"))
+            preview = (p.get("overview") or "").strip().replace("\n", " ")
+            preview = preview[:160] + ("…" if len(preview) > 160 else "")
+            with st.container(border=True):
+                a, b = st.columns([5, 1])
+                a.markdown(
+                    f"{status_pill(p.get('status'), PLAN_STATUS_STYLE)} &nbsp;**{html.escape(p.get('title') or 'Untitled')}**"
+                    f"<br><span style='font-size:0.8rem;color:#475569'>"
+                    f"{html.escape(p.get('category') or '')}"
+                    f"{' · ' + html.escape(', '.join(p.get('terms') or [])) if p.get('terms') else ''}"
+                    f"{' · Lead: ' + html.escape(p['lead']) if p.get('lead') else ''}"
+                    f" · 📅 {len(dates)} day{'s' if len(dates) != 1 else ''} ({next_txt})"
+                    f" · 📎 {counts.get(p['id'], 0)} · ✅ {open_tasks} open</span>"
+                    + (f"<br><span style='font-size:0.8rem'>{html.escape(preview)}</span>" if preview else ""),
+                    unsafe_allow_html=True,
+                )
+                if b.button("Open", key=f"pl_open_{p['id']}", use_container_width=True):
+                    st.session_state["pl_open_id"] = p["id"]
+                    _pl_rerun()
+        return
+
+    # ── One plan ──────────────────────────────────────────────────────────────
+    _pl_load_into_state(current)
+    pid = current["id"]
+    ver = st.session_state.get("pl_ver", 0)
+
+    if st.button("← All plans", key="pl_back"):
+        st.session_state.pop("pl_open_id", None)
+        st.session_state.pop("pl_loaded_id", None)
+        _pl_rerun()
+
+    st.text_input("Plan title", key="pl_title")
+    c1, c2, c3, c4 = st.columns([1.2, 1.2, 1.6, 1.2])
+    c1.selectbox("Status", PLAN_STATUSES, key="pl_status")
+    c2.selectbox("Type", PLAN_CATEGORIES, key="pl_category")
+    c3.multiselect("When", PLAN_TERMS, key="pl_terms", placeholder="Term(s)")
+    c4.text_input("Lead", key="pl_lead")
+
+    st.markdown("#### 🧭 Overview")
+    o1, o2 = st.tabs(["✏️ Write", "👁 Preview"])
+    with o1:
+        st.text_area("Overview", key="pl_overview", height=240, label_visibility="collapsed",
+                     placeholder="The big picture — purpose, outcomes, who it's for, sequence of sessions, "
+                                 "budget, presenters, open questions…\nNo dates needed here; add them below "
+                                 "when you know them.")
+    with o2:
+        if st.session_state.get("pl_overview"):
+            st.markdown(st.session_state["pl_overview"])
+        else:
+            st.caption("Nothing written yet.")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("#### ✅ Actions")
+        tasks_df = st.data_editor(
+            _df(st.session_state["pl_tasks_base"], PLAN_TASK_COLS),
+            key=f"pl_tasks_{ver}", num_rows="dynamic", use_container_width=True, hide_index=True,
+            column_config={
+                "done": st.column_config.CheckboxColumn("✓", width="small", default=False),
+                "task": st.column_config.TextColumn("Action", width="large"),
+                "owner": st.column_config.TextColumn("Who"),
+                "due": st.column_config.TextColumn("By when", help="e.g. Wk 9 T4, end of Jan"),
+            },
+        )
+    with c2:
+        st.markdown("#### 🔗 Links")
+        links_df = st.data_editor(
+            _df(st.session_state["pl_links_base"], LINK_COLS),
+            key=f"pl_links_{ver}", num_rows="dynamic", use_container_width=True, hide_index=True,
+            column_config={
+                "label": st.column_config.TextColumn("Name"),
+                "url": st.column_config.LinkColumn("Link (paste URL)", width="medium",
+                                                   validate=r"^https?://.+"),
+                "note": st.column_config.TextColumn("Note"),
+            },
+        )
+        clickable = [r for r in _rows(links_df, LINK_COLS) if r["url"].startswith("http")]
+        if clickable:
+            st.markdown("  \n".join(f"🔗 [{r['label'] or r['url']}]({r['url']})" for r in clickable))
+
+    # ── Auto-save (before the day/document actions so nothing typed is lost) ──
+    payload = {
+        "title": (st.session_state.get("pl_title") or "").strip() or "Untitled plan",
+        "category": st.session_state.get("pl_category"),
+        "status": st.session_state.get("pl_status"),
+        "terms": list(st.session_state.get("pl_terms") or []),
+        "lead": (st.session_state.get("pl_lead") or "").strip(),
+        "overview": st.session_state.get("pl_overview") or "",
+        "links": _rows(links_df, LINK_COLS),
+        "tasks": _rows(tasks_df, PLAN_TASK_COLS),
+        "linked_dates": sorted(set(st.session_state.get("pl_dates") or [])),
+    }
+
+    def save_now() -> bool:
+        if payload == st.session_state.get("pl_last_saved"):
+            return True
+        e = update_plan(pid, payload)
+        if e:
+            st.error(f"Not saved yet ({e}). What you've typed stays on screen — it retries on your next change.")
+            return False
+        st.session_state["pl_last_saved"] = dict(payload)
+        st.session_state["pl_saved_note"] = f"✓ Auto-saved {_now_hm()}"
+        return True
+
+    save_now()
+
+    # ── Days ──────────────────────────────────────────────────────────────────
+    st.markdown("#### 📅 Days in this plan")
+    st.caption("Each day opens as its own Day Planner page (timetable, notes, links, documents).")
+    dates = payload["linked_dates"]
+    day_rows = load_day_plans_for(dates)
+    day_files = file_counts("day")
+    if not dates:
+        st.caption("No days yet — add one below when a date is known or pencilled in.")
+    for iso in dates:
+        d = _to_date(iso)
+        dp = day_rows.get(iso) or {}
+        tt = _sort_tt(dp.get("timetable") or [])
+        evs = events_on(events, d)
+        with st.container(border=True):
+            a, b, c = st.columns([4, 1, 1])
+            summary = []
+            if dp.get("location"):
+                summary.append(f"📍 {dp['location']}")
+            if tt:
+                first = ", ".join(
+                    f"{r.get('start') or ''} {r.get('activity') or ''}".strip() for r in tt[:3] if r.get("activity"))
+                summary.append(f"🕘 {len(tt)} slot{'s' if len(tt) != 1 else ''}" + (f": {first}" if first else ""))
+            if day_files.get(iso):
+                summary.append(f"📎 {day_files[iso]}")
+            if evs:
+                summary.append("📅 " + ", ".join(r.get("title") or "" for r in evs))
+            a.markdown(
+                f"**{d.strftime('%a %d %b %Y')}** · {term_and_week_for(d)}"
+                + (f" — {html.escape(dp['focus'])}" if dp.get("focus") else "")
+                + (f"<br><span style='font-size:0.8rem;color:#475569'>{html.escape(' · '.join(summary))}</span>"
+                   if summary else ""),
+                unsafe_allow_html=True,
+            )
+            if b.button("✏️ Open day", key=f"pl_day_open_{iso}", use_container_width=True):
+                go_to(VIEW_DAY, d)
+            if c.button("Unlink", key=f"pl_day_unlink_{iso}", use_container_width=True,
+                        help="Removes the date from this plan. The day's own page is kept."):
+                st.session_state["pl_dates"] = [x for x in dates if x != iso]
+                _pl_rerun()
+
+    with st.expander("➕ Add a day to this plan", expanded=not dates):
+        a, b = st.columns([1, 2])
+        new_d = a.date_input("Date", key=f"pl_newday_{pid}", format="DD/MM/YYYY",
+                             value=TERMS[1][0] if date.today() < TERMS[1][0] else date.today())
+        new_focus = b.text_input("What's happening this day (optional)", key=f"pl_newfocus_{pid}",
+                                 placeholder=f"e.g. {payload['title']} — session 1")
+        open_after = st.checkbox("Open it in the Day Planner straight away", value=True, key=f"pl_openafter_{pid}")
+        if st.button("➕ Add day", key=f"pl_addday_{pid}", type="primary"):
+            iso = new_d.isoformat()
+            existing, e = load_day_plan(new_d)
+            if e:
+                st.error(f"Could not check that date: {e}")
+            else:
+                if not existing:
+                    e = save_day_plan(new_d, {
+                        "focus": (new_focus or "").strip() or payload["title"], "location": "", "notes": "",
+                        "timetable": [], "links": [], "tasks": [],
+                        "updated_by": st.session_state.get("lp_entered_by") or None})
+                if e:
+                    st.error(f"Could not create the day: {e}")
+                else:
+                    st.session_state["pl_dates"] = sorted(set(dates + [iso]))
+                    payload["linked_dates"] = st.session_state["pl_dates"]
+                    if save_now():
+                        if existing:
+                            st.session_state["lp_flash"] = (f"{new_d.strftime('%a %d %b')} already had a Day "
+                                                            "Planner page — it's now linked to this plan.")
+                        if open_after:
+                            go_to(VIEW_DAY, new_d)
+                        _pl_rerun()
+
+    # ── Documents ─────────────────────────────────────────────────────────────
+    st.markdown("#### 📎 Documents for this plan")
+    render_documents("plan", pid, f"pldoc_{pid}", _pl_rerun)
+
+    # ── Footer ────────────────────────────────────────────────────────────────
+    st.divider()
+    f1, f2, f3 = st.columns([2, 1.4, 1.4])
+    f1.caption(st.session_state.get("pl_saved_note") or "Auto-saves as you go — nothing to press.")
+    with f2:
+        docs, _ = list_files("plan", pid)
+        docx_bytes = build_plan_docx(payload, day_rows, events, [r.get("file_name") for r in docs])
+        if docx_bytes:
+            safe_title = "".join(ch if ch.isalnum() else "_" for ch in payload["title"])[:50]
+            st.download_button("📄 Plan overview (Word)", data=docx_bytes,
+                               file_name=f"CLC_Plan_{safe_title}.docx",
+                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                               use_container_width=True, key="pl_dl")
+    with f3:
+        with st.popover("More…", use_container_width=True):
+            if not st.session_state.get("pl_del_confirm"):
+                if st.button("🗑️ Delete this plan", key="pl_del"):
+                    st.session_state["pl_del_confirm"] = True
+                    _pl_rerun()
+            else:
+                st.warning("Delete this plan and its documents? Its Day Planner pages are kept.")
+                if st.button("Yes, delete", key="pl_del_yes", type="primary"):
+                    st.session_state.pop("pl_del_confirm", None)
+                    e = delete_plan(pid)
+                    if e:
+                        st.error(f"Could not delete: {e}")
+                    else:
+                        st.session_state.pop("pl_open_id", None)
+                        st.session_state.pop("pl_loaded_id", None)
+                        _pl_rerun()
+                if st.button("Keep it", key="pl_del_no"):
+                    st.session_state.pop("pl_del_confirm", None)
+                    _pl_rerun()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1205,19 +1943,40 @@ m3.metric("Proposed", sum(r.get("status") == "Proposed" for r in all_term_events
 m4.metric("Location TBC", sum(
     (r.get("location_mode") == "TBC") and r.get("status") != "Cancelled" for r in all_term_events))
 
-tab_cal, tab_day, tab_add, tab_list, tab_export = st.tabs(
-    ["📅 Term calendar", "🗒️ Day Planner", "➕ Add item", "📝 Review & edit", "⬇️ Export"]
-)
+# ── Navigation ────────────────────────────────────────────────────────────────
+# A view switcher (rather than st.tabs) so buttons like "Open day" / "Open plan"
+# can jump straight to the right place. Only the chosen view is built each run.
+_goto = st.session_state.pop("lp_goto", None)
+if _goto:
+    _view, _arg = _goto
+    st.session_state["lp_view"] = _view
+    if _view == VIEW_DAY and _arg:
+        st.session_state["dp_date"] = _arg
+        st.session_state["dp_date_keep"] = _arg
+    if _view == VIEW_PLANS and _arg:
+        st.session_state["pl_open_id"] = _arg
+
+view = st.radio("View", VIEWS, horizontal=True, key="lp_view", label_visibility="collapsed")
+if st.session_state.get("lp_prev_view") != view:
+    # Entering a view: reload it fresh from the database (auto-saves are already there)
+    st.session_state["lp_prev_view"] = view
+    st.session_state.pop("dp_loaded_date", None)
+    st.session_state.pop("pl_loaded_id", None)
+    for _k in [k for k in st.session_state.keys() if k.startswith("lp_") and k.endswith("_init")]:
+        st.session_state.pop(_k, None)
+    st.session_state["lp_quiet_restore"] = True
+else:
+    st.session_state["lp_quiet_restore"] = False
 
 # ── Calendar ──────────────────────────────────────────────────────────────────
-with tab_cal:
+if view == VIEW_CAL:
     st.caption(f"Term {term}: {t_start.strftime('%a %d %b')} – {t_end.strftime('%a %d %b %Y')}. "
                "Hover an item for its summary.")
     include_pre = st.toggle("Show the week before term starts", value=True, key="lp_pre",
                             help="Useful for planning leadership days and SDDs before students return.")
     legend()
     shown_days = render_term_grid(term, term_events, include_pre, load_day_plan_index())
-    st.caption("🗒️ marks days that have a Day Planner page — open the 🗒️ Day Planner tab to view or edit it.")
+    st.caption("🗒️ marks days that have a Day Planner page — open 🗒️ Day Planner to view or edit it.")
 
     hidden = [r for r in term_events
               if not any(r["start_date"] <= d <= r["end_date"] for d in shown_days)]
@@ -1233,20 +1992,27 @@ with tab_cal:
             for r in holiday_events:
                 st.markdown(f"- {fmt_date_range(r)} — {r.get('title')} ({r.get('status')}, {fmt_location(r)})")
 
+# ── Plans ─────────────────────────────────────────────────────────────────────
+elif view == VIEW_PLANS:
+    st.caption("Overviews that don't need a date yet — purpose, actions, links and documents. "
+               "Add dated days to a plan when you know them; each day opens in the Day Planner.")
+    render_plans(events)
+
 # ── Day Planner ───────────────────────────────────────────────────────────────
-with tab_day:
+elif view == VIEW_DAY:
     st.caption("Your sandbox for any single day — pick a date and build it up: timetable, notes, "
-               "links and to-dos. Everything auto-saves to that date.")
-    st.session_state.setdefault("dp_date", TERMS[1][0])
+               "links, to-dos and documents. Everything auto-saves to that date.")
+    if "dp_date" not in st.session_state:
+        st.session_state["dp_date"] = st.session_state.get("dp_date_keep", TERMS[1][0])
     render_day_planner(events)
 
 # ── Add ───────────────────────────────────────────────────────────────────────
-with tab_add:
+elif view == VIEW_ADD:
     st.caption("Start with what you know — an item can be Proposed with the location TBC and updated later.")
     render_event_form("lp_new", draft=drafts.get("new"))
 
 # ── Review & edit ─────────────────────────────────────────────────────────────
-with tab_list:
+elif view == VIEW_LIST:
     scope = st.radio("Show", [f"Term {term} (incl. pre-term week)", "All of 2027"], horizontal=True,
                      key="lp_scope")
     source = [r for r in events if r.get("event_type") in type_filter and r.get("status") in STATUSES]
@@ -1297,7 +2063,7 @@ with tab_list:
                     st.rerun()
 
 # ── Export ────────────────────────────────────────────────────────────────────
-with tab_export:
+elif view == VIEW_EXPORT:
     st.caption("Exports use the current status/type filters. Marked confidential — share with leadership only.")
     export_events = sorted(term_events, key=lambda r: (r["start_date"], r.get("start_time") or "99"))
     docx_bytes = build_docx(term, export_events)
