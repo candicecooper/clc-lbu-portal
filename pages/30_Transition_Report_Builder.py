@@ -2222,14 +2222,16 @@ def _bst_att_day(state, d):
     dn = BST_ATT_DAYS[d.weekday()] if d.weekday() < 5 else None
     planned = (list(BST_ATT_SESSIONS) if ver is None else list((ver.get("days") or {}).get(dn, []))) if dn else []
     if exc and exc.get("type") == "No school":
-        return {"planned": [], "actual": [], "exc": exc, "no_school": True, "expected_start": ""}
+        return {"planned": [], "actual": [], "exc": exc, "no_school": True, "expected_start": "", "transition": False}
     actual = planned
     if exc:
         actual = [] if exc.get("type") == "Absent" else [x for x in BST_ATT_SESSIONS if x in (exc.get("sessions") or [])]
-    if exc and exc.get("reason") == BST_TRANSITION_REASON:
+    pattern_tr = bool((not exc) and ver and dn and (ver.get("transition") or {}).get(dn))   # usual-pattern transition day
+    is_tr = bool(exc and exc.get("reason") == BST_TRANSITION_REASON) or pattern_tr
+    if is_tr:
         planned = list(actual)      # time at the receiving school is planned, not 'lost'
     start_ = ((ver.get("starts") or {}).get(dn, "") if ver and dn else "")
-    return {"planned": planned, "actual": actual, "exc": exc, "no_school": False, "expected_start": start_}
+    return {"planned": planned, "actual": actual, "exc": exc, "no_school": False, "expected_start": start_, "transition": is_tr}
 
 
 def _bst_clock(hhmm):
@@ -2376,7 +2378,7 @@ def bst_attendance_table(initials, start, end):
                    "late_min": int(_num(exc.get("late_min"))), "quick_incidents": quick.get(d_, 0)}
             if day["no_school"]:
                 cell_status = "noschool"
-            elif d_ in trans or (reason == BST_TRANSITION_REASON and not day["actual"]):
+            elif d_ in trans or (day.get("transition") and not day["actual"]):
                 cell_status = "transition"      # from the Transition Timetable, or marked "Transition" in attendance
             elif status == "Absent":
                 cell_status = "absent"
@@ -2562,6 +2564,15 @@ def _bst_attendance(att_row, start, end):
         if pl and set(pl) != set(BST_ATT_SESSIONS):
             out["part_time_pattern"] = True
         is_tr = bool(exc and exc.get("reason") == BST_TRANSITION_REASON)
+        if (not exc) and day.weekday() < 5:
+            _v = None
+            for _x in schedule:
+                if _x.get("from", "") <= day.isoformat():
+                    _v = _x
+            if _v is None and schedule:
+                _v = schedule[0]
+            if _v and (_v.get("transition") or {}).get(BST_ATT_DAYS[day.weekday()]):
+                out["transition_days"] += 1
         if is_tr and not (exc.get("type") == "No school"):
             out["transition_days"] += 1
         if not (exc and exc.get("type") == "No school") and pl and not (is_tr and exc.get("type") == "Absent"):
