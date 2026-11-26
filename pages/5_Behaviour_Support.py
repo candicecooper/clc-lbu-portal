@@ -585,9 +585,142 @@ def _top_categories(full_df, n: int = 2) -> list[str]:
     return list(cats.value_counts().head(n).index)
 
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HIGH SCHOOL LENS — Senior Years (SY) students
+# ══════════════════════════════════════════════════════════════════════════════
+def _is_sy_student(student) -> bool:
+    """True for Senior Years students (program SY, or a Year 7+ grade)."""
+    try:
+        if str((student or {}).get("program", "")).strip().upper() == "SY":
+            return True
+        g = re.search(r"(\d+)", str((student or {}).get("grade", "") or ""))
+        return bool(g) and int(g.group(1)) >= 7
+    except Exception:
+        return False
+
+
+def build_sy_lens_cards(student, top_beh="", top_ant="", top_loc="", top_session="",
+                        sensory_prominent: bool = False, has_sensory: bool = False) -> list:
+    """High-school-specific recommendation cards, tailored by the student's own pattern.
+    Each card: {title, icon, bg, border, color, items[list of str]}."""
+    ant = str(top_ant or "").lower()
+    loc = str(top_loc or "the main hotspot")
+    ses = str(top_session or "the peak session")
+    beh = str(top_beh or "the primary behaviour").lower()
+    demand_driven = any(k in ant for k in ("task", "demand", "work", "instruction", "request", "academic", "literacy", "numeracy"))
+    transition_driven = any(k in ant for k in ("transition", "change", "routine", "schedule", "unstructured", "waiting"))
+    peer_driven = any(k in ant for k in ("peer", "social", "conflict", "teas", "provoc", "attention"))
+
+    cards = []
+
+    # 1. Lesson / teacher transitions
+    t = [
+        "Provide a <b>visual timetable</b> (printed or on a device) with room, teacher and subject — and pre-warn of any change to it before the day starts.",
+        "A <b>consistent greeter at the door</b> of each lesson: a quick, low-demand welcome and a reminder of what is needed, before the student enters.",
+        "Allow a <b>transition buffer</b> — leave a few minutes early, or take a quieter route, to avoid corridor crowding and bell-time noise.",
+        f"Match the timetable to the data: schedule the most demanding or least-preferred subjects <b>away from the {ses} peak</b>, and pair them with a regulation break beforehand.",
+        f"Identify a <b>safe base</b> (key adult or room) the student can reach quickly from {loc} and from each classroom.",
+    ]
+    if transition_driven:
+        t.insert(0, "<b>Transitions are a prominent trigger in this student's data</b> — prioritise a written transition plan for every change of room, teacher and activity.")
+    cards.append(dict(title="Lesson & Teacher Transitions", icon="🔔", bg="#eff6ff", border="#bfdbfe", color="#1d4ed8", items=t))
+
+    # 2. Autonomy, voice & perceived choice
+    a = [
+        "<b>Co-develop the support plan with the student</b> — their view of triggers, what helps, and what they want from adults at school.",
+        "Use <b>adolescent-appropriate language</b>: respectful, matter-of-fact and private. Avoid child-directed praise, public correction or sarcasm.",
+        "Offer <b>real, bounded choices</b> (order of tasks, where to work, how to show learning) to preserve autonomy without removing expectations.",
+        "Give the <b>reason behind a request</b> (\"this helps because…\"); teenagers disengage quickly from rules that seem arbitrary.",
+        "Provide a <b>face-saving exit</b> — a pre-agreed card, signal or break pass — so leaving a lesson is a skill being used, not a confrontation.",
+    ]
+    cards.append(dict(title="Autonomy, Voice & Perceived Choice", icon="🗣️", bg="#fdf4ff", border="#e9d5ff", color="#7c3aed", items=a))
+
+    # 3. Peers & social
+    ps = [
+        "Plan <b>unstructured times</b> (recess, lunch, line-ups, between lessons) with a purposeful alternative, a nominated adult and an agreed place.",
+        "Use <b>structured seating and grouping</b> in each class; avoid forced proximity with identified peer triggers.",
+        "Redirect <b>privately and briefly</b> — peer audiences strongly shape adolescent responses to correction.",
+        "Teach and rehearse <b>peer conflict and help-seeking scripts</b>; explore phone / social-media conflict that carries over into the school day.",
+        "Where appropriate, support <b>positive peer connection</b> (interest groups, mentoring, shared roles) — belonging is protective.",
+    ]
+    if peer_driven:
+        ps.insert(0, "<b>Peer / social factors feature in this student's triggers</b> — make a peer-contact plan a first priority.")
+    cards.append(dict(title="Peers, Belonging & Unstructured Time", icon="👥", bg="#f0fdf4", border="#bbf7d0", color="#15803d", items=ps))
+
+    # 4. Curriculum access
+    c = [
+        "Check for <b>literacy, numeracy and executive-function gaps</b> that may be hiding beneath refusal or avoidance — high school demands increase sharply in reading, writing and independent work.",
+        "<b>Chunk tasks</b>, give a clear 'finished' point, and offer alternative ways to record (speech-to-text, scaffolds, templates, oral responses).",
+        "Pre-teach key vocabulary and provide <b>advance notice of assessments and due dates</b>; break long tasks into staged checkpoints.",
+        "Use <b>interest- and purpose-linked tasks</b> (practical, project-based, real-world) to connect learning to the student's future.",
+        "Share a <b>one-page learning profile</b> with every subject teacher so strategies are applied consistently across all lessons.",
+    ]
+    if demand_driven:
+        c.insert(0, "<b>Task demand is a prominent trigger in this student's data</b> — prioritise reducing hidden demand and the entry cost of starting tasks.")
+    cards.append(dict(title="Curriculum Access & Hidden Demand", icon="📚", bg="#fff7ed", border="#fed7aa", color="#c2410c", items=c))
+
+    # 5. Attendance & re-engagement
+    at = [
+        "Where the student is on a <b>part-time or graduated schedule</b>, review it regularly against the incident and absence data; extend only when the data supports it.",
+        "Plan a <b>re-entry routine after absences</b>: a calm start, a key-adult check-in, reduced demand on the first lesson back.",
+        "Treat <b>non-attendance and partial attendance as communication</b> — explore anxiety, school-based triggers, transport, family circumstances and sleep.",
+        "Maintain <b>positive, strengths-based contact</b> with family/carers rather than contact only after incidents or absences.",
+    ]
+    cards.append(dict(title="Attendance & Re-engagement", icon="🧭", bg="#fef2f2", border="#fecaca", color="#dc2626", items=at))
+
+    # 6. Wellbeing & safety
+    w = [
+        "Monitor <b>wellbeing and mental health</b> — anxiety, low mood, sleep, substance use, relationships — and use the school's referral pathways (counsellor, psychologist, GP, headspace) when concerns arise.",
+        "Review <b>risk-taking and leaving-site behaviour</b>: agree a response plan, an approved off-site contact, and how staff will re-engage the student safely.",
+        "Plan for <b>community-based and off-site learning</b> (travel, public transport, work experience) with clear supervision and contingency plans.",
+        "Involve allied health (OT, speech pathology, psychology) where sensory, communication or mental health factors contribute to the pattern.",
+    ]
+    if sensory_prominent or has_sensory:
+        w.insert(0, "<b>Plan for the high-school sensory load</b> — bells, crowded corridors, canteen noise, multiple classrooms and PE change rooms — using the sensory profile to provide access to calming spaces and tools.")
+    cards.append(dict(title="Wellbeing, Safety & Allied Health", icon="🧠", bg="#f5f3ff", border="#ddd6fe", color="#6d28d9", items=w))
+
+    # 7. Pathways
+    pw = [
+        "Begin <b>pathway planning early</b>: SACE planning, Vocational Education & Training (VET), school-based apprenticeships/traineeships and Flexible Learning Options.",
+        "Build in <b>work experience and community-based learning</b> matched to the student's interests and strengths.",
+        "Document <b>strengths, interests and the supports that work</b> so they travel with the student to a receiving high school, training provider or employer.",
+        "For students approaching post-school transition, link with <b>transition and adult-service supports</b> (careers adviser, TAFE, NDIS where applicable) and involve the student and family in planning.",
+        "If moving to a mainstream or home high school, plan a <b>graduated transition</b>: visits, a named key adult, an agreed 'first week' plan and a review point after the move.",
+    ]
+    cards.append(dict(title="Pathways & Post-School Transition", icon="🎓", bg="#ecfeff", border="#a5f3fc", color="#0e7490", items=pw))
+    return cards
+
+
+def render_sy_lens_section(student, top_beh="", top_ant="", top_loc="", top_session="",
+                           sensory_prominent: bool = False, has_sensory: bool = False):
+    """Analysis-page 'High School Lens' — shown only for Senior Years students."""
+    if not _is_sy_student(student):
+        return
+    cards = build_sy_lens_cards(student, top_beh, top_ant, top_loc, top_session,
+                                sensory_prominent, has_sensory)
+    st.markdown("---")
+    st.markdown("### 🏫 High School Lens — Recommendations (Senior Years)")
+    st.caption("Recommendations framed for a high school context — multiple teachers and rooms, adolescent peer "
+               "relationships, increasing academic demand, autonomy, and pathways beyond school. Tailored to "
+               "the pattern in this student's data; read alongside the Teaching and Support Lens above.")
+    for i in range(0, len(cards), 2):
+        cols = st.columns(2)
+        for col, cd in zip(cols, cards[i:i + 2]):
+            with col:
+                lis = "".join(f"<li>{x}</li>" for x in cd["items"])
+                st.markdown(
+                    f"<div style='background:{cd['bg']};border-radius:10px;padding:1rem 1.1rem;"
+                    f"border:1px solid {cd['border']};height:100%;margin-bottom:.6rem;'>"
+                    f"<div style='font-weight:700;color:{cd['color']};font-size:.93rem;margin-bottom:.6rem;'>"
+                    f"{cd['icon']} {cd['title']}</div>"
+                    f"<ul style='margin:0;padding-left:1.2rem;font-size:.84rem;color:#1e293b;line-height:1.85;'>"
+                    f"{lis}</ul></div>", unsafe_allow_html=True)
+
+
 def build_bsem_recommendations(
     full_df, top_beh, top_ant, top_loc, top_session, student_name: str,
-    context: str = "dashboard",
+    context: str = "dashboard", program: str = "",
 ) -> list[dict]:
     """Curated-library + AI-framing recommendations, returned as structured
     items so the UI can render them as clickable cards with a short "why
@@ -629,6 +762,16 @@ def build_bsem_recommendations(
         _framing = (
             "Write for CLC-LBU staff to use directly, day to day, in our small, highly "
             "structured setting. Frame 'how' as something concrete to trial this week."
+        )
+
+    if str(program).strip().upper() == "SY":
+        _framing += (
+            " This student is in Senior Years (high school age). Write 'why' and 'how' for a "
+            "HIGH SCHOOL context: multiple teachers and rooms across the day, lesson changes and "
+            "corridors, adolescent peer relationships and status, increasing academic demand, "
+            "autonomy and respect for the young person's voice, and pathways beyond school "
+            "(SACE, VET, work experience). Avoid primary-school framing (e.g. rewards charts, "
+            "single class teacher, carpet-time)."
         )
 
     prompt = (
@@ -1205,11 +1348,9 @@ def render_wot_builder_sync(student, full_df, key: str = "wbs"):
             if res.get("converted"):
                 bits.append(f"updated the pronouns on {res['converted']} line{'s' if res['converted'] != 1 else ''}")
             what = ", ".join(bits) if bits else "already up to date"
-            _tc = res.get("to_check", 0)
             st.success(f"✅ Window of Tolerance Builder: {what} (synced {last.get('at', '')}). "
                        f"{res.get('total_synced', 0)} lines in {res.get('register_name', ini)}'s report come from "
-                       f"this tool" + (f" — {_tc} still to be checked by staff in the Builder." if _tc else
-                                       ", all checked by staff."))
+                       f"this tool.")
             if res.get("pronouns"):
                 st.caption(f"Lines are written with this student's pronouns ({res['pronouns']}) from the Builder, "
                            "not \u201cthey\u201d or \u201cthe student\u201d.")
@@ -1217,9 +1358,8 @@ def render_wot_builder_sync(student, full_df, key: str = "wbs"):
                 st.caption("No pronouns chosen for this student in the Builder yet. Lines are sent in neutral "
                            "wording and converted as soon as staff pick pronouns there.")
             st.caption("Every incident behaviour, intervention and context, and every micro behaviour, is sent to "
-                       "the matching zone. New lines show highlighted in the Builder for staff to check: keep, "
-                       "edit or delete each one. Once checked, a line stays exactly as staff left it — this tool "
-                       "never changes or re-adds it. The Window of Tolerance zone itself is left for staff.")
+                       "the matching zone. Staff can still add their own lines in the Builder. Lines they remove or "
+                       "reword there stay that way, and the Window of Tolerance zone itself is left for staff.")
         st.link_button("🪟 Open the Window of Tolerance Builder", wbs.BUILDER_URL)
     finally:
         _SCREEN["paused"] = _prev
@@ -2817,6 +2957,28 @@ def generate_behaviour_analysis_plan_docx(student, full_df, top_ant, top_beh, to
 
         doc.add_paragraph().paragraph_format.space_after = Pt(5)
 
+        # ── High School Lens (Senior Years students only) ──
+        if _is_sy_student(student):
+            _sy_cards = build_sy_lens_cards(student, top_beh, top_ant, top_loc, top_session)
+            section_header(doc, "HIGH SCHOOL LENS — RECOMMENDATIONS (SENIOR YEARS)")
+            p_sy = doc.add_paragraph(); p_sy.paragraph_format.space_after = Pt(3)
+            arun(p_sy, "Recommendations framed for a high school context: multiple teachers and rooms, adolescent peer "
+                       "relationships, increasing academic demand, autonomy, and pathways beyond school. These are "
+                       "suggestions to trial and review against the data, not directives.", italic=True, size=14, color="555555")
+            for _i in range(0, len(_sy_cards), 2):
+                _pair = _sy_cards[_i:_i + 2]
+                _syt = doc.add_table(rows=1, cols=2); _syt.style = 'Table Grid'
+                for _ci, _cd in enumerate(_pair):
+                    _cell = _syt.rows[0].cells[_ci]
+                    set_bg(_cell, LIGHT_GREY if _ci == 0 else WHITE); set_borders(_cell, TEAL_HEX)
+                    _cell.paragraphs[0].clear()
+                    arun(_cell.paragraphs[0], f"{_cd['title']}", bold=True, size=15, color=GREY_DARK)
+                    for _it in _cd["items"]:
+                        _pi = _cell.add_paragraph()
+                        _pi.paragraph_format.space_before = Pt(1); _pi.paragraph_format.space_after = Pt(1)
+                        arun(_pi, "• " + re.sub(r"<[^>]+>", "", _it).replace("&amp;", "&"), size=13)
+                doc.add_paragraph().paragraph_format.space_after = Pt(3)
+
         if full_pack:
             from docx.enum.section import WD_SECTION, WD_ORIENT
 
@@ -3285,7 +3447,8 @@ ATT_ESCALATION_REASON = "Day end: avoid potential escalation"
 ATT_RESET_REASON = "Day end: needs reset"
 ATT_NEGOTIATED_REASON = "Day end: negotiated"
 ATT_CI_REASON = "C.I. (critical incident)"
-ATT_REASONS = [ATT_ESCALATION_REASON, ATT_RESET_REASON, ATT_NEGOTIATED_REASON, ATT_CI_REASON, "Re-entry meeting", "Transport / travel", "Slow to start / reluctant to come in", "Illness", "Appointment",
+ATT_TRANSITION_REASON = "Transition"   # day/part-day at the receiving school (not an absence)
+ATT_REASONS = [ATT_ESCALATION_REASON, ATT_RESET_REASON, ATT_NEGOTIATED_REASON, ATT_CI_REASON, "Re-entry meeting", ATT_TRANSITION_REASON, "Transport / travel", "Slow to start / reluctant to come in", "Illness", "Appointment",
                "Family / personal", "Other"]
 ATT_DAYEND_REASONS = (ATT_ESCALATION_REASON, ATT_RESET_REASON, ATT_NEGOTIATED_REASON)
 # Earlier wording, converted automatically when a record is loaded
@@ -3347,7 +3510,7 @@ def attendance_persist(student_id, state) -> bool:
     state["schedule"] = sorted(state.get("schedule", []), key=lambda v: v["from"])
     state["exceptions"] = sorted(state.get("exceptions", []), key=lambda e: e["date"])
     st.session_state[f"att2_{student_id}"] = state
-    absent = sorted({e["date"] for e in state["exceptions"] if e.get("type") == "Absent"})
+    absent = sorted({e["date"] for e in state["exceptions"] if e.get("type") == "Absent" and e.get("reason") != ATT_TRANSITION_REASON})
     st.session_state[f"absent_dates_{student_id}"] = absent
     cur = attendance_current_days(state)
     days_on = [ATT_DAYS_FULL[i] for i, dname in enumerate(ATT_DAYS) if cur.get(dname)]
@@ -3400,18 +3563,21 @@ def attendance_day(state, d) -> dict:
     exc = next((e for e in state.get("exceptions", []) if e.get("date") == d.isoformat()), None)
     planned = attendance_current_days(state, d).get(ATT_DAYS[d.weekday()], []) if d.weekday() < 5 else []
     if exc and exc.get("type") == "No school":
-        return {"planned": [], "actual": [], "exc": exc, "no_school": True, "expected_start": ""}
+        return {"planned": [], "actual": [], "exc": exc, "no_school": True, "expected_start": "", "transition": False}
     actual = planned
     if exc:
         actual = [] if exc.get("type") == "Absent" else [x for x in ATT_SESSIONS if x in (exc.get("sessions") or [])]
+    is_tr = bool(exc and exc.get("reason") == ATT_TRANSITION_REASON)
+    if is_tr:
+        planned = list(actual)   # time at the receiving school is planned, so it is neither expected here nor 'lost'
     exp_start = attendance_current_starts(state, d).get(ATT_DAYS[d.weekday()], "") if d.weekday() < 5 else ""
-    return {"planned": planned, "actual": actual, "exc": exc, "no_school": False, "expected_start": exp_start}
+    return {"planned": planned, "actual": actual, "exc": exc, "no_school": False, "expected_start": exp_start, "transition": is_tr}
 
 
 def attendance_summary(state, start, end) -> dict:
     exp = act = 0
     days_on = early = esc = absent = late = late_min = 0
-    esc_dates, early_dates = [], []
+    esc_dates, early_dates, trans_dates = [], [], []
     d = start
     while d <= end:
         day = attendance_day(state, d)
@@ -3419,7 +3585,9 @@ def attendance_summary(state, start, end) -> dict:
             exp += len(day["planned"]); act += len(day["actual"])
             if day["actual"]: days_on += 1
             exc = day["exc"]
-            if exc:
+            if day.get("transition"):
+                trans_dates.append(d)   # transition day: not an absence, late arrival or early finish
+            elif exc:
                 if exc["type"] == "Absent": absent += 1
                 if exc["type"] == "Arrived late" or exc.get("late_min"):
                     late += 1; late_min += int(exc.get("late_min") or 0)
@@ -3430,7 +3598,8 @@ def attendance_summary(state, start, end) -> dict:
         d += timedelta(days=1)
     return {"expected": exp, "attended": act, "lost": max(exp - act, 0), "days_attended": days_on,
             "absent_days": absent, "early_days": early, "escalation_day_ends": esc,
-            "early_dates": early_dates, "esc_dates": esc_dates, "late_days": late, "late_minutes": late_min}
+            "early_dates": early_dates, "esc_dates": esc_dates, "late_days": late, "late_minutes": late_min,
+            "transition_days": len(trans_dates), "transition_dates": trans_dates}
 
 
 def _att_infer_type(planned, chosen):
@@ -3482,7 +3651,7 @@ def attendance_headline(student_id, full_df):
         absent_dates, d = [], start
         while d <= end:
             day = attendance_day(state, d)
-            if not day["no_school"] and day["exc"] and day["exc"].get("type") == "Absent":
+            if not day["no_school"] and day["exc"] and day["exc"].get("type") == "Absent" and not day.get("transition"):
                 absent_dates.append(d)
             d += timedelta(days=1)
         pct = round(sm["attended"] / sm["expected"] * 100) if sm["expected"] else 0
@@ -3492,6 +3661,9 @@ def attendance_headline(student_id, full_df):
                  ("Days absent", f"{len(absent_dates)}" + (f" — {dstr}" if absent_dates else "")),
                  ("Early finishes / day ends", f"{sm['early_days']}" + (f" ({sm['escalation_day_ends']} day end(s) by agreement, to reset or to avoid escalation)" if sm["escalation_day_ends"] else "")),
                  ("Incidents per 10 sessions attended", f"{per10:.1f}")]
+        if sm.get("transition_days"):
+            _td = ", ".join(x.strftime("%-d %b") for x in sm["transition_dates"][:12]) + (f" and {len(sm['transition_dates']) - 12} more" if len(sm["transition_dates"]) > 12 else "")
+            lines.insert(2, ("Transition days (at receiving school)", f"{sm['transition_days']} — {_td}  (not counted as absences)"))
         if sm.get("late_days"):
             _avg = round(sm["late_minutes"] / sm["late_days"]) if sm["late_minutes"] else 0
             lines.insert(2, ("Late arrivals", f"{sm['late_days']}" + (f" (about {_avg} min after the expected time, on average)" if _avg else "")))
@@ -3774,8 +3946,8 @@ def attendance_analysis(state, full_df, start, end) -> dict:
             if not day["no_school"]:
                 by_dow[n]["attended"] += len(day["actual"])
                 e = day["exc"]
-                if e and e["type"] == "Absent": by_dow[n]["absent"] += 1
-                if e and e["type"] == "Finished early":
+                if e and e["type"] == "Absent" and not day.get("transition"): by_dow[n]["absent"] += 1
+                if e and e["type"] == "Finished early" and not day.get("transition"):
                     by_dow[n]["dayends"] += 1
                     cat = _att_loss_category(e)
                     last = [x for x in ATT_SESSIONS if x in day["actual"]]
@@ -4104,13 +4276,15 @@ def build_attendance_calendar(student, state, full_df, start, end) -> list:
             reason, note = exc.get("reason", ""), exc.get("note", "")
             cis = crit_by_day.get(d, [])
             is_ci = reason == ATT_CI_REASON or bool(cis)
-            status = "No school" if day["no_school"] else ("Absent" if exc.get("type") == "Absent" else
-                     ("Attended" if day["actual"] else ""))
+            status = "No school" if day["no_school"] else ("Transition" if (day.get("transition") and not day["actual"]) else
+                     ("Absent" if exc.get("type") == "Absent" else ("Attended" if day["actual"] else "")))
             times = "" if day["no_school"] else _att_day_times(day, exc)
             tw = _att_term_week(d)
             event = ""
             if is_ci:
                 event = "CI"
+            elif day.get("transition") or reason == ATT_TRANSITION_REASON:
+                event = "Transition"
             elif reason == "Re-entry meeting":
                 event = "Re-entry meeting"
             elif reason in ATT_DAYEND_REASONS:
@@ -7993,7 +8167,7 @@ def _render_student_analysis_page_inner():
     # ── Attendance: weekly schedule + exceptions (legacy fields derived for older code) ──
     _att_state = attendance_state(student_id)
     _abs_key = f"absent_dates_{student_id}"
-    _abs_stored = sorted({e["date"] for e in _att_state["exceptions"] if e.get("type") == "Absent"})
+    _abs_stored = sorted({e["date"] for e in _att_state["exceptions"] if e.get("type") == "Absent" and e.get("reason") != ATT_TRANSITION_REASON})
     st.session_state[_abs_key] = _abs_stored
     _att_cur = attendance_current_days(_att_state)
     _pt_days = [ATT_DAYS_FULL[i] for i, dn in enumerate(ATT_DAYS) if _att_cur.get(dn)]
@@ -10284,8 +10458,9 @@ def _render_student_analysis_page_inner():
         "box-shadow:0 4px 14px rgba(19,78,78,0.25);'>"
         "<span style='color:white;font-size:1.15rem;font-weight:700;'>🎒 Supports for Transition to a Mainstream Setting</span><br>"
         "<span style='color:#d1fae5;font-size:0.85rem;'>BSEM-informed strategies (Body · Relationship · Stamina · Engagement · Character), "
-        "matched to this student's actual pattern, framed for handover to a receiving school. "
-        "Click a strategy for why it fits and how to implement it.</span></div>",
+        "matched to this student's actual pattern, framed for handover to a receiving school"
+        + (" (high school context — see also the High School Lens below). " if _is_sy_student(student) else ". ")
+        + "Click a strategy for why it fits and how to implement it.</span></div>",
         unsafe_allow_html=True,
     )
     st.caption("SMART's core reminder: regulate before you reason — these strategies work by supporting "
@@ -10297,7 +10472,7 @@ def _render_student_analysis_page_inner():
         with st.spinner("Drawing up BSEM-aligned recommendations..."):
             st.session_state[_bsem_key] = build_bsem_recommendations(
                 full_df, top_beh, top_ant, top_loc, top_session,
-                student["name"], context="analysis")
+                student["name"], context="analysis", program=student.get("program", ""))
             st.session_state[f"{_bsem_key}_sig"] = _bsem_sig
     _bsem_items = st.session_state.get(_bsem_key, [])
     if _bsem_items:
@@ -10448,6 +10623,10 @@ def _render_student_analysis_page_inner():
             "</ul></div>",
             unsafe_allow_html=True
         )
+
+    # ── High School Lens (Senior Years only) ──────────────────────────────
+    render_sy_lens_section(student, top_beh_clinical, top_ant, top_loc, top_session,
+                           _sensory_prominent, _has_sensory)
 
     # ── Sensory recommendations panel ─────────────────────────────────────
     if _has_sensory:
@@ -11401,7 +11580,7 @@ def render_student_dashboard():
             with st.spinner("Drawing up BSEM-aligned recommendations..."):
                 st.session_state[_bsem_key_d] = build_bsem_recommendations(
                     full_df, top_beh, top_ant, top_loc, top_session,
-                    student["name"], context="dashboard")
+                    student["name"], context="dashboard", program=student.get("program", ""))
                 st.session_state[f"{_bsem_key_d}_sig"] = _bsem_sig_d
         _bsem_items_d = st.session_state.get(_bsem_key_d, [])
         if _bsem_items_d:
