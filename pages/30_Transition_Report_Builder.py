@@ -2319,7 +2319,13 @@ def bst_attendance_table(initials, start, end):
         return None, "Can't reach the Behaviour Support Tool's database right now."
     stu = bst_find_student(initials)
     if not stu:
-        return None, f"No student filed as {initials} in the Behaviour Support Tool."
+        _err = st.session_state.get("_bst_find_err")
+        if _err:
+            return None, f"Couldn't read the Behaviour Support Tool's students table ({_err}). Check the database permissions (row-level security) and try again."
+        _seen = st.session_state.get("_bst_seen_names") or []
+        return None, (f"No student filed as {initials} in the Behaviour Support Tool."
+                      + (f" Students there starting with {initials[:1]}: {', '.join(_seen)}." if _seen else "")
+                      + " The name in the Behaviour Support Tool needs to match the register code.")
     sid = str(stu["id"])
     rows = _bst_rows("student_attendance", sid)
     if not rows:
@@ -2481,9 +2487,12 @@ BST_PLAN_FIELDS = ["strengths", "interests", "purpose", "early_warning_signs", "
 def _bst_code(row):
     """Register code for a Behaviour Support student — same rule the tool uses for the Document Archive."""
     raw = (row.get("name") or "").strip()
+    raw = re.sub(r"\s*[-–—.]\s*$", "", raw).strip() if re.fullmatch(r"[A-Za-z]{2,4}\s*[-–—.]", raw) else raw
     if raw and " " not in raw and raw.replace("-", "").isalpha() and 2 <= len(raw) <= 4:
         return raw.upper()
     first, last = (row.get("first_name") or "").strip(), (row.get("last_name") or "").strip()
+    if last in ("", "-", "–", "—", ".") and first and " " not in first and first.replace("-", "").isalpha() and 2 <= len(first) <= 4:
+        return first.upper()          # a register code stored with a placeholder last name, e.g. 'SD' + '-'
     parts = [p for p in (f"{first} {last}".split() if first else raw.split()) if p and p != "-"]
     return "".join(p[0].upper() for p in parts[:2])
 
@@ -2497,8 +2506,12 @@ def bst_find_student(initials):
         return None
     try:
         rows = c.table("students").select("*").execute().data or []
-    except Exception:
+        st.session_state["_bst_find_err"] = ""
+    except Exception as _e:
+        st.session_state["_bst_find_err"] = str(_e)[:200]
         return None
+    st.session_state["_bst_seen_names"] = sorted({(r.get("name") or r.get("first_name") or "").strip() for r in rows
+                                                  if (r.get("name") or r.get("first_name") or "").strip()[:1].upper() == initials[:1].upper()})[:12]
     code = initials.upper()
     rows.sort(key=lambda r: bool(r.get("archived")))          # current placement first
 
