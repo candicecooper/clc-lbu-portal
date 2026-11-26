@@ -2116,6 +2116,7 @@ BST_DAYS_FULL = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 BST_SESSION_LABEL = {"Morning": "AM", "Middle": "Mid", "Afternoon": "PM"}
 BST_SESSION_TIMES = {"Morning": ("9:00", "11:00"), "Middle": ("11:00", "13:30"), "Afternoon": ("13:30", "14:45")}
 BST_CI_REASON = "C.I. (critical incident)"
+BST_TRANSITION_REASON = "Transition"   # set in the Behaviour Support Tool attendance: day/part-day at the receiving school
 BST_TERM_STARTS = {  # SA public school terms (Monday of week 1) — same as the Behaviour Support Tool
     2026: [date(2026, 2, 2), date(2026, 4, 27), date(2026, 7, 20), date(2026, 10, 12)],
 }
@@ -2225,6 +2226,8 @@ def _bst_att_day(state, d):
     actual = planned
     if exc:
         actual = [] if exc.get("type") == "Absent" else [x for x in BST_ATT_SESSIONS if x in (exc.get("sessions") or [])]
+    if exc and exc.get("reason") == BST_TRANSITION_REASON:
+        planned = list(actual)      # time at the receiving school is planned, not 'lost'
     start_ = ((ver.get("starts") or {}).get(dn, "") if ver and dn else "")
     return {"planned": planned, "actual": actual, "exc": exc, "no_school": False, "expected_start": start_}
 
@@ -2373,8 +2376,8 @@ def bst_attendance_table(initials, start, end):
                    "late_min": int(_num(exc.get("late_min"))), "quick_incidents": quick.get(d_, 0)}
             if day["no_school"]:
                 cell_status = "noschool"
-            elif d_ in trans:
-                cell_status = "transition"
+            elif d_ in trans or (reason == BST_TRANSITION_REASON and not day["actual"]):
+                cell_status = "transition"      # from the Transition Timetable, or marked "Transition" in attendance
             elif status == "Absent":
                 cell_status = "absent"
             else:
@@ -2550,26 +2553,32 @@ def _bst_attendance(att_row, start, end):
         return list((chosen.get("days") or {}).get(BST_ATT_DAYS[day.weekday()], []))
 
     out = {"expected_days": 0, "days_attended": 0, "absent_days": 0, "early_finishes": 0,
-           "day_ends_to_avoid_escalation": 0, "late_arrivals": 0, "part_time_pattern": False}
+           "day_ends_to_avoid_escalation": 0, "late_arrivals": 0, "part_time_pattern": False,
+           "transition_days": 0}
     day = start
     while day <= end:
         exc = exceptions.get(day.isoformat())
         pl = planned(day)
         if pl and set(pl) != set(BST_ATT_SESSIONS):
             out["part_time_pattern"] = True
-        if not (exc and exc.get("type") == "No school") and pl:
+        is_tr = bool(exc and exc.get("reason") == BST_TRANSITION_REASON)
+        if is_tr and not (exc.get("type") == "No school"):
+            out["transition_days"] += 1
+        if not (exc and exc.get("type") == "No school") and pl and not (is_tr and exc.get("type") == "Absent"):
+            # (a full transition day at the receiving school is neither expected here nor an absence)
             out["expected_days"] += 1
             actual = pl
             if exc:
                 actual = [] if exc.get("type") == "Absent" else [x for x in BST_ATT_SESSIONS if x in (exc.get("sessions") or [])]
-                if exc.get("type") == "Absent":
-                    out["absent_days"] += 1
-                if exc.get("type") == "Arrived late" or exc.get("late_min"):
-                    out["late_arrivals"] += 1
-                if exc.get("type") == "Finished early":
-                    out["early_finishes"] += 1
-                    if exc.get("reason") in BST_DAYEND_REASONS:
-                        out["day_ends_to_avoid_escalation"] += 1
+                if not is_tr:   # transition days aren't absences, late arrivals or early finishes
+                    if exc.get("type") == "Absent":
+                        out["absent_days"] += 1
+                    if exc.get("type") == "Arrived late" or exc.get("late_min"):
+                        out["late_arrivals"] += 1
+                    if exc.get("type") == "Finished early":
+                        out["early_finishes"] += 1
+                        if exc.get("reason") in BST_DAYEND_REASONS:
+                            out["day_ends_to_avoid_escalation"] += 1
             if actual:
                 out["days_attended"] += 1
         day += timedelta(days=1)
@@ -4222,7 +4231,7 @@ with tab1:
                   "🔄 Refresh attendance table from the Behaviour Support Tool", key="tr_att_pull",
                   on_click=pull_attendance_table, args=(INITIALS, placement_start, placement_end),
                   help="A week-by-week (Mon–Fri) colour table for the whole placement: green attended, red absent, purple "
-                       "transition days at the enrolled school (from the Transition Timetable).")
+                       "transition days at the enrolled school (from the Transition Timetable, or days marked \"Transition\" in the Behaviour Support Tool attendance).")
         if S("att_table_msg"):
             st.warning(S("att_table_msg"))
         if S("att_table"):
