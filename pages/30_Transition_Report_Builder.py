@@ -2172,7 +2172,7 @@ def transition_days(initials):
         for d_ in (wk.get("days") or []) if isinstance(wk, dict) else []:
             loc = d_.get("loc") if isinstance(d_, dict) else None
             dd = _d(d_.get("date")) if isinstance(d_, dict) else None
-            if loc and loc != "CLC" and dd:
+            if loc and loc != "CLC" and dd and not re.search(r"\b(home|day off|not attending|nil|none)\b", str(loc), re.I):
                 out.add(dd)
     return out
 
@@ -2384,7 +2384,10 @@ def bst_attendance_table(initials, start, end):
                    "late_min": int(_num(exc.get("late_min"))), "quick_incidents": quick.get(d_, 0)}
             if day["no_school"]:
                 cell_status = "noschool"
-            elif d_ in trans or (day.get("transition") and not day["actual"]):
+            elif (d_ in trans and day["planned"]) or (day.get("transition") and not day["actual"]):
+                # purple only when the student is normally expected at CLC that day but is at the other school (from the
+                # Transition Timetable), or the day is marked Transition in the attendance record / usual pattern.
+                # A part-time day off (no CLC sessions in the usual pattern) stays "attended".
                 cell_status = "transition"      # from the Transition Timetable, or marked "Transition" in attendance
             elif status == "Absent":
                 cell_status = "absent"
